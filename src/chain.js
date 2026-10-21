@@ -4,7 +4,7 @@ import { LAUNCHPAD_ABI, ERC20_ABI } from './abi.js'
 
 export const CONFIG = {
   rpc: process.env.GANG_RPC_URL || 'https://bsc-dataseed.binance.org',
-  launchpad: process.env.GANG_LAUNCHPAD || '0xBfBB10db587DdFDF38c888cB80C5124f1Aa3C0Eb',
+  launchpad: process.env.GANG_LAUNCHPAD || '0x86854E8ee7D438ca9B52407DCF92D1616385dDcc',
   chainId: '56',
 }
 
