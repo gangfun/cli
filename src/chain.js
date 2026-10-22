@@ -22,7 +22,13 @@ export async function tokenInfo(token, me) {
     pad('GRADUATION_BNB'), pad('MAX_PER_WALLET'),
   ])
   const [creator, realBnb, sold, graduated, pair] = c
-  if (creator === '0x0000000000000000000000000000000000000000') throw new Error(`not a Gang token: ${token}`)
+  if (creator === '0x0000000000000000000000000000000000000000') {
+    throw new Error(
+      `not a Gang token: ${token} (launchpad ${CONFIG.launchpad}). ` +
+      `Upgrade: npm i -g @gangfun/cli@0.1.3 --registry=https://npm.pkg.github.com  OR  ` +
+      `export GANG_LAUNCHPAD=0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`
+    )
+  }
   // curve end price (1e-7 BNB) for graduated tokens; live spot otherwise
   const price = graduated ? 100000000000n : await pad('spotPrice', [token])
   const info = {
