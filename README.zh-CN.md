@@ -10,6 +10,21 @@ Node ≥ 18。另需安装 Binance Agentic Wallet CLI（`baw`）：
 
 ```bash
 npm i -g @binance/agentic-wallet
+npm i -g @gangfun/cli --registry=https://npm.pkg.github.com
+```
+
+包地址：[GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli)。GitHub Packages 需要 GitHub 登录——在 `~/.npmrc`（或环境变量 `NODE_AUTH_TOKEN`）放带 `read:packages` 的 token：
+
+```ini
+@gangfun:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
+```
+
+配好后可省略 `--registry`：`npm i -g @gangfun/cli`。
+
+**备选**（不需要 Packages token；直接从公开 git 仓装）：
+
+```bash
 npm i -g github:gangfun/cli
 # 或一次性：
 npx --yes github:gangfun/cli preflight
@@ -60,4 +75,4 @@ gang tx --hash <0x..>
 
 ## 版本
 
-`0.1.0` · 仓库 [gangfun/cli](https://github.com/gangfun/cli)
+`0.1.1` · 仓库 [gangfun/cli](https://github.com/gangfun/cli) · 分发走 [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli)（不上 npmjs）

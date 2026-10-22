@@ -10,6 +10,21 @@ Node ≥ 18. Also install Binance Agentic Wallet CLI (`baw`):
 
 ```bash
 npm i -g @binance/agentic-wallet
+npm i -g @gangfun/cli --registry=https://npm.pkg.github.com
+```
+
+Package: [GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli). GitHub Packages needs a GitHub login — put a token with `read:packages` in `~/.npmrc` (or `NODE_AUTH_TOKEN`):
+
+```ini
+@gangfun:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
+```
+
+Then you can omit the `--registry` flag: `npm i -g @gangfun/cli`.
+
+**Alternate** (no Packages token; installs from the public git repo):
+
+```bash
 npm i -g github:gangfun/cli
 # or one-shot:
 npx --yes github:gangfun/cli preflight
@@ -60,4 +75,4 @@ Buy / sell / create: **preview → you confirm → execute**. `requestId` expire
 
 ## Version
 
-`0.1.0` · repo [gangfun/cli](https://github.com/gangfun/cli)
+`0.1.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · distribute via [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli) (not npmjs)
