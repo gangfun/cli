@@ -13,7 +13,7 @@ npm i -g @binance/agentic-wallet
 npm i -g @gangfun/cli@0.1.3 --registry=https://npm.pkg.github.com
 ```
 
-Package: [GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli). GitHub Packages needs a GitHub login — put a token with `read:packages` in `~/.npmrc` (or `NODE_AUTH_TOKEN`):
+Package: [GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli). GitHub Packages needs auth — one-liner: `npm login --registry=https://npm.pkg.github.com` (use a token with `read:packages`). Or put the token in `~/.npmrc` (or `NODE_AUTH_TOKEN`):
 
 ```ini
 @gangfun:registry=https://npm.pkg.github.com
@@ -22,13 +22,22 @@ Package: [GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/np
 
 Then you can omit the `--registry` flag: `npm i -g @gangfun/cli@0.1.3`.
 
-**Alternate** (no Packages token; installs from the public git repo):
+**Alternate** (no Packages token; installs from the public git repo `main` tip = `@gangfun/cli@0.1.3` / Launchpad v4.1):
 
 ```bash
 npm i -g github:gangfun/cli
 # or one-shot:
 npx --yes github:gangfun/cli preflight
 ```
+
+If a previous global is stale, clear it then reinstall:
+
+```bash
+npm uninstall -g @gangfun/cli
+npm i -g github:gangfun/cli
+```
+
+After install, run `gang preflight` — Launchpad must be `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7` (v4.1). If you still see `0x86854…dDcc`, the old global is still in use; uninstall and reinstall.
 
 Skill install (Claude Code / Cursor / Codex / OpenClaw / Binance AI Pro):
 

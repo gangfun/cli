@@ -13,7 +13,7 @@ npm i -g @binance/agentic-wallet
 npm i -g @gangfun/cli@0.1.3 --registry=https://npm.pkg.github.com
 ```
 
-包地址：[GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli)。GitHub Packages 需要 GitHub 登录——在 `~/.npmrc`（或环境变量 `NODE_AUTH_TOKEN`）放带 `read:packages` 的 token：
+包地址：[GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli)。GitHub Packages 需要登录——一句：`npm login --registry=https://npm.pkg.github.com`（token 需带 `read:packages`）。或把 token 写进 `~/.npmrc`（或环境变量 `NODE_AUTH_TOKEN`）：
 
 ```ini
 @gangfun:registry=https://npm.pkg.github.com
@@ -22,13 +22,22 @@ npm i -g @gangfun/cli@0.1.3 --registry=https://npm.pkg.github.com
 
 配好后可省略 `--registry`：`npm i -g @gangfun/cli@0.1.3`。
 
-**备选**（不需要 Packages token；直接从公开 git 仓装）：
+**备选**（不需要 Packages token；从公开 git 仓 `main` tip 装 = `@gangfun/cli@0.1.3` / Launchpad v4.1）：
 
 ```bash
 npm i -g github:gangfun/cli
 # 或一次性：
 npx --yes github:gangfun/cli preflight
 ```
+
+若之前装过旧全局包，先卸再装：
+
+```bash
+npm uninstall -g @gangfun/cli
+npm i -g github:gangfun/cli
+```
+
+装完跑 `gang preflight`——Launchpad 必须是 `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`（v4.1）。若仍看到 `0x86854…dDcc`，说明旧全局还在，卸掉重装。
 
 Skill（Claude Code / Cursor / Codex / OpenClaw / Binance AI Pro）：
 
