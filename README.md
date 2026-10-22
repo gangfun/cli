@@ -70,9 +70,9 @@ Buy / sell / create: **preview → you confirm → execute**. `requestId` expire
 
 | Var | Meaning |
 |---|---|
-| `GANG_LAUNCHPAD` | Launchpad address (mainnet default in CLI) |
+| `GANG_LAUNCHPAD` | Launchpad address (default v4.1 `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`; override via env) |
 | `GANG_RPC_URL` | BSC HTTP RPC |
 
 ## Version
 
-`0.1.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · distribute via [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli) (not npmjs)
+`0.1.2` · repo [gangfun/cli](https://github.com/gangfun/cli) · distribute via [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli) (not npmjs)

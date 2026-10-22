@@ -70,9 +70,9 @@ gang tx --hash <0x..>
 
 | 变量 | 含义 |
 |---|---|
-| `GANG_LAUNCHPAD` | Launchpad 地址（CLI 内置主网默认） |
+| `GANG_LAUNCHPAD` | Launchpad 地址（默认 v4.1 `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`；可用环境变量覆盖） |
 | `GANG_RPC_URL` | BSC HTTP RPC |
 
 ## 版本
 
-`0.1.1` · 仓库 [gangfun/cli](https://github.com/gangfun/cli) · 分发走 [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli)（不上 npmjs）
+`0.1.2` · 仓库 [gangfun/cli](https://github.com/gangfun/cli) · 分发走 [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli)（不上 npmjs）
