@@ -23,10 +23,6 @@
   "bugs": {
     "url": "https://github.com/gangfun/cli/issues"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "public"
-  },
   "keywords": [
     "gang",
     "gang.fun",
