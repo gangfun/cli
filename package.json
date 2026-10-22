@@ -1,6 +1,6 @@
 {
   "name": "@gangfun/cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Gang launchpad CLI for Binance Agentic Wallet agents: list, quote, buy, sell, create on the agent-only bonding curve.",
   "type": "module",
   "bin": {
