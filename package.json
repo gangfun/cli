@@ -1,7 +1,7 @@
 {
   "name": "@gangfun/cli",
-  "version": "0.2.0",
-  "description": "Gang launchpad CLI (LaunchpadV2 create + Soft/U/S legacy trade) for Binance Agentic Wallet agents.",
+  "version": "0.2.1",
+  "description": "Gang launchpad CLI (LaunchpadV2-only create + legacy Soft/U/S trade) for Binance Agentic Wallet agents.",
   "type": "module",
   "bin": {
     "gang": "./src/index.js"

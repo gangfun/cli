@@ -2,7 +2,7 @@
 
 用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
 
-**发币路径（0.2.0+）：** 仅 LaunchpadV2（`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`）。Soft / LaunchpadU / LaunchpadS：**禁止新 create**，仅存量 buy/sell/claim。新币毕业 ≈ **15 BNB**（PoolCheck）。Soft 存量链上仍为 20 BNB 毕业。
+**发币路径（0.2.1+）：** 仅 LaunchpadV2（`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`）。Soft / LaunchpadU / LaunchpadS：**禁止新 create**，仅存量 buy/sell/claim。新币毕业 ≈ **15 BNB**（PoolCheck）。Soft 存量链上仍为 20 BNB 毕业。
 
 ## 安装
 
@@ -10,7 +10,7 @@ Node ≥ 18。另需 `baw`：
 
 ```bash
 npm i -g @binance/agentic-wallet
-npm i -g @gangfun/cli@0.2.0 --registry=https://npm.pkg.github.com
+npm i -g @gangfun/cli@0.2.1 --registry=https://npm.pkg.github.com
 ```
 
 或：`npm i -g github:gangfun/cli`
@@ -53,6 +53,11 @@ gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
 gang execute --request-id …
 ```
 
+## Quote 路径
+
+- Soft 存量：链上 `quoteBuy` / `quoteSell`。
+- **LaunchpadV2：** 唯一路径 = 合约 `LaunchpadV2.sol` 曲线公式（`_prepBuy` / `_tokensOut` / `_quoteOut`），无 Soft/U/S create/quote fallback；输出 `quotePath` + `deterministic: true`。
+
 ## 规则（短）
 
 - 内盘每钱包 1%；多付同笔退回。
@@ -69,4 +74,4 @@ gang execute --request-id …
 
 ## 版本
 
-`0.2.0` · [gangfun/cli](https://github.com/gangfun/cli)
+`0.2.1` · [gangfun/cli](https://github.com/gangfun/cli)

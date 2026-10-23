@@ -93,13 +93,16 @@ async function main() {
       return out({ success: true, ...(await tokenInfo(token, me)) })
     }
     case 'quote': {
-      const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required (Soft: BNB; V2/U/S: quote amount)')
+      const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required (Soft archive: BNB; V2: quote ERC-20 amount)')
       const me = bawAddress()
       const q = await quoteBuy(token, me, bnb)
       return out({
-        success: true, token, buyer: me, pad: q.pad, kind: q.kind, quote: q.quote, approx: q.approx || false,
+        success: true, token, buyer: me, pad: q.pad, kind: q.kind, quote: q.quote,
+        quotePath: q.quotePath, deterministic: q.deterministic || false,
         tokensOut: q.tokensOutFmt, spent: q.spentFmt, fee: q.feeFmt, refund: q.refundFmt, unit: q.unit,
-        note: q.refund > 0n ? 'Part of the input would be refunded (wallet 1% cap or graduation cap).' : (q.approx ? 'V2 quote is off-chain approximate (no on-chain quoteBuy).' : undefined),
+        note: q.refund > 0n
+          ? 'Part of the input would be refunded (wallet 1% cap or graduation cap).'
+          : (q.deterministic ? 'V2 quote = LaunchpadV2.sol curve math (unique path; no Soft/U/S fallback).' : undefined),
       })
     }
     case 'buy': {
@@ -139,7 +142,7 @@ async function main() {
       return out(summarizePreview(p, {
         step: 'buy', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
         quoteIn: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
-        expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), approx: q.approx || false,
+        expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), quotePath: q.quotePath, deterministic: q.deterministic || false,
       }))
     }
     case 'sell': {
@@ -175,7 +178,7 @@ async function main() {
       const p = bawPreview({ from: me, to: pad.address, data: calldata.v2Sell(token, amount, minOut) })
       return out(summarizePreview(p, {
         step: 'sell', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
-        amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', approx: q.approx || false,
+        amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', quotePath: q.quotePath, deterministic: q.deterministic || false,
       }))
     }
     case 'upload-logo': {

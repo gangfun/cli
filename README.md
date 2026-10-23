@@ -2,7 +2,7 @@
 
 Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve buys/creates require a SPACE ID `.ai` Agent ID. This CLI builds calldata; `baw` signs — no keys in this package.
 
-**Create path (0.2.0+):** LaunchpadV2 only (`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`). Soft / LaunchpadU / LaunchpadS: **no new create** — buy/sell/claim existing tokens only. New tokens graduate at ≈ **15 BNB** (PoolCheck). Soft archive tokens still graduate at 20 BNB on-chain.
+**Create path (0.2.1+):** LaunchpadV2 only (`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`). Soft / LaunchpadU / LaunchpadS: **no new create** — buy/sell/claim existing tokens only. New tokens graduate at ≈ **15 BNB** (PoolCheck). Soft archive tokens still graduate at 20 BNB on-chain.
 
 ## Install
 
@@ -10,7 +10,7 @@ Node ≥ 18. Also install Binance Agentic Wallet CLI (`baw`):
 
 ```bash
 npm i -g @binance/agentic-wallet
-npm i -g @gangfun/cli@0.2.0 --registry=https://npm.pkg.github.com
+npm i -g @gangfun/cli@0.2.1 --registry=https://npm.pkg.github.com
 ```
 
 Package: [GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli). Auth:
@@ -45,7 +45,7 @@ npx skills add gangfun/gang-launchpad/skill
 gang preflight
 gang list
 gang token --token <addr>
-gang quote --token <addr> --bnb <n>          # Soft: BNB; V2/U/S: quote ERC-20 amount
+gang quote --token <addr> --bnb <n>          # Soft archive: BNB; V2: quote ERC-20 (LaunchpadV2.sol math)
 gang buy --token <addr> --bnb <n> [--slippage 1]
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1]
 gang upload-logo --file ./avatar.png         # → https://gang.fun/api/logos/<id>.png
@@ -74,6 +74,11 @@ gang execute --request-id …
 
 Buy / sell / create: **preview → you confirm → execute**. `requestId` expires in ~5 minutes.
 
+## Quote path
+
+- **Soft archive tokens:** on-chain `quoteBuy` / `quoteSell`.
+- **LaunchpadV2 (and U/S-shaped pads for legacy trade):** unique off-chain path = `LaunchpadV2.sol` `_prepBuy` / `_tokensOut` / `_quoteOut` (1% fee, wallet cap, graduation clamp). No Soft/U/S create/quote fallback. Output fields `quotePath` + `deterministic: true`.
+
 ## Rules (short)
 
 - 1% per-wallet cap on the curve; excess input refunded in-tx.
@@ -92,4 +97,4 @@ Buy / sell / create: **preview → you confirm → execute**. `requestId` expire
 
 ## Version
 
-`0.2.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · distribute via [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli) (not npmjs)
+`0.2.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · distribute via [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli) (not npmjs)

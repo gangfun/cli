@@ -27,23 +27,13 @@ const erc = (address, functionName, args = []) => client.readContract({ address,
 const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
 
 export function assertCreateTarget(addr = CONFIG.launchpad) {
-  if (FORBIDDEN_CREATE.has(String(addr).toLowerCase())) {
+  const a = String(addr || '').toLowerCase()
+  if (a !== ADDR.v2.toLowerCase()) {
     throw new Error(
-      `create refused: ${addr} is Soft/LaunchpadU/LaunchpadS (archived for new creates). ` +
-      `Use LaunchpadV2 ${ADDR.v2} (default GANG_LAUNCHPAD). Soft/U/S remain buy/sell/claim only.`,
+      `create refused: only LaunchpadV2 ${ADDR.v2} (got ${addr}). ` +
+      `Soft/LaunchpadU/LaunchpadS are not create routes — buy/sell/claim existing only. ` +
+      `Unset GANG_LAUNCHPAD or set it to V2.`,
     )
-  }
-  if (String(addr).toLowerCase() !== ADDR.v2.toLowerCase() && !process.env.GANG_ALLOW_CUSTOM_CREATE) {
-    // Allow only V2 by default; custom only with explicit env escape hatch for labs.
-    if (String(addr).toLowerCase() !== String(CONFIG.launchpad).toLowerCase() || String(CONFIG.launchpad).toLowerCase() !== ADDR.v2.toLowerCase()) {
-      // If user overrode GANG_LAUNCHPAD away from V2 and it's not Soft/U/S, still refuse unless V2.
-      if (String(addr).toLowerCase() !== ADDR.v2.toLowerCase()) {
-        throw new Error(`create only targets LaunchpadV2 ${ADDR.v2}; got ${addr}`)
-      }
-    }
-  }
-  if (String(addr).toLowerCase() !== ADDR.v2.toLowerCase()) {
-    throw new Error(`create only targets LaunchpadV2 ${ADDR.v2}; got ${addr}`)
   }
 }
 
@@ -67,7 +57,7 @@ export async function resolvePad(token) {
   }
   throw new Error(
     `not a Gang token on known pads (V2/Soft/U/S): ${token}. ` +
-    `Upgrade: npm i -g @gangfun/cli@0.2.0 --registry=https://npm.pkg.github.com  OR  npm i -g github:gangfun/cli`,
+    `Upgrade: npm i -g @gangfun/cli@0.2.1 --registry=https://npm.pkg.github.com  OR  npm i -g github:gangfun/cli`,
   )
 }
 
@@ -144,45 +134,91 @@ export async function listTokens(me) {
   return out
 }
 
+/** LaunchpadV2 curve constants (LaunchpadV2.sol) — unique off-chain path = on-chain math. */
+const V2_VIRTUAL_TOKEN = 1066666666666666666666666667n
+const V2_BPS = 10000n
+const V2_PROTOCOL_FEE_BPS = 100n // 1%
+
+const ceilDiv = (a, b) => (b === 0n ? 0n : (a + b - 1n) / b)
+
+/** Contract-equivalent buy quote (_prepBuy + _tokensOut / _quoteInFor). No Soft/U/S fallback. */
+function v2QuoteBuyFromCurve(base, quoteIn, room) {
+  const vq = BigInt(base.virtualQuote)
+  const sold = BigInt(base.sold)
+  const raised = BigInt(base.raised)
+  const gradAmt = BigInt(base.gradAmt)
+  const tokensOutOf = (net) => {
+    const k = vq * V2_VIRTUAL_TOKEN
+    const qReserve = vq + raised
+    const tReserve = V2_VIRTUAL_TOKEN - sold
+    const newT = ceilDiv(k, qReserve + net)
+    return tReserve - newT
+  }
+  const quoteInFor = (tokensOut) => {
+    const k = vq * V2_VIRTUAL_TOKEN
+    const qReserve = vq + raised
+    const tReserve = V2_VIRTUAL_TOKEN - sold
+    return ceilDiv(k, tReserve - tokensOut) - qReserve
+  }
+  const recomputeFee = (gross, netIn) => {
+    let spentGross = ceilDiv(netIn * V2_BPS, V2_BPS - V2_PROTOCOL_FEE_BPS)
+    if (spentGross > gross) spentGross = gross
+    const taxPlat = (spentGross * V2_PROTOCOL_FEE_BPS) / V2_BPS
+    const net = spentGross - taxPlat
+    const refundGross = gross - spentGross
+    return { taxPlat, net, refundGross, spentGross }
+  }
+
+  let taxPlat = (quoteIn * V2_PROTOCOL_FEE_BPS) / V2_BPS
+  let net = quoteIn - taxPlat
+  let refundGross = 0n
+  const remaining = gradAmt > raised ? gradAmt - raised : 0n
+  if (net > remaining) {
+    net = remaining
+    ;({ taxPlat, net, refundGross } = recomputeFee(quoteIn, net))
+    if (net > remaining) net = remaining
+  }
+  let tokensOut = tokensOutOf(net)
+  if (room != null && tokensOut > room) {
+    tokensOut = room
+    net = quoteInFor(room)
+    ;({ taxPlat, net, refundGross } = recomputeFee(quoteIn, net))
+  }
+  return { tokensOut, spent: quoteIn - refundGross, fee: taxPlat, refund: refundGross }
+}
+
+/** Contract-equivalent sell quote (_quoteOut + 1% platform fee). */
+function v2QuoteSellFromCurve(base, tokensIn) {
+  const vq = BigInt(base.virtualQuote)
+  const sold = BigInt(base.sold)
+  const raised = BigInt(base.raised)
+  const k = vq * V2_VIRTUAL_TOKEN
+  const qReserve = vq + raised
+  const tReserve = V2_VIRTUAL_TOKEN - sold
+  const newQ = ceilDiv(k, tReserve + tokensIn)
+  const quoteOut = qReserve - newQ
+  const fee = (quoteOut * V2_PROTOCOL_FEE_BPS) / V2_BPS
+  return { out: quoteOut - fee, fee }
+}
+
 export async function quoteBuy(token, buyer, amountHuman) {
   const pad = await resolvePad(token)
   const gross = parseEther(amountHuman)
   if (pad.kind === 'soft') {
     const [tokensOut, bnbIn, fee, refund] = await read(pad.address, pad.abi, 'quoteBuy', [token, buyer, gross])
     return { kind: 'soft', pad: pad.id, padAddress: pad.address, amountHuman, tokensOut, spent: bnbIn, fee, refund,
-      tokensOutFmt: fmtTok(tokensOut), spentFmt: fmt(bnbIn), feeFmt: fmt(fee), refundFmt: fmt(refund), unit: 'BNB' }
+      tokensOutFmt: fmtTok(tokensOut), spentFmt: fmt(bnbIn), feeFmt: fmt(fee), refundFmt: fmt(refund), unit: 'BNB',
+      quotePath: 'onchain-quoteBuy' }
   }
-  // V2 has no on-chain quoteBuy — approximate with curve math (1% fee).
+  // Unique path: LaunchpadV2.sol _prepBuy / _tokensOut / _quoteInFor (no on-chain quoteBuy view).
   const base = v2InfoFromCurve(pad.curve)
-  const vq = BigInt(base.virtualQuote)
-  const sold = BigInt(base.sold)
-  const raised = BigInt(base.raised)
-  const gradAmt = BigInt(base.gradAmt)
-  const VIRTUAL_TOKEN = 1066666666666666666666666667n
-  const feeBps = 100n
-  let taxPlat = (gross * feeBps) / 10000n
-  let net = gross - taxPlat
-  const remaining = gradAmt > raised ? gradAmt - raised : 0n
-  let refund = 0n
-  if (net > remaining) {
-    const spentGross = remaining === 0n ? 0n : (remaining * 10000n + (10000n - feeBps) - 1n) / (10000n - feeBps)
-    const sg = spentGross > gross ? gross : spentGross
-    taxPlat = (sg * feeBps) / 10000n
-    net = sg - taxPlat
-    if (net > remaining) net = remaining
-    refund = gross - sg
-  }
-  const k = vq * VIRTUAL_TOKEN
-  const qReserve = vq + raised
-  const tReserve = VIRTUAL_TOKEN - sold
-  const newT = (k + (qReserve + net) - 1n) / (qReserve + net) // ceilDiv
-  let tokensOut = tReserve - newT
-  try {
-    const room = await read(pad.address, pad.abi, 'walletRoom', [token, buyer])
-    if (tokensOut > room) tokensOut = room
-  } catch { /* */ }
-  return { kind: 'v2', pad: pad.id, padAddress: pad.address, quote: base.quote, amountHuman, tokensOut, spent: gross - refund, fee: taxPlat, refund,
-    tokensOutFmt: fmtTok(tokensOut), spentFmt: fmt(gross - refund), feeFmt: fmt(taxPlat), refundFmt: fmt(refund), unit: 'quote', approx: true }
+  let room = null
+  try { room = await read(pad.address, pad.abi, 'walletRoom', [token, buyer]) } catch { /* */ }
+  const q = v2QuoteBuyFromCurve(base, gross, room)
+  return { kind: 'v2', pad: pad.id, padAddress: pad.address, quote: base.quote, amountHuman,
+    tokensOut: q.tokensOut, spent: q.spent, fee: q.fee, refund: q.refund,
+    tokensOutFmt: fmtTok(q.tokensOut), spentFmt: fmt(q.spent), feeFmt: fmt(q.fee), refundFmt: fmt(q.refund),
+    unit: 'quote', quotePath: 'LaunchpadV2.sol#_prepBuy', deterministic: true }
 }
 
 export async function quoteSell(token, tokensIn) {
@@ -190,22 +226,14 @@ export async function quoteSell(token, tokensIn) {
   if (pad.kind === 'soft') {
     const [bnbToUser, fee] = await read(pad.address, pad.abi, 'quoteSell', [token, tokensIn])
     return { kind: 'soft', pad: pad.id, padAddress: pad.address, tokensIn, out: bnbToUser, fee,
-      tokensInFmt: fmtTok(tokensIn), outFmt: fmt(bnbToUser), feeFmt: fmt(fee), unit: 'BNB' }
+      tokensInFmt: fmtTok(tokensIn), outFmt: fmt(bnbToUser), feeFmt: fmt(fee), unit: 'BNB',
+      quotePath: 'onchain-quoteSell' }
   }
   const base = v2InfoFromCurve(pad.curve)
-  const vq = BigInt(base.virtualQuote)
-  const sold = BigInt(base.sold)
-  const raised = BigInt(base.raised)
-  const VIRTUAL_TOKEN = 1066666666666666666666666667n
-  const k = vq * VIRTUAL_TOKEN
-  const qReserve = vq + raised
-  const tReserve = VIRTUAL_TOKEN - sold
-  const newQ = (k + (tReserve + tokensIn) - 1n) / (tReserve + tokensIn)
-  const quoteOut = qReserve - newQ
-  const fee = (quoteOut * 100n) / 10000n
-  const toUser = quoteOut - fee
-  return { kind: 'v2', pad: pad.id, padAddress: pad.address, quote: base.quote, tokensIn, out: toUser, fee,
-    tokensInFmt: fmtTok(tokensIn), outFmt: fmt(toUser), feeFmt: fmt(fee), unit: 'quote', approx: true }
+  const q = v2QuoteSellFromCurve(base, tokensIn)
+  return { kind: 'v2', pad: pad.id, padAddress: pad.address, quote: base.quote, tokensIn, out: q.out, fee: q.fee,
+    tokensInFmt: fmtTok(tokensIn), outFmt: fmt(q.out), feeFmt: fmt(q.fee), unit: 'quote',
+    quotePath: 'LaunchpadV2.sol#_quoteOut', deterministic: true }
 }
 
 export async function isAgent(account) {
