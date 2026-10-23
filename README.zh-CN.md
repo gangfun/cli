@@ -1,56 +1,28 @@
 # Gang CLI（`gang`）
 
-用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
+用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
 
-这里只写操作步骤，不是开源说明书。
+**发币路径（0.2.0+）：** 仅 LaunchpadV2（`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`）。Soft / LaunchpadU / LaunchpadS：**禁止新 create**，仅存量 buy/sell/claim。新币毕业 ≈ **15 BNB**（PoolCheck）。Soft 存量链上仍为 20 BNB 毕业。
 
 ## 安装
 
-Node ≥ 18。另需安装 Binance Agentic Wallet CLI（`baw`）：
+Node ≥ 18。另需 `baw`：
 
 ```bash
 npm i -g @binance/agentic-wallet
-npm i -g @gangfun/cli@0.1.3 --registry=https://npm.pkg.github.com
+npm i -g @gangfun/cli@0.2.0 --registry=https://npm.pkg.github.com
 ```
 
-包地址：[GitHub Packages `@gangfun/cli`](https://github.com/gangfun/cli/pkgs/npm/cli)。GitHub Packages 需要登录——一句：`npm login --registry=https://npm.pkg.github.com`（token 需带 `read:packages`）。或把 token 写进 `~/.npmrc`（或环境变量 `NODE_AUTH_TOKEN`）：
+或：`npm i -g github:gangfun/cli`
 
-```ini
-@gangfun:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
-```
-
-配好后可省略 `--registry`：`npm i -g @gangfun/cli@0.1.3`。
-
-**备选**（不需要 Packages token；从公开 git 仓 `main` tip 装 = `@gangfun/cli@0.1.3` / Launchpad v4.1）：
-
-```bash
-npm i -g github:gangfun/cli
-# 或一次性：
-npx --yes github:gangfun/cli preflight
-```
-
-若之前装过旧全局包，先卸再装：
-
-```bash
-npm uninstall -g @gangfun/cli
-npm i -g github:gangfun/cli
-```
-
-装完跑 `gang preflight`——Launchpad 必须是 `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`（v4.1）。若仍看到 `0x86854…dDcc`，说明旧全局还在，卸掉重装。
-
-Skill（Claude Code / Cursor / Codex / OpenClaw / Binance AI Pro）：
-
-```bash
-npx skills add gangfun/gang-launchpad/skill
-```
+Skill：`npx skills add gangfun/gang-launchpad/skill`
 
 ## 准备
 
-1. Binance App → 钱包 → Agentic Wallet → 创建；领取 `.ai` Agent ID。
-2. 打开 **Developer Mode** 和 **Trade all tokens**。
-3. `baw auth signin`，在 App 确认。
-4. `gang preflight`
+1. 币安 App → 钱包 → Agentic Wallet；领取 `.ai` Agent ID。
+2. 打开 **Developer Mode** 与 **Trade all tokens**。
+3. `baw auth signin`
+4. `gang preflight` — `createPad` 须为 LaunchpadV2。
 
 ## 命令
 
@@ -61,27 +33,40 @@ gang token --token <addr>
 gang quote --token <addr> --bnb <n>
 gang buy --token <addr> --bnb <n> [--slippage 1]
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1]
-gang create --name <n> --symbol <s>
+gang upload-logo --file ./avatar.png
+gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--pair-or-quote 0x…]
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
 
-买 / 卖 / 发币：**预览 → 你确认 → execute**。`requestId` 约 5 分钟过期。卖出可能要在 App 里点确认。
+### Logo + 发币
+
+站内：https://gang.fun/dev/logo
+
+```bash
+gang upload-logo --file ./avatar.png
+gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
+gang execute --request-id …
+
+# 或一步上传
+gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
+gang execute --request-id …
+```
 
 ## 规则（短）
 
-- 内盘每钱包 1% 上限；多付的 BNB 同笔退回。
-- 筹满 20 BNB → 毕业到 PancakeSwap V2，LP 销毁。
-- 毕业前不可转账，只能走曲线。
-- 已毕业：去 PancakeSwap（`gang token` 里的 `pair`）。
+- 内盘每钱包 1%；多付同笔退回。
+- **新**发币 ≈15 BNB 毕业（LaunchpadV2）。Soft 存量归档：20 BNB，仅买卖。
+- 毕业前不可转账；毕业后走 PancakeSwap。
 
 ## 环境变量
 
 | 变量 | 含义 |
 |---|---|
-| `GANG_LAUNCHPAD` | Launchpad 地址（默认 v4.1 `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7`；可用环境变量覆盖） |
-| `GANG_RPC_URL` | BSC HTTP RPC |
+| `GANG_LAUNCHPAD` | 发币目标（默认 V2） |
+| `GANG_RPC_URL` | BSC RPC |
+| `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
 
 ## 版本
 
-`0.1.3` · 仓库 [gangfun/cli](https://github.com/gangfun/cli) · 分发走 [GitHub Packages](https://github.com/gangfun/cli/pkgs/npm/cli)（不上 npmjs）
+`0.2.0` · [gangfun/cli](https://github.com/gangfun/cli)
