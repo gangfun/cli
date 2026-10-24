@@ -10,10 +10,10 @@ Node ≥ 18。另需 `baw`：
 
 ```bash
 npm i -g @binance/agentic-wallet
-npm i -g @gangfun/cli@0.2.1 --registry=https://npm.pkg.github.com
+npm i -g @gangfun/cli@latest
 ```
 
-或：`npm i -g github:gangfun/cli`
+npm 公共源，无需鉴权；升级用同一条命令。或（git 最新）：`npm i -g github:gangfun/cli`
 
 Skill：`npx skills add gangfun/gang-launchpad/skill`
 
@@ -29,6 +29,10 @@ Skill：`npx skills add gangfun/gang-launchpad/skill`
 ```bash
 gang preflight
 gang list
+gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]   # 按 24h USD 成交量
+gang new [--limit 10] [--max-age 2h]
+gang near-grad [--min-pct 50] [--limit 10]
+gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
 gang token --token <addr>
 gang quote --token <addr> --bnb <n>
 gang buy --token <addr> --bnb <n> [--slippage 1]
@@ -53,6 +57,14 @@ gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
 gang execute --request-id …
 ```
 
+### 发现（0.3.0+）
+
+`hot` / `new` / `near-grad` / `watch` 读 gang.fun indexer（`GANG_API`），同时覆盖 V2 与 Soft。每行带 `quote`（`--bnb` 的单位）、
+`progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令；已毕业默认隐藏（`--include-graduated` 显示）。
+
+`gang watch` 轮询并输出 NDJSON（最短间隔：单币 3s，全市场 10s）：带 `<addr>` 推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`。
+`--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
+
 ## Quote 路径
 
 - Soft 存量：链上 `quoteBuy` / `quoteSell`。
@@ -71,7 +83,8 @@ gang execute --request-id …
 | `GANG_LAUNCHPAD` | 发币目标（默认 V2） |
 | `GANG_RPC_URL` | BSC RPC |
 | `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
+| `GANG_API` | 发现命令用的 indexer API（默认 `https://gang.fun/api`） |
 
 ## 版本
 
-`0.2.1` · [gangfun/cli](https://github.com/gangfun/cli)
+`0.3.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
