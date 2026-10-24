@@ -5,13 +5,19 @@ import {
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, LOGO_UI } from './logo.js'
+import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
 const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : def }
 const flag = (name) => args.includes(`--${name}`)
 const out = (o) => console.log(JSON.stringify(o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
-const fail = (msg, extra = {}) => { out({ success: false, error: msg, ...extra }); process.exit(1) }
+// `gang watch` speaks NDJSON, so its failures are one line too (with event/fatal for stream consumers)
+const fail = (msg, extra = {}) => {
+  if (cmd === 'watch') console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, ...extra }))
+  else out({ success: false, error: msg, ...extra })
+  process.exit(1)
+}
 
 const parseSlippage = (raw) => {
   const s = Number(raw)
@@ -19,10 +25,29 @@ const parseSlippage = (raw) => {
   return s
 }
 
+const parseCount = (name, raw, max) => {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > max) fail(`--${name} must be an integer between 1 and ${max}`, { got: raw })
+  return n
+}
+const parsePct = (raw) => {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0 || n > 100) fail('--min-pct must be a number between 0 and 100', { got: raw })
+  return n
+}
+const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad']
+
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · LaunchpadV2 create
 
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list                              tokens across V2 / Soft / U / S
+  gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]
+                                         curve tokens ranked by 24h USD volume
+  gang new [--limit 10] [--max-age 2h] [--track …]      newest curve tokens first
+  gang near-grad [--min-pct 50] [--limit 10] [--track …]  closest to graduation
+  gang watch [<addr>] [--interval 10] [--min-pct 50] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
+                                         NDJSON stream (min interval: 3s token, 10s market). <addr>: trade / progress / graduated.
+                                         no addr: new_token / near_grad / graduated across the market
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
   gang buy --token <addr> --bnb <n> [--slippage 1]      Soft: payable BNB; V2: approve quote then buy
@@ -34,7 +59,7 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang tx --hash <0x..>                  wait for receipt and decode Gang events
 
 Logo UI (browser): ${LOGO_UI}
-env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API`
+env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API})`
 
 function summarizePreview(p, extra = {}) {
   if (!p.success) return { success: false, step: extra.step, error: p.error }
@@ -86,6 +111,85 @@ async function main() {
     case 'list': {
       const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
       return out({ success: true, createPad: ADDR.v2, tokens: await listTokens(me) })
+    }
+    case 'hot':
+    case 'new':
+    case 'near-grad': {
+      const limit = parseCount('limit', opt('limit', '10'), 100)
+      const minPct = parsePct(opt('min-pct', '50'))
+      const maxAgeSec = opt('max-age') ? parseDuration(opt('max-age'), 'max-age') : null
+      const track = opt('track', 'all')
+      const includeGraduated = flag('include-graduated')
+      const market = await fetchMarket(track)
+      const tokens = rank(market.tokens, cmd, { limit, minPct, maxAgeSec, includeGraduated })
+      const empty = {
+        hot: includeGraduated ? 'No token traded in the last 24h.' : 'No curve token traded in the last 24h.',
+        new: maxAgeSec != null ? `No curve token created in the last ${opt('max-age')}.` : 'No curve tokens.',
+        'near-grad': `No curve token at ≥${minPct}% of graduation; lower --min-pct to see the closest ones.`,
+      }[cmd]
+      return out({
+        success: true, source: API, sort: cmd, track, count: tokens.length,
+        ...(cmd === 'near-grad' ? { minPct } : {}), ...(maxAgeSec != null ? { maxAgeSec } : {}),
+        ...(market.truncated ? { truncated: true } : {}),
+        tokens,
+        note: tokens.length ? 'Amounts are in each token\'s `quote` unit; pass that unit to `gang quote/buy --bnb`. Data, not advice.' : empty,
+      })
+    }
+    case 'watch': {
+      const positional = args[1] && !args[1].startsWith('--') ? args[1] : null
+      if (positional && flag('token')) fail('give the token either as <addr> or via --token, not both')
+      if (!positional && flag('token') && !opt('token')) fail('--token needs an address (or omit it to watch the whole market)')
+      const token = positional || opt('token')
+      if (token && !/^0x[0-9a-fA-F]{40}$/.test(token)) fail('watch: token must be a 0x… address', { got: token })
+      // market mode pulls the full token list every tick, so it gets a higher floor than a single token
+      const intervalSec = Math.max(token ? 3 : 10, parseDuration(opt('interval', '10'), 'interval'))
+      const maxEvents = opt('max-events') ? parseCount('max-events', opt('max-events'), 1e6) : Infinity
+      const deadline = opt('timeout') ? Date.now() + parseDuration(opt('timeout'), 'timeout') * 1000 : Infinity
+      const minPct = parsePct(opt('min-pct', '50'))
+      const webhook = opt('webhook')
+      if (webhook && !/^https?:\/\//.test(webhook)) fail('--webhook must be an http(s) URL', { got: webhook })
+      let events = null
+      if (opt('events')) {
+        events = new Set(opt('events').split(',').map((s) => s.trim().replace(/-/g, '_')).filter(Boolean))
+        const bad = [...events].filter((e) => !WATCH_EVENTS.includes(e))
+        if (bad.length) fail(`unknown --events: ${bad.join(', ')}`, { allowed: WATCH_EVENTS })
+      }
+
+      let count = 0
+      const hooks = new Set()
+      const line = (o) => console.log(JSON.stringify({ ...o, emittedAt: Math.floor(Date.now() / 1000) }))
+      // meta events (watching / error / ended / timeout) go to stdout only and do not count toward --max-events
+      const emit = (ev, { meta = false } = {}) => {
+        line(ev)
+        if (meta) return
+        count++
+        if (webhook) {
+          const p = fetch(webhook, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(ev), signal: AbortSignal.timeout(10_000),
+          }).then((r) => { if (!r.ok) line({ event: 'error', error: `webhook ${r.status}` }) })
+            .catch((e) => line({ event: 'error', error: `webhook: ${e.message}` }))
+            .finally(() => hooks.delete(p))
+          hooks.add(p)
+        }
+      }
+      // aborts in-flight API requests at the deadline so --timeout isn't stretched by a slow API.
+      // setTimeout caps at 2^31-1 ms (~24.8d) and fires at once beyond it; longer timeouts rely on sleep's check.
+      const stopper = new AbortController()
+      const delay = deadline - Date.now()
+      const deadlineTimer = delay <= 2 ** 31 - 1 ? setTimeout(() => stopper.abort(), delay) : null
+      // the timer runs on the monotonic clock and may beat Date.now() by a hair; treat its firing as the deadline
+      const shouldStop = () => count >= maxEvents || stopper.signal.aborted || Date.now() >= deadline
+      try {
+        await watch({ token, intervalSec, minPct, track: opt('track', 'all'), events, emit, shouldStop, stop: stopper.signal })
+      } catch (e) {
+        if (!shouldStop()) throw e // startup failure → fail() prints it as one NDJSON line
+      } finally {
+        clearTimeout(deadlineTimer)
+      }
+      if (count < maxEvents && (stopper.signal.aborted || Date.now() >= deadline)) line({ event: 'timeout', events: count })
+      await Promise.allSettled([...hooks])
+      return
     }
     case 'token': {
       const token = opt('token'); if (!token) fail('--token required')

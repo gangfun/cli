@@ -57,7 +57,7 @@ export async function resolvePad(token) {
   }
   throw new Error(
     `not a Gang token on known pads (V2/Soft/U/S): ${token}. ` +
-    `Upgrade: npm i -g @gangfun/cli@0.2.1 --registry=https://npm.pkg.github.com  OR  npm i -g github:gangfun/cli`,
+    `Upgrade: npm i -g @gangfun/cli@latest  OR  npm i -g github:gangfun/cli`,
   )
 }
 

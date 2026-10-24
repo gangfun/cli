@@ -22,4 +22,20 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm run build --if-present
-      - run: npm publish
+
+      - name: Smoke test
+        run: |
+          for f in src/*.js; do node --check "$f"; done
+          node src/index.js > /dev/null
+
+      # PRs only run the checks above. Publishing happens on push to main, and only when
+      # package.json carries a version npm doesn't have yet (a docs-only push must not fail on a duplicate).
+      - name: Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if [ -n "$(npm view "@gangfun/cli@$V" version 2>/dev/null)" ]; then
+            echo "@gangfun/cli@$V is already on npm; skipping publish"
+          else
+            npm publish
+          fi
