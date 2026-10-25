@@ -4,7 +4,7 @@ import {
   calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, assertCreateTarget, preflightCreate, isAddress, zeroAddress, client,
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
-import { uploadLogoFile, LOGO_UI } from './logo.js'
+import { uploadLogoFile, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import { makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued } from './notes.js'
 
@@ -73,9 +73,12 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
                                          Soft: payable BNB; V2: wrap BNB→WBNB if short, approve quote, then buy
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
-  gang upload-logo --file <path>         POST image → https://gang.fun/api/logos → logoUrl
-  gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+  gang upload-logo (--file <path> | --url <image URL>)
+                                         copy an image to https://gang.fun/api/logos → logoUrl
+  gang create --name <n> --symbol <s> [--logo <file> | --logo-uri URL] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
                                          LaunchpadV2 ONLY (${ADDR.v2}); Soft/U/S create refused
+                                         --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
+                                         other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --hash <0x..>                  wait for receipt and decode Gang events (publishes a queued --note)
 
@@ -164,13 +167,38 @@ const CREATE_HINTS = {
   GradAmtZero: 'the quote token is priced so high that the graduation amount rounds below the minimum',
 }
 
+// logo.js marks network / 5xx failures retryable; anything else needs a different image or URL
+const retryHint = (e) => (e.retryable ? { retry: 'same command again' } : {})
+
 async function resolveLogoUri() {
   const uri = opt('logo-uri')
   const file = opt('logo') || opt('logo-file') || opt('file-logo')
+  // `--logo-uri ""` is the documented empty logo; a missing value (or the next flag) is a mistake
+  if (flag('logo-uri') && (uri == null || uri.startsWith('--'))) fail('--logo-uri needs a URL; use --logo ./file.png for a local image')
   if (uri && file) fail('use either --logo-uri or --logo/--logo-file, not both')
-  if (uri) return { logoURI: uri, uploaded: false }
+  if (flag('keep-logo-uri') && !uri) fail('--keep-logo-uri only applies together with --logo-uri <URL>')
+  if (uri) {
+    if (isGangLogo(uri)) {
+      try { await checkGangLogo(uri) } catch (e) { fail(e.message, retryHint(e)) }
+      return { logoURI: uri, uploaded: false }
+    }
+    const temp = tempHost(uri)
+    // logoURI can't be changed after create, so an image on another host is copied to gang.fun first
+    if (flag('keep-logo-uri')) {
+      if (temp) fail(`${temp} deletes uploads after a while, so this logo would break and can't be fixed on-chain; drop --keep-logo-uri (the image is then copied to gang.fun) or use --logo ./file.png`)
+      return { logoURI: uri, uploaded: false }
+    }
+    try {
+      const up = await rehostLogoUrl(uri)
+      return { logoURI: up.logoUrl, uploaded: true, upload: up }
+    } catch (e) {
+      fail(e.message, e.retryable ? { retry: 'same command again' } : { hint: temp
+        ? `${temp} deletes uploads after a while; save the image and use --logo ./file.png`
+        : 'use --logo ./file.png, or --keep-logo-uri if this URL is permanent (e.g. ipfs://) and should go on-chain as is' })
+    }
+  }
   if (file) {
-    const up = await uploadLogoFile(file)
+    const up = await uploadLogoFile(file).catch((e) => fail(e.message, retryHint(e)))
     return { logoURI: up.logoUrl, uploaded: true, upload: up }
   }
   return { logoURI: '', uploaded: false }
@@ -402,8 +430,10 @@ async function main() {
     }
     case 'upload-logo': {
       const file = opt('file') || opt('path') || opt('logo')
-      if (!file) fail('--file <path> required (png/jpeg/webp/gif ≤512KB)')
-      const up = await uploadLogoFile(file)
+      const url = opt('url')
+      if (file && url) fail('use either --file or --url, not both')
+      if (!file && !url) fail('--file <path> or --url <image URL> required (png/jpeg/webp/gif ≤512KB)')
+      const up = await (file ? uploadLogoFile(file) : rehostLogoUrl(url)).catch((e) => fail(e.message, retryHint(e)))
       return out({ success: true, ...up, ui: LOGO_UI, next: `gang create --name … --symbol … --logo-uri ${up.logoUrl}` })
     }
     case 'create': {

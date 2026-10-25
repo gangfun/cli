@@ -1,40 +1,118 @@
 import { readFileSync, statSync } from 'node:fs'
-import { extname, resolve } from 'node:path'
+import { resolve } from 'node:path'
 
 const MAX_BYTES = 512 * 1024
-const MIME = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-}
+const FETCH_TIMEOUT_MS = 20_000
 
-export const LOGO_API = process.env.GANG_LOGO_API || 'https://gang.fun/api/logos'
+export const LOGO_API = (process.env.GANG_LOGO_API || 'https://gang.fun/api/logos').replace(/\/+$/, '')
 export const LOGO_UI = 'https://gang.fun/dev/logo'
 
-/** Read a local image → data URL → POST /api/logos → { logoUrl, id, bytes }. */
+// file hosts that delete uploads after hours or days: a logoURI there turns into a broken image, and it can't be changed on-chain
+const TEMP_HOSTS = ['litter.catbox.moe', 'tmpfiles.org', '0x0.st', 'uguu.se', 'file.io', 'transfer.sh']
+
+// network failures, timeouts and 5xx / 429 may pass on a retry; a missing or wrong image won't
+// fetch wraps every failure (also ipfs://, bad URL, expired TLS) in a cause; only these codes and timeouts are transient
+const NET_CODES = ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH',
+  'UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']
+const fetchError = (msg, e) => Object.assign(new Error(msg), {
+  retryable: ['TimeoutError', 'AbortError'].includes(e.name) || NET_CODES.includes(e.cause?.code),
+})
+const statusError = (msg, status) => Object.assign(new Error(msg), { retryable: status >= 500 || status === 429 })
+const why = (e) => e.cause?.message || e.message
+
+/** The image type from its first bytes; only the types gang.fun makes thumbnails for (png / jpeg / gif / webp). */
+function sniffMime(buf) {
+  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47 && buf.readUInt32BE(4) === 0x0d0a1a0a) return 'image/png'
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg'
+  if (buf.length >= 6 && /^GIF8[79]a$/.test(buf.toString('latin1', 0, 6))) return 'image/gif'
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp'
+  return null
+}
+
+/** Image bytes → data URL → POST /api/logos → { logoUrl, id, bytes }. */
+async function postLogo(buf, what) {
+  if (buf.length <= 0) throw new Error(`empty image: ${what}`)
+  if (buf.length > MAX_BYTES) throw new Error(`logo too large: ${buf.length} bytes (max ${MAX_BYTES}): ${what}`)
+  const mime = sniffMime(buf)
+  if (!mime) throw new Error(`not a png/jpeg/webp/gif image: ${what}`)
+  const image = `data:${mime};base64,${buf.toString('base64')}`
+  let res, text
+  try {
+    res = await fetch(LOGO_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ image }),
+    })
+    text = await res.text()
+  } catch (e) {
+    throw fetchError(`logo upload failed: ${why(e)}`, e)
+  }
+  let json
+  try { json = JSON.parse(text) } catch { throw statusError(`logo upload non-JSON (${res.status}): ${text.slice(0, 200)}`, res.status) }
+  if (!res.ok || !json?.ok || !json?.logoUrl) {
+    throw statusError(`logo upload failed (${res.status}): ${json?.error || text.slice(0, 200)}`, res.status)
+  }
+  return { logoUrl: json.logoUrl, id: json.id, bytes: json.bytes ?? buf.length, api: LOGO_API }
+}
+
+/** Read a local image → POST /api/logos → { logoUrl, id, bytes }. */
 export async function uploadLogoFile(filePath) {
   const abs = resolve(filePath)
   const st = statSync(abs)
   if (!st.isFile()) throw new Error(`not a file: ${abs}`)
-  if (st.size <= 0) throw new Error(`empty file: ${abs}`)
   if (st.size > MAX_BYTES) throw new Error(`logo too large: ${st.size} bytes (max ${MAX_BYTES})`)
-  const ext = extname(abs).toLowerCase()
-  const mime = MIME[ext]
-  if (!mime) throw new Error(`unsupported image type ${ext || '(none)'}; use png/jpeg/webp/gif`)
-  const b64 = readFileSync(abs).toString('base64')
-  const image = `data:${mime};base64,${b64}`
-  const res = await fetch(LOGO_API, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ image }),
-  })
-  const text = await res.text()
-  let json
-  try { json = JSON.parse(text) } catch { throw new Error(`logo upload non-JSON (${res.status}): ${text.slice(0, 200)}`) }
-  if (!res.ok || !json?.ok || !json?.logoUrl) {
-    throw new Error(json?.error || `logo upload failed (${res.status}): ${text.slice(0, 200)}`)
+  return postLogo(readFileSync(abs), abs)
+}
+
+/** True when the URL is already a gang.fun logo (nothing to copy). */
+export const isGangLogo = (uri) => uri.startsWith(`${LOGO_API}/`)
+
+/** Throw unless a gang.fun logo URL serves an image (a typo'd id would go on-chain as a broken logo). Reads headers only. */
+export async function checkGangLogo(uri) {
+  let res
+  try {
+    // the logo route answers HEAD with 405, so GET and drop the body
+    res = await fetch(uri, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    await res.body?.cancel()
+  } catch (e) {
+    throw fetchError(`could not check logo ${uri}: ${why(e)}`, e)
   }
-  return { logoUrl: json.logoUrl, id: json.id, bytes: json.bytes ?? st.size, api: LOGO_API }
+  if (!res.ok || !res.headers.get('content-type')?.startsWith('image/')) {
+    throw statusError(`no logo at ${uri} (HTTP ${res.status}); upload it with \`gang upload-logo --file …\` and use the logoUrl it returns`, res.status)
+  }
+}
+
+/** The temporary file host a URL points at, or null. */
+export function tempHost(uri) {
+  let host
+  try { host = new URL(uri).hostname.toLowerCase() } catch { return null }
+  return TEMP_HOSTS.find((h) => host === h || host.endsWith(`.${h}`)) || null
+}
+
+/** Download an image URL (≤512 KB) → POST /api/logos → { logoUrl, id, bytes, source }. */
+export async function rehostLogoUrl(uri) {
+  const msg = `could not download logo ${uri}`
+  let res
+  try {
+    res = await fetch(uri, { redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: { accept: 'image/*' } })
+  } catch (e) {
+    throw fetchError(`${msg}: ${why(e)}`, e)
+  }
+  if (!res.ok) throw statusError(`${msg}: HTTP ${res.status}`, res.status)
+  const len = Number(res.headers.get('content-length'))
+  if (len > MAX_BYTES) throw new Error(`${msg}: logo too large: ${len} bytes (max ${MAX_BYTES})`)
+  // read with a cap: content-length can be missing or wrong
+  const chunks = []
+  let size = 0
+  try {
+    for await (const c of res.body) {
+      size += c.length
+      if (size > MAX_BYTES) break
+      chunks.push(c)
+    }
+  } catch (e) {
+    throw fetchError(`${msg}: ${why(e)}`, e)
+  }
+  if (size > MAX_BYTES) throw new Error(`${msg}: logo too large: over ${MAX_BYTES} bytes`)
+  return { ...(await postLogo(Buffer.concat(chunks), uri)), source: uri }
 }
