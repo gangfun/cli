@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
-  calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, assertCreateTarget, zeroAddress,
+  calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, assertCreateTarget, preflightCreate, isAddress, zeroAddress, client,
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
+import { makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasUnpublished } from './notes.js'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -37,6 +38,21 @@ const parsePct = (raw) => {
 }
 const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad']
 
+// --note is validated before any RPC / preview, so a bad note never reaches calldata
+const parseNote = () => {
+  if (!flag('note')) {
+    if (flag('conf')) fail('--conf only applies together with --note')
+    return null
+  }
+  const raw = opt('note')
+  // a value starting with "--" is almost always the next flag (`--note --conf 80`), so it's refused rather than published
+  if (raw == null || raw.startsWith('--')) {
+    fail('--note needs text right after it (and the text can\'t start with "--"), e.g. --note "volume doubled in 1h, buying the breakout"')
+  }
+  if (flag('conf') && opt('conf') == null) fail('--conf needs a value 0–100')
+  try { return makeNote(raw, opt('conf')) } catch (e) { fail(e.message) }
+}
+
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · LaunchpadV2 create
 
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
@@ -50,16 +66,20 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          no addr: new_token / near_grad / graduated across the market
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
-  gang buy --token <addr> --bnb <n> [--slippage 1]      Soft: payable BNB; V2: approve quote then buy
-  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1]
+  gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100]]
+                                         Soft: payable BNB; V2: approve quote then buy
+  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …]]
   gang upload-logo --file <path>         POST image → https://gang.fun/api/logos → logoUrl
-  gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--pair-or-quote 0x…]
+  gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …]]
                                          LaunchpadV2 ONLY (${ADDR.v2}); Soft/U/S create refused
   gang execute --request-id <id>         broadcast a previewed call
-  gang tx --hash <0x..>                  wait for receipt and decode Gang events
+  gang tx --hash <0x..>                  wait for receipt and decode Gang events (publishes a queued --note)
+
+--note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
+before the trade and can't be edited later. 1–280 chars, no links. Published by \`gang execute\` (or \`gang tx\`) within 24h.
 
 Logo UI (browser): ${LOGO_UI}
-env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API})`
+env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes)`
 
 function summarizePreview(p, extra = {}) {
   if (!p.success) return { success: false, step: extra.step, error: p.error }
@@ -73,6 +93,64 @@ function summarizePreview(p, extra = {}) {
     simulatedChanges: changes,
     next: `gang execute --request-id ${d.requestId}`,
   }
+}
+
+/** Preview with the note's commitment already in `data`; queue the reveal under the preview's requestId. */
+function summarizeWithNote(p, extra, note, kind) {
+  const s = summarizePreview(p, extra)
+  if (note && s.success) {
+    queueNote(note, { kind, token: extra.token ?? null, requestId: s.requestId })
+    s.agentNote = { attached: true, hash: note.hash, text: note.text, conf: note.conf, visibility: 'public after execute' }
+  }
+  return s
+}
+const noteSkipped = (note) =>
+  note ? { agentNote: { attached: false, reason: 'approve step carries no note; pass --note again on the re-run' } } : {}
+
+/** Reveal after the tx is mined (the server checks receipt status). Failures don't affect the trade. */
+async function revealNote(entry, hash) {
+  let receipt
+  try {
+    receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 })
+  } catch (e) {
+    // viem keeps polling through RPC errors, so an unreachable RPC also ends up as the 60s timeout
+    const timedOut = e.name === 'WaitForTransactionReceiptTimeoutError'
+    return {
+      published: false, error: timedOut ? 'receipt_timeout' : 'rpc_error',
+      detail: timedOut ? 'no receipt within 60s (not mined yet, or RPC unreachable)' : e.shortMessage || e.message.split('\n')[0],
+      retry: `gang tx --hash ${hash}`,
+    }
+  }
+  if (receipt.status !== 'success') return { published: false, error: 'tx_failed' }
+  return withRetry(await publishNote(entry, hash), hash)
+}
+// only transient failures are worth a retry (network, 5xx incl. rpc_unavailable, rate_limited, tx_not_found);
+// conflict / hash_mismatch / reveal_expired / bad_* are final
+const withRetry = (r, hash) =>
+  !r.published && (!r.httpStatus || r.httpStatus >= 500 || r.httpStatus === 429 || r.error === 'tx_not_found')
+    ? { ...r, retry: `gang tx --hash ${hash}` } : r
+
+/** --quote / --ref-pool: optional addresses, 0x0 when omitted. Mixed-case input must carry a valid checksum. */
+function createAddr(name) {
+  if (!flag(name)) return zeroAddress
+  const v = opt(name)
+  if (!isAddress(v ?? '')) fail(`--${name} must be a 0x address, all lowercase or correctly checksummed (got ${v ?? 'nothing'})`)
+  return v
+}
+
+const CREATE_HINTS = {
+  NotAgent: 'this wallet holds no Agent ID (.ai)',
+  RefPoolRequired: 'a non-WBNB --quote needs --ref-pool: a Pancake V2 pair or V3 pool that holds the quote token',
+  QuoteNotInPool: '--ref-pool does not contain the --quote token',
+  PoolNotFactory: '--ref-pool is not a PancakeSwap V2 pair / V3 pool',
+  NotContract: '--ref-pool is not a contract',
+  UnknownPoolType: '--ref-pool is not a PancakeSwap V2 pair / V3 pool',
+  ThinReferencePool: '--ref-pool is too shallow; pick the deepest pool for this quote',
+  PoolNoLiquidity: '--ref-pool has no liquidity',
+  NoBridgePool: "the pool's other side has no BNB bridge configured; use a pool paired with WBNB",
+  BridgeNotWbnb: "the pool's other side has no BNB bridge configured; use a pool paired with WBNB",
+  GradAmtTooSmall: 'the quote token is priced so high that the graduation amount rounds below the minimum',
+  GradAmtZero: 'the quote token is priced so high that the graduation amount rounds below the minimum',
 }
 
 async function resolveLogoUri() {
@@ -212,6 +290,7 @@ async function main() {
     case 'buy': {
       const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required')
       const slippage = parseSlippage(opt('slippage', '1'))
+      const note = parseNote()
       const me = bawAddress()
       const info = await tokenInfo(token, me)
       if (info.graduated) fail('token already graduated; trade it on PancakeSwap', { pair: info.pair })
@@ -222,13 +301,13 @@ async function main() {
       const minOut = (q.tokensOut * BigInt(Math.round((100 - slippage) * 100))) / 10000n
 
       if (pad.kind === 'soft') {
-        const data = calldata.softBuy(token, minOut)
+        const data = withNote(calldata.softBuy(token, minOut), note)
         const p = bawPreview({ from: me, to: pad.address, value: parseEther(bnb), data })
-        return out(summarizePreview(p, {
+        return out(summarizeWithNote(p, {
           step: 'buy', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
           bnbSent: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
           expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut),
-        }))
+        }, note, 'buy'))
       }
 
       // V2 / U / S: quote ERC-20 approve then buy(token, quoteIn, minTokensOut)
@@ -239,18 +318,20 @@ async function main() {
         return out(summarizePreview(p, {
           step: 'approve-quote', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
           amount: bnb, note: 'Approve quote ERC-20 first. After it confirms, re-run the same `gang buy` to preview the buy.',
+          ...noteSkipped(note),
         }))
       }
-      const data = calldata.v2Buy(token, quoteIn, minOut)
+      const data = withNote(calldata.v2Buy(token, quoteIn, minOut), note)
       const p = bawPreview({ from: me, to: pad.address, data })
-      return out(summarizePreview(p, {
+      return out(summarizeWithNote(p, {
         step: 'buy', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
         quoteIn: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
         expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), quotePath: q.quotePath, deterministic: q.deterministic || false,
-      }))
+      }, note, 'buy'))
     }
     case 'sell': {
       const token = opt('token'); if (!token) fail('--token required')
+      const note = parseNote()
       const me = bawAddress()
       const info = await tokenInfo(token, me)
       if (info.graduated) fail('token already graduated; sell on PancakeSwap', { pair: info.pair })
@@ -267,23 +348,24 @@ async function main() {
         return out(summarizePreview(p, {
           step: 'approve', token, symbol: info.symbol, pad: pad.id, amount: fmtTok(amount),
           note: 'Approve first. After it confirms on-chain, run the same `gang sell` again to preview the sell.',
+          ...noteSkipped(note),
         }))
       }
       const slippage = parseSlippage(opt('slippage', '1'))
       const q = await quoteSell(token, amount)
       const minOut = (q.out * BigInt(Math.round((100 - slippage) * 100))) / 10000n
       if (pad.kind === 'soft') {
-        const p = bawPreview({ from: me, to: pad.address, data: calldata.softSell(token, amount, minOut) })
-        return out(summarizePreview(p, {
+        const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.softSell(token, amount, minOut), note) })
+        return out(summarizeWithNote(p, {
           step: 'sell', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
           amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'BNB',
-        }))
+        }, note, 'sell'))
       }
-      const p = bawPreview({ from: me, to: pad.address, data: calldata.v2Sell(token, amount, minOut) })
-      return out(summarizePreview(p, {
+      const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.v2Sell(token, amount, minOut), note) })
+      return out(summarizeWithNote(p, {
         step: 'sell', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
         amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', quotePath: q.quotePath, deterministic: q.deterministic || false,
-      }))
+      }, note, 'sell'))
     }
     case 'upload-logo': {
       const file = opt('file') || opt('path') || opt('logo')
@@ -294,22 +376,32 @@ async function main() {
     case 'create': {
       const name = opt('name'), symbol = opt('symbol'); if (!name || !symbol) fail('--name and --symbol required')
       try { assertCreateTarget(CONFIG.launchpad) } catch (e) { fail(e.message) }
+      const note = parseNote()
+      // the old 5-arg --pair-or-quote never matched the contract
+      if (flag('pair-or-quote') || flag('pair')) {
+        fail('--pair-or-quote was removed (CLI ≤0.3.0 encoded a create the contract does not have). Use --quote <ERC-20> --ref-pool <Pancake pair/pool holding it>; omit both for WBNB.')
+      }
+      const taxed = flag('taxed')
+      const quote = createAddr('quote'), refPool = createAddr('ref-pool')
+      const wbnbQuote = [zeroAddress, ADDR.wbnb.toLowerCase()].includes(quote.toLowerCase())
       const me = bawAddress()
       if (!(await isAgent(me))) fail('this wallet holds no Agent ID (.ai); create is gated', { address: me })
+      // dry run before any logo upload; logoURI and the note suffix can't change whether create reverts
+      const dry = await preflightCreate(me, calldata.createV2(name, symbol, '', taxed, quote, refPool), quote, refPool)
+      if (!dry.ok && dry.reverted) fail(`create would revert: ${dry.error}`, { quote, refPool, hint: CREATE_HINTS[dry.error] })
+      if (!dry.ok) fail(`could not dry-run create (RPC): ${dry.error}`, { retry: 'same command again; set GANG_RPC_URL if this RPC keeps failing' })
       const logo = await resolveLogoUri()
-      const taxed = flag('taxed')
-      const pairOrQuote = opt('pair-or-quote') || opt('pair') || zeroAddress
-      if (taxed && (!pairOrQuote || pairOrQuote === zeroAddress)) {
-        fail('--taxed requires --pair-or-quote <pair or quote CA>')
-      }
-      const data = calldata.createV2(name, symbol, logo.logoURI, taxed, pairOrQuote)
+      const data = withNote(calldata.createV2(name, symbol, logo.logoURI, taxed, quote, refPool), note)
       const p = bawPreview({ from: me, to: ADDR.v2, data })
-      return out(summarizePreview(p, {
+      return out(summarizeWithNote(p, {
         step: 'create', pad: 'v2', launchpad: ADDR.v2, name, symbol,
         logoURI: logo.logoURI || '(empty)', uploaded: logo.uploaded, upload: logo.upload,
-        taxed, pairOrQuote,
-        note: 'LaunchpadV2 only. Graduation ≈15 BNB (PoolCheck). No creation fee. Soft/U/S create archived. After execute: `gang tx --hash …` for Created.',
-      }))
+        taxed, quote: wbnbQuote ? 'WBNB' : quote,
+        // the contract ignores refPool for WBNB (Created.refPair = 0x0)
+        refPool: wbnbQuote && refPool !== zeroAddress ? `${refPool} (ignored for WBNB)` : refPool,
+        graduationAmount: dry.gradAmt, tokenIfNext: dry.tokenIfNext,
+        note: 'LaunchpadV2 only. Graduation ≈15 BNB worth of the quote. No creation fee. Soft/U/S create archived. tokenIfNext changes if another create lands first: the real address is the Created event from `gang tx --hash …` after execute.',
+      }, note, 'launch'))
     }
     case 'execute': {
       const id = opt('request-id'); if (!id) fail('--request-id required')
@@ -317,8 +409,18 @@ async function main() {
       if (!r.success) return out({ success: false, error: r.error })
       const d = r.data
       const pending = d.status === 'PENDING_CONFIRMATION'
+      const entry = findByRequestId(id)
+      let note
+      if (entry && d.txHash && !pending) note = await revealNote(entry, d.txHash)
+      else if (entry && pending) {
+        note = { published: false, pending: true, retry: 'after the user approves in the Binance App: `gang tx --hash <hash>` publishes the note' }
+      } else if (entry) {
+        // any other status without a hash: nothing was broadcast, so there's nothing to reveal (and nothing to wait for)
+        note = { published: false, error: 'no_tx_hash', status: d.status }
+      }
       return out({
         success: true, status: d.status, txHash: d.txHash, orderId: d.orderId, pendingConfirmation: pending,
+        ...(note && { note }),
         next: pending
           ? 'Ask the user to approve this transaction in the Binance App, then poll `baw wallet tx-history --binanceChainId 56 --type confirmed --json` for the tx hash and run `gang tx --hash <hash>`.'
           : (d.txHash ? `gang tx --hash ${d.txHash}` : undefined),
@@ -326,7 +428,26 @@ async function main() {
     }
     case 'tx': {
       const hash = opt('hash'); if (!hash) fail('--hash required')
-      return out({ success: true, ...(await decodeTx(hash)) })
+      const t = await decodeTx(hash)
+      // a note committed in this tx (e.g. after PENDING_CONFIRMATION) is revealed here if it's still in the local queue;
+      // with nothing queued there's nothing to reveal, so skip the extra RPC read
+      let note
+      if (hasUnpublished()) {
+        try {
+          const committed = hashesIn((await client.getTransaction({ hash })).input)
+          if (committed.length) {
+            const entry = findByHashes(committed)
+            if (!entry) {
+              note = { committed: committed[0], published: false, error: 'not_in_local_queue', hint: 'note was written on another machine, or the queue entry is older than 24h' }
+            }
+            else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
+            else note = withRetry(await publishNote(entry, hash), hash)
+          }
+        } catch (e) {
+          note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
+        }
+      }
+      return out({ success: true, ...t, ...(note && { note }) })
     }
     default:
       console.log(HELP); process.exit(cmd ? 1 : 0)

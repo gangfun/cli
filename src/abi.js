@@ -21,7 +21,9 @@ export const SOFT_ABI = [
 
 /** LaunchpadV2 (+ U/S-shaped quote pads): create with logoURI; buy/sell take quote ERC-20. */
 export const V2_ABI = [
-  { type: 'function', name: 'create', stateMutability: 'nonpayable', inputs: [{ name: 'name', type: 'string' }, { name: 'symbol', type: 'string' }, { name: 'logoURI', type: 'string' }, { name: 'taxed', type: 'bool' }, { name: 'pairOrQuote', type: 'address' }], outputs: [{ type: 'address' }] },
+  // quote 0x0 = WBNB; refPool = Pancake V2 pair / V3 pool holding `quote` (ignored for WBNB or a QuoteRegistry override)
+  { type: 'function', name: 'create', stateMutability: 'nonpayable', inputs: [{ name: 'name', type: 'string' }, { name: 'symbol', type: 'string' }, { name: 'logoURI', type: 'string' }, { name: 'taxed', type: 'bool' }, { name: 'quote', type: 'address' }, { name: 'refPool', type: 'address' }], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'graduationAmountOf', stateMutability: 'view', inputs: [{ name: 'quote', type: 'address' }, { name: 'refPool', type: 'address' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'buy', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }, { name: 'quoteIn', type: 'uint256' }, { name: 'minTokensOut', type: 'uint256' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'sell', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }, { name: 'tokensIn', type: 'uint256' }, { name: 'minQuoteOut', type: 'uint256' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'curves', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }], outputs: [
@@ -36,6 +38,8 @@ export const V2_ABI = [
   { type: 'function', name: 'MAX_PER_WALLET', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'TARGET_GRAD_BNB', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'logoURIOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'string' }] },
+  // custom errors (LaunchpadV2 + PoolCheck) so a reverted dry run names the reason
+  ...['UnknownToken', 'AlreadyGraduated', 'ZeroAmount', 'GradAmtTooSmall', 'Slippage', 'MigratorNotSet', 'ZeroAddress', 'NotAgent', 'WalletCapReached', 'RefPoolRequired', 'NoBridgePool', 'BridgeNotWbnb', 'NotContract', 'UnknownPoolType', 'PoolNotFactory', 'V3FactoryNotSet', 'QuoteNotInPool', 'PoolNoLiquidity', 'ThinReferencePool', 'GradAmtZero'].map((name) => ({ type: 'error', name, inputs: [] })),
   { type: 'event', name: 'Created', inputs: [
     { name: 'token', type: 'address', indexed: true }, { name: 'creator', type: 'address', indexed: true },
     { name: 'name', type: 'string', indexed: false }, { name: 'symbol', type: 'string', indexed: false },
