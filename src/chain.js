@@ -1,4 +1,4 @@
-import { createPublicClient, http, formatEther, parseEther, encodeFunctionData, decodeEventLog, zeroAddress } from 'viem'
+import { createPublicClient, http, formatEther, formatUnits, parseEther, encodeFunctionData, decodeEventLog, decodeErrorResult, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
 import { SOFT_ABI, V2_ABI, ERC20_ABI } from './abi.js'
 
@@ -21,7 +21,7 @@ export const CONFIG = {
 export const client = createPublicClient({ chain: bsc, transport: http(CONFIG.rpc) })
 export const fmt = (wei) => formatEther(wei)
 export const fmtTok = (units) => Number(formatEther(units)).toLocaleString('en-US', { maximumFractionDigits: 2 })
-export { parseEther, encodeFunctionData, zeroAddress }
+export { parseEther, encodeFunctionData, isAddress, zeroAddress }
 
 const erc = (address, functionName, args = []) => client.readContract({ address, abi: ERC20_ABI, functionName, args })
 const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
@@ -254,8 +254,49 @@ export const calldata = {
   v2Buy: (token, quoteIn, minTokensOut) => encodeFunctionData({ abi: V2_ABI, functionName: 'buy', args: [token, quoteIn, minTokensOut] }),
   v2Sell: (token, tokensIn, minQuoteOut) => encodeFunctionData({ abi: V2_ABI, functionName: 'sell', args: [token, tokensIn, minQuoteOut] }),
   approve: (spender, amount) => encodeFunctionData({ abi: ERC20_ABI, functionName: 'approve', args: [spender, amount] }),
-  createV2: (name, symbol, logoURI, taxed, pairOrQuote) =>
-    encodeFunctionData({ abi: V2_ABI, functionName: 'create', args: [name, symbol, logoURI, taxed, pairOrQuote] }),
+  createV2: (name, symbol, logoURI, taxed, quote, refPool) =>
+    encodeFunctionData({ abi: V2_ABI, functionName: 'create', args: [name, symbol, logoURI, taxed, quote, refPool] }),
+}
+
+/**
+ * Dry-run a create from the agent wallet (eth_call) before baw preview, so a bad quote / refPool / gate fails
+ * here with the contract's error name instead of an opaque preview rejection.
+ * → { ok: true, gradAmt, tokenIfNext } | { ok: false, reverted: true, error: <ContractError> } | { ok: false, reverted: false, error }
+ * `reverted: false` means the RPC failed, not the create: retrying with the same flags is fine.
+ */
+export async function preflightCreate(from, data, quote, refPool) {
+  let gradAmt, r
+  try {
+    gradAmt = await read(ADDR.v2, V2_ABI, 'graduationAmountOf', [quote, refPool])
+    r = await client.call({ account: from, to: ADDR.v2, data })
+  } catch (e) {
+    return { ok: false, ...callFailure(e) }
+  }
+  // CREATE address: only right if no other create lands first
+  const tokenIfNext = r.data && r.data.length >= 66 ? `0x${r.data.slice(-40)}` : null
+  return { ok: true, gradAmt: await fmtQuote(quote, gradAmt), tokenIfNext }
+}
+
+/** Quote units with the quote's decimals; raw integer if the token has no readable decimals(). */
+async function fmtQuote(quote, amount) {
+  if (quote === zeroAddress || quote.toLowerCase() === ADDR.wbnb.toLowerCase()) return formatUnits(amount, 18)
+  try { return formatUnits(amount, Number(await erc(quote, 'decimals'))) } catch { return `${amount} (raw units)` }
+}
+
+function callFailure(e) {
+  const raw = e?.walk?.((x) => typeof x?.data === 'string' && x.data.startsWith('0x'))?.data
+  if (raw && raw.length >= 10) {
+    try { return { reverted: true, error: decodeErrorResult({ abi: V2_ABI, data: raw }).errorName } } catch { /* not one of ours */ }
+  }
+  const named = e?.walk?.((x) => x?.data?.errorName)?.data?.errorName
+  if (named) return { reverted: true, error: named }
+  // empty revert data: viem only names it ExecutionRevertedError when the node's text matches, so also accept
+  // JSON-RPC code 3 (the standard execution-error code) or any "revert" in the chain; everything else is the RPC
+  const revert = e?.walk?.((x) => ['ExecutionRevertedError', 'ContractFunctionRevertedError'].includes(x?.name) ||
+    x?.code === 3 || /revert/i.test(x?.details || x?.shortMessage || ''))
+  // a revert carries the node's own words; the "RPC Request failed." wrapper text would read like a network error
+  if (revert) return { reverted: true, error: revert.details || revert.shortMessage || 'execution reverted' }
+  return { reverted: false, error: [e?.shortMessage, e?.details].filter(Boolean).join(' — ') || e?.message || String(e) }
 }
 
 export async function decodeTx(hash) {
