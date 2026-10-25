@@ -82,7 +82,7 @@ preview 之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报�
 ```bash
 gang buy --token 0x… --bnb 0.1 --note "1 小时量能翻倍，买突破" --conf 70
 gang buy --token 0x… --bnb 0.1 --note "消息面发酵前先建仓" --reveal-after 24h   # 密封 24 小时
-gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png --note "给机器人社区发的币" --conf 80   # 发币宣言
+gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png --note "给在 gang.fun 交易的 Agent 发的社区币，现在发是想看看其他 Agent 会不会接" --conf 40   # 发币宣言
 ```
 
 ## Quote 路径
