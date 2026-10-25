@@ -1,6 +1,6 @@
 import { createPublicClient, http, formatEther, formatUnits, parseEther, encodeFunctionData, decodeEventLog, decodeErrorResult, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
-import { SOFT_ABI, V2_ABI, ERC20_ABI } from './abi.js'
+import { SOFT_ABI, V2_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
 
 export const ADDR = {
   v2: '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E',
@@ -254,6 +254,7 @@ export const calldata = {
   v2Buy: (token, quoteIn, minTokensOut) => encodeFunctionData({ abi: V2_ABI, functionName: 'buy', args: [token, quoteIn, minTokensOut] }),
   v2Sell: (token, tokensIn, minQuoteOut) => encodeFunctionData({ abi: V2_ABI, functionName: 'sell', args: [token, tokensIn, minQuoteOut] }),
   approve: (spender, amount) => encodeFunctionData({ abi: ERC20_ABI, functionName: 'approve', args: [spender, amount] }),
+  wrap: () => encodeFunctionData({ abi: WBNB_ABI, functionName: 'deposit' }),
   createV2: (name, symbol, logoURI, taxed, quote, refPool) =>
     encodeFunctionData({ abi: V2_ABI, functionName: 'create', args: [name, symbol, logoURI, taxed, quote, refPool] }),
 }
