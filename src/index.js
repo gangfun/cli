@@ -6,7 +6,7 @@ import {
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
-import { makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasUnpublished } from './notes.js'
+import { makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued } from './notes.js'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -42,6 +42,7 @@ const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad'
 const parseNote = () => {
   if (!flag('note')) {
     if (flag('conf')) fail('--conf only applies together with --note')
+    if (flag('reveal-after')) fail('--reveal-after only applies together with --note')
     return null
   }
   const raw = opt('note')
@@ -50,7 +51,8 @@ const parseNote = () => {
     fail('--note needs text right after it (and the text can\'t start with "--"), e.g. --note "volume doubled in 1h, buying the breakout"')
   }
   if (flag('conf') && opt('conf') == null) fail('--conf needs a value 0–100')
-  try { return makeNote(raw, opt('conf')) } catch (e) { fail(e.message) }
+  if (flag('reveal-after') && opt('reveal-after') == null) fail('--reveal-after needs whole hours 1–72, e.g. 6h')
+  try { return makeNote(raw, opt('conf'), opt('reveal-after')) } catch (e) { fail(e.message) }
 }
 
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · LaunchpadV2 create
@@ -66,17 +68,19 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          no addr: new_token / near_grad / graduated across the market
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
-  gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100]]
+  gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
                                          Soft: payable BNB; V2: approve quote then buy
-  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …]]
+  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
   gang upload-logo --file <path>         POST image → https://gang.fun/api/logos → logoUrl
-  gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …]]
+  gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
                                          LaunchpadV2 ONLY (${ADDR.v2}); Soft/U/S create refused
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --hash <0x..>                  wait for receipt and decode Gang events (publishes a queued --note)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
-before the trade and can't be edited later. 1–280 chars, no links. Published by \`gang execute\` (or \`gang tx\`) within 24h.
+before the trade and can't be edited later. 1–280 chars, no links. Sent by \`gang execute\` (or \`gang tx\`) within 24h.
+--reveal-after 6h seals it: gang.fun holds the text and shows only "a sealed note" until 6h after the trade, then
+publishes it automatically. Once sent it can't be withdrawn; a sealed note never sent within 24h counts as unrevealed.
 
 Logo UI (browser): ${LOGO_UI}
 env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes)`
@@ -100,7 +104,12 @@ function summarizeWithNote(p, extra, note, kind) {
   const s = summarizePreview(p, extra)
   if (note && s.success) {
     queueNote(note, { kind, token: extra.token ?? null, requestId: s.requestId })
-    s.agentNote = { attached: true, hash: note.hash, text: note.text, conf: note.conf, visibility: 'public after execute' }
+    s.agentNote = {
+      attached: true, hash: note.hash, text: note.text, conf: note.conf,
+      ...(note.revealAfter
+        ? { revealAfterHours: note.revealAfter / 3600, visibility: `sealed: public ${note.revealAfter / 3600}h after the trade` }
+        : { visibility: 'public after execute' }),
+    }
   }
   return s
 }
@@ -429,10 +438,10 @@ async function main() {
     case 'tx': {
       const hash = opt('hash'); if (!hash) fail('--hash required')
       const t = await decodeTx(hash)
-      // a note committed in this tx (e.g. after PENDING_CONFIRMATION) is revealed here if it's still in the local queue;
-      // with nothing queued there's nothing to reveal, so skip the extra RPC read
+      // a note committed in this tx is sent here if it's still in the local queue (e.g. after PENDING_CONFIRMATION),
+      // or its state reported / refreshed if already sent; with an empty queue skip the extra RPC read
       let note
-      if (hasUnpublished()) {
+      if (hasQueued()) {
         try {
           const committed = hashesIn((await client.getTransaction({ hash })).input)
           if (committed.length) {

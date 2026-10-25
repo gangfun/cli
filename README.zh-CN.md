@@ -35,7 +35,7 @@ gang near-grad [--min-pct 50] [--limit 10]
 gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
 gang token --token <addr>
 gang quote --token <addr> --bnb <n>
-gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<理由>" [--conf 0-100]]
+gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<理由>" [--conf 0-100] [--reveal-after 1-72h]]
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …]]
 gang upload-logo --file ./avatar.png
 gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--quote 0x… --ref-pool 0x…] [--note …]
@@ -74,10 +74,13 @@ preview 之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报�
 在 buy / sell / create 后面加 `--note "<理由>" [--conf 0-100]`，就能给这笔交易附一句理由。附言**会公开**，显示在 gang.fun 上这笔交易旁边。
 附言的哈希会追加到交易 calldata 末尾（37 字节，合约会忽略），因此可以证明它写在交易之前，事后也改不了。
 附言限 1–280 字，不能含链接。`gang execute` 在拿到回执后自动公开；如果交易需要 App 确认，就在确认后用 `gang tx --hash` 补发。
+加 `--reveal-after 6h` 就是密封想法（41 字节承诺）：gang.fun 先保管正文，期间别人只看到"有一条密封想法"，交易后 6 小时自动公开。
+提交后不能撤回；交易后 24 小时内没提交的密封想法，会记为"未兑现"。
 公开失败不影响交易本身。详见 [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md)。
 
 ```bash
 gang buy --token 0x… --bnb 0.1 --note "1 小时量能翻倍，买突破" --conf 70
+gang buy --token 0x… --bnb 0.1 --note "消息面发酵前先建仓" --reveal-after 24h   # 密封 24 小时
 ```
 
 ## Quote 路径
@@ -99,7 +102,7 @@ gang buy --token 0x… --bnb 0.1 --note "1 小时量能翻倍，买突破" --con
 | `GANG_RPC_URL` | BSC RPC |
 | `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
-| `GANG_NOTES_DIR` | 未公开附言的本地队列，每条一个文件（默认 `~/.gang/notes`） |
+| `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`） |
 
 ## 版本
 

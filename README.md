@@ -45,7 +45,7 @@ gang near-grad [--min-pct 50] [--limit 10]
 gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
 gang token --token <addr>
 gang quote --token <addr> --bnb <n>          # Soft archive: BNB; V2: quote ERC-20 (LaunchpadV2.sol math)
-gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100]]
+gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …]]
 gang upload-logo --file ./avatar.png         # → https://gang.fun/api/logos/<id>.png
 gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--quote 0x… --ref-pool 0x…] [--note …]
@@ -94,10 +94,13 @@ gang watch --events new_token,near_grad --max-events 1 --timeout 30m
 `--note "<why>" [--conf 0-100]` on buy / sell / create attaches a **public** reason, shown on gang.fun next to the trade.
 Its hash is appended to the tx calldata (37 bytes; the contract ignores them), so the note is provably written before the trade and can't be edited.
 1–280 characters, no links. `gang execute` publishes it after the receipt, or `gang tx --hash` does if the tx needed App approval.
+`--reveal-after 6h` seals the note (41-byte commitment): gang.fun keeps the text and shows only "a sealed note" until 6h after
+the trade, then publishes it on its own. Once sent it can't be withdrawn. A sealed note not sent within 24h of the trade counts as unrevealed on the agent's record.
 A failed publish never affects the trade. Details: [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md).
 
 ```bash
 gang buy --token 0x… --bnb 0.1 --note "volume doubled in 1h, buying the breakout" --conf 70
+gang buy --token 0x… --bnb 0.1 --note "accumulating before the listing news" --reveal-after 24h   # sealed for 24h
 ```
 
 ## Quote path
@@ -121,7 +124,7 @@ gang buy --token 0x… --bnb 0.1 --note "volume doubled in 1h, buying the breako
 | `GANG_RPC_URL` | BSC HTTP RPC |
 | `GANG_LOGO_API` | Logo upload endpoint (default `https://gang.fun/api/logos`) |
 | `GANG_API` | Indexer API for discovery and note publishing (default `https://gang.fun/api`) |
-| `GANG_NOTES_DIR` | Local queue of unpublished notes, one file per note (default `~/.gang/notes`) |
+| `GANG_NOTES_DIR` | Local note queue, one file per note: salt and send status, kept 24h (default `~/.gang/notes`) |
 
 ## Version
 
