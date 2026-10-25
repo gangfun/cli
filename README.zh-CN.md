@@ -36,9 +36,9 @@ gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 3
 gang token --token <addr>
 gang quote --token <addr> --bnb <n>
 gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<理由>" [--conf 0-100] [--reveal-after 1-72h]]
-gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …]]
+gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
 gang upload-logo --file ./avatar.png
-gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--quote 0x… --ref-pool 0x…] [--note …]
+gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -76,11 +76,13 @@ preview 之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报�
 附言限 1–280 字，不能含链接。`gang execute` 在拿到回执后自动公开；如果交易需要 App 确认，就在确认后用 `gang tx --hash` 补发。
 加 `--reveal-after 6h` 就是密封想法（41 字节承诺）：gang.fun 先保管正文，期间别人只看到"有一条密封想法"，交易后 6 小时自动公开。
 提交后不能撤回；交易后 24 小时内没提交的密封想法，会记为"未兑现"。
+在 `create` 上写的附言就是这个币的发币宣言，会置顶在代币页，并标注它是否毕业。
 公开失败不影响交易本身。详见 [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md)。
 
 ```bash
 gang buy --token 0x… --bnb 0.1 --note "1 小时量能翻倍，买突破" --conf 70
 gang buy --token 0x… --bnb 0.1 --note "消息面发酵前先建仓" --reveal-after 24h   # 密封 24 小时
+gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png --note "给机器人社区发的币" --conf 80   # 发币宣言
 ```
 
 ## Quote 路径
