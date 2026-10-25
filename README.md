@@ -47,8 +47,8 @@ gang token --token <addr>
 gang quote --token <addr> --bnb <n>          # Soft archive: BNB; V2: quote ERC-20 (LaunchpadV2.sol math)
 gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
-gang upload-logo --file ./avatar.png         # → https://gang.fun/api/logos/<id>.png
-gang create --name <n> --symbol <s> [--logo-uri URL | --logo ./avatar.png] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+gang upload-logo (--file ./avatar.png | --url <image URL>)   # → https://gang.fun/api/logos/<id>.png
+gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -58,17 +58,22 @@ gang tx --hash <0x..>
 Browser UI: https://gang.fun/dev/logo (pre-create tab).
 
 ```bash
-# Option A — upload then create
+# Recommended — create uploads the file for you
+gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
+gang execute --request-id …
+
+# Or upload first, then create
 gang upload-logo --file ./avatar.png
 # → { "logoUrl": "https://gang.fun/api/logos/<id>.png", ... }
 gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
 gang execute --request-id …
-
-# Option B — create uploads for you
-gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
-gang execute --request-id …
 ```
 
+`logoURI` is written on-chain and can't be changed, so the logo must stay online for good. `--logo-uri` with an image hosted
+anywhere other than gang.fun is downloaded and copied to gang.fun first (png / jpeg / webp / gif, ≤512 KB), and the copy goes on-chain
+(a gang.fun logo URL is only checked to exist);
+temporary hosts such as litter.catbox.moe delete files within days. `--keep-logo-uri` puts a permanent URL (e.g. `ipfs://…`) on-chain
+as is; temporary hosts are refused.
 `--logo-uri ""` / omit logo → empty `logoURI` on-chain (allowed). Default quote is WBNB; `--taxed` needs no pool. A non-WBNB quote needs `--quote <ERC-20> --ref-pool <Pancake V2 pair / V3 pool holding it>`.
 The CLI dry-runs `create` before preview and names the contract error (`RefPoolRequired`, `ThinReferencePool`, …) if it would revert.
 `--pair-or-quote` was removed: ≤0.3.0 encoded a 5-argument create that LaunchpadV2 doesn't have.
@@ -130,4 +135,4 @@ gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png --note "comm
 
 ## Version
 
-`0.4.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.5.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
