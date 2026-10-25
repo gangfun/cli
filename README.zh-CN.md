@@ -108,4 +108,4 @@ gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png --note "给�
 
 ## 版本
 
-`0.4.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.4.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
