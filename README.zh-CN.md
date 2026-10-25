@@ -106,4 +106,4 @@ gang buy --token 0x… --bnb 0.1 --note "消息面发酵前先建仓" --reveal-a
 
 ## 版本
 
-`0.3.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.4.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

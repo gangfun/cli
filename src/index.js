@@ -37,6 +37,8 @@ const parsePct = (raw) => {
   return n
 }
 const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad']
+// native BNB kept back when wrapping for a V2 buy: gas for the wrap, approve and buy txs (well above BSC's usual cost)
+const GAS_RESERVE = parseEther('0.002')
 
 // --note is validated before any RPC / preview, so a bad note never reaches calldata
 const parseNote = () => {
@@ -69,7 +71,7 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
   gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
-                                         Soft: payable BNB; V2: approve quote then buy
+                                         Soft: payable BNB; V2: wrap BNB→WBNB if short, approve quote, then buy
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
   gang upload-logo --file <path>         POST image → https://gang.fun/api/logos → logoUrl
   gang create --name <n> --symbol <s> [--logo-uri URL | --logo <file>] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
@@ -114,7 +116,7 @@ function summarizeWithNote(p, extra, note, kind) {
   return s
 }
 const noteSkipped = (note) =>
-  note ? { agentNote: { attached: false, reason: 'approve step carries no note; pass --note again on the re-run' } } : {}
+  note ? { agentNote: { attached: false, reason: 'this setup step carries no note; pass --note again on the re-run' } } : {}
 
 /** Reveal after the tx is mined (the server checks receipt status). Failures don't affect the trade. */
 async function revealNote(entry, hash) {
@@ -319,9 +321,31 @@ async function main() {
         }, note, 'buy'))
       }
 
-      // V2 / U / S: quote ERC-20 approve then buy(token, quoteIn, minTokensOut)
+      // V2 / U / S: buy(token, quoteIn, minTokensOut) pulls quote ERC-20, so: enough quote → approve → buy
       const quoteIn = parseEther(bnb)
-      const allow = await allowance(info.quote, me, pad.address)
+      const [have, allow] = await Promise.all([balanceOf(info.quote, me), allowance(info.quote, me, pad.address)])
+      if (have < quoteIn) {
+        const short = quoteIn - have
+        if (info.quote.toLowerCase() !== ADDR.wbnb.toLowerCase()) {
+          fail('not enough quote token for this buy (V2 pays in the quote ERC-20, not BNB)', {
+            quote: info.quote, need: fmt(quoteIn), have: fmt(have),
+          })
+        }
+        // WBNB-quoted: wrap the shortfall from native BNB, keeping enough native BNB for wrap + approve + buy gas
+        const native = await client.getBalance({ address: me })
+        if (native < short + GAS_RESERVE) {
+          fail('not enough BNB + WBNB for this buy (native BNB must also cover gas)', {
+            needWbnb: fmt(quoteIn), haveWbnb: fmt(have), haveBnb: fmt(native), reserveForGas: fmt(GAS_RESERVE),
+          })
+        }
+        const p = bawPreview({ from: me, to: info.quote, value: short, data: calldata.wrap() })
+        return out(summarizePreview(p, {
+          step: 'wrap-bnb', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
+          wrap: fmt(short), haveWbnb: fmt(have), needWbnb: fmt(quoteIn),
+          note: 'V2 buys pay in WBNB. Wrap BNB → WBNB first. After it confirms, re-run the same `gang buy` (approve, then the buy).',
+          ...noteSkipped(note),
+        }))
+      }
       if (allow < quoteIn) {
         const p = bawPreview({ from: me, to: info.quote, data: calldata.approve(pad.address, quoteIn) })
         return out(summarizePreview(p, {

@@ -128,4 +128,4 @@ gang buy --token 0x… --bnb 0.1 --note "accumulating before the listing news" -
 
 ## Version
 
-`0.3.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.4.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

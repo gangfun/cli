@@ -72,5 +72,10 @@ export const ERC20_ABI = [
   { type: 'function', name: 'locked', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
 ]
 
+/** WBNB (WETH9): wrap native BNB 1:1 so a WBNB-quoted V2 buy can pull it. */
+export const WBNB_ABI = [
+  { type: 'function', name: 'deposit', stateMutability: 'payable', inputs: [], outputs: [] },
+]
+
 /** @deprecated alias kept for older imports */
 export const LAUNCHPAD_ABI = V2_ABI
