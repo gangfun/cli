@@ -10,15 +10,15 @@ export const LOGO_UI = 'https://gang.fun/dev/logo'
 // file hosts that delete uploads after hours or days: a logoURI there turns into a broken image, and it can't be changed on-chain
 const TEMP_HOSTS = ['litter.catbox.moe', 'tmpfiles.org', '0x0.st', 'uguu.se', 'file.io', 'transfer.sh']
 
-// network failures, timeouts and 5xx / 429 may pass on a retry; a missing or wrong image won't
+// network failures, timeouts and 5xx / 429 may pass on a retry; a missing or wrong image won't (follow.js uses these too)
 // fetch wraps every failure (also ipfs://, bad URL, expired TLS) in a cause; only these codes and timeouts are transient
 const NET_CODES = ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH',
   'UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']
-const fetchError = (msg, e) => Object.assign(new Error(msg), {
+export const fetchError = (msg, e) => Object.assign(new Error(msg), {
   retryable: ['TimeoutError', 'AbortError'].includes(e.name) || NET_CODES.includes(e.cause?.code),
 })
-const statusError = (msg, status) => Object.assign(new Error(msg), { retryable: status >= 500 || status === 429 })
-const why = (e) => e.cause?.message || e.message
+export const statusError = (msg, status) => Object.assign(new Error(msg), { retryable: status >= 500 || status === 429 })
+export const why = (e) => e.cause?.message || e.message
 
 /** The image type from its first bytes; only the types gang.fun makes thumbnails for (png / jpeg / gif / webp). */
 function sniffMime(buf) {

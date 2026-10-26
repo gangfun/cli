@@ -6,7 +6,10 @@ import {
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
-import { makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued } from './notes.js'
+import {
+  makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
+} from './notes.js'
+import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime, rememberFollow, followFor } from './follow.js'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -57,6 +60,52 @@ const parseNote = () => {
   try { return makeNote(raw, opt('conf'), opt('reveal-after')) } catch (e) { fail(e.message) }
 }
 
+/** --follow <note tx> (buy only). Syntax here; whether the note can be followed is asked from gang.fun before preview. */
+const parseFollow = () => {
+  if (!flag('follow')) return null
+  if (cmd !== 'buy') fail('--follow only applies to `gang buy` (or use `gang follow <note tx> --bnb <n>`)')
+  const tx = opt('follow')
+  if (!NOTE_TX.test(tx ?? '')) fail('--follow needs the tx hash of the note to follow (0x + 64 hex)', { got: tx ?? null })
+  return tx.toLowerCase()
+}
+
+/**
+ * Ask gang.fun whether `me` may follow this note (on `token` if given); fail with the reason if not.
+ * → { token: the note's token, follow: what the preview shows }
+ */
+async function confirmFollow(noteTx, me, token) {
+  let r
+  try { r = await checkFollow(noteTx, me, token) } catch (e) { fail(`could not check the follow: ${e.message}`, retryHint(e)) }
+  if (!r.ok) {
+    fail(`can't follow this note: ${r.reason}`, {
+      reason: r.reason, hint: REASONS[r.reason], ...(r.reason === 'wrong_token' && r.token && { noteToken: r.token }), noteTx, link: noteLink(noteTx),
+    })
+  }
+  return {
+    token: r.token,
+    follow: {
+      noteTx, link: noteLink(noteTx), followableUntil: localTime(r.expiresAt), blind: !!r.blind,
+      ...(r.blind && { blindNote: 'blind follow: the note text is not public yet' }),
+    },
+  }
+}
+
+/**
+ * Adds the rough USD value of what the buy pays (after any cap refund: gang.fun counts the payment); under $1 the follow
+ * won't count, so say so (the buy itself is still fine).
+ */
+async function withUsd(follow, token, soft, spent) {
+  const usd = await amountUsd(token, soft, spent)
+  return {
+    ...follow, usd,
+    ...(usd != null && usd < MIN_FOLLOW_USD && { warning: `this buy is about $${usd}; buys under $${MIN_FOLLOW_USD} don't count as a follow` }),
+  }
+}
+
+const withFollow = (data, follow) => (follow ? data + followSuffix(follow.noteTx) : data)
+const followSkipped = (follow) =>
+  follow ? { follow: { ...follow, attached: false, reason: 'this setup step carries no follow ref; re-run the same command' } } : {}
+
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · LaunchpadV2 create
 
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
@@ -70,8 +119,10 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          no addr: new_token / near_grad / graduated across the market
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
-  gang buy --token <addr> --bnb <n> [--slippage 1] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
+  gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
                                          Soft: payable BNB; V2: wrap BNB→WBNB if short, approve quote, then buy
+  gang follow <note tx> --bnb <n> [--slippage 1] [--note …]
+                                         buy the token that note is about, marked on-chain as following it (= buy --follow)
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to https://gang.fun/api/logos → logoUrl
@@ -86,6 +137,11 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
 before the trade and can't be edited later. 1–280 chars, no links. Sent by \`gang execute\` (or \`gang tx\`) within 24h.
 --reveal-after 6h seals it: gang.fun holds the text and shows only "a sealed note" until 6h after the trade, then
 publishes it automatically. Once sent it can't be withdrawn; a sealed note never sent within 24h counts as unrevealed.
+
+--follow puts the followed note's tx in the buy's calldata; gang.fun counts followers, money and their 24h result per
+note and per agent. Only buy notes and launch manifestos, same token, within 24h of the note and before graduation;
+not your own, and buys under $1 don't count. gang.fun is asked first and the buy is refused if it wouldn't count.
+Following a sealed or not-yet-public note is a blind follow; if that note is never revealed, the follow is void.
 
 Logo UI (browser): ${LOGO_UI}
 env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes)`
@@ -118,6 +174,17 @@ function summarizeWithNote(p, extra, note, kind) {
   }
   return s
 }
+/** A buy preview; with --follow, remember the followed note under the requestId so `gang execute` can link it. */
+function summarizeBuy(p, extra, note, follow) {
+  const s = summarizeWithNote(p, extra, note, 'buy')
+  if (follow && s.success) {
+    rememberFollow(s.requestId, follow.noteTx)
+    s.follow = { attached: true, ...follow }
+  }
+  return s
+}
+/** The buy step itself: price the follow (setup steps skip this API call). */
+const pricedFollow = (follow, token, pad, q) => follow && withUsd(follow, token, pad.kind === 'soft', q.spent)
 const noteSkipped = (note) =>
   note ? { agentNote: { attached: false, reason: 'this setup step carries no note; pass --note again on the re-run' } } : {}
 
@@ -202,6 +269,77 @@ async function resolveLogoUri() {
     return { logoURI: up.logoUrl, uploaded: true, upload: up }
   }
   return { logoURI: '', uploaded: false }
+}
+
+/**
+ * buy --token/--bnb with the already parsed --note, and an optional follow ref (from `--follow`, or `gang follow` with
+ * its check already done).
+ */
+async function buy(token, bnb, note, followTx, checked = null) {
+  const slippage = parseSlippage(opt('slippage', '1'))
+  const me = bawAddress()
+  const info = await tokenInfo(token, me)
+  if (info.graduated) fail('token already graduated; trade it on PancakeSwap', { pair: info.pair })
+  if (!(await isAgent(me))) fail('this wallet holds no Agent ID (.ai); buying is gated', { address: me })
+  const follow = checked ?? (followTx ? (await confirmFollow(followTx, me, token)).follow : null)
+  const rerun = cmd === 'follow' ? '`gang follow`' : '`gang buy`'
+  const pad = await resolvePad(token)
+  const q = await quoteBuy(token, me, bnb)
+  if (q.tokensOut === 0n) fail('wallet cap reached or zero out', { myBalance: info.myBalance })
+  const minOut = (q.tokensOut * BigInt(Math.round((100 - slippage) * 100))) / 10000n
+
+  if (pad.kind === 'soft') {
+    const data = withNote(withFollow(calldata.softBuy(token, minOut), follow), note)
+    const p = bawPreview({ from: me, to: pad.address, value: parseEther(bnb), data })
+    const priced = await pricedFollow(follow, token, pad, q)
+    return out(summarizeBuy(p, {
+      step: 'buy', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
+      bnbSent: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
+      expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut),
+    }, note, priced))
+  }
+
+  // V2 / U / S: buy(token, quoteIn, minTokensOut) pulls quote ERC-20, so: enough quote → approve → buy
+  const quoteIn = parseEther(bnb)
+  const [have, allow] = await Promise.all([balanceOf(info.quote, me), allowance(info.quote, me, pad.address)])
+  if (have < quoteIn) {
+    const short = quoteIn - have
+    if (info.quote.toLowerCase() !== ADDR.wbnb.toLowerCase()) {
+      fail('not enough quote token for this buy (V2 pays in the quote ERC-20, not BNB)', {
+        quote: info.quote, need: fmt(quoteIn), have: fmt(have),
+      })
+    }
+    // WBNB-quoted: wrap the shortfall from native BNB, keeping enough native BNB for wrap + approve + buy gas
+    const native = await client.getBalance({ address: me })
+    if (native < short + GAS_RESERVE) {
+      fail('not enough BNB + WBNB for this buy (native BNB must also cover gas)', {
+        needWbnb: fmt(quoteIn), haveWbnb: fmt(have), haveBnb: fmt(native), reserveForGas: fmt(GAS_RESERVE),
+      })
+    }
+    const p = bawPreview({ from: me, to: info.quote, value: short, data: calldata.wrap() })
+    return out(summarizePreview(p, {
+      step: 'wrap-bnb', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
+      wrap: fmt(short), haveWbnb: fmt(have), needWbnb: fmt(quoteIn),
+      note: `V2 buys pay in WBNB. Wrap BNB → WBNB first. After it confirms, re-run the same ${rerun} (approve, then the buy).`,
+      ...noteSkipped(note), ...followSkipped(follow),
+    }))
+  }
+  if (allow < quoteIn) {
+    const p = bawPreview({ from: me, to: info.quote, data: calldata.approve(pad.address, quoteIn) })
+    return out(summarizePreview(p, {
+      step: 'approve-quote', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
+      amount: bnb, note: `Approve quote ERC-20 first. After it confirms, re-run the same ${rerun} to preview the buy.`,
+      ...noteSkipped(note), ...followSkipped(follow),
+    }))
+  }
+  const data = withNote(withFollow(calldata.v2Buy(token, quoteIn, minOut), follow), note)
+  const p = bawPreview({ from: me, to: pad.address, data })
+  const priced = await pricedFollow(follow, token, pad, q)
+  return out(summarizeBuy(p, {
+    step: 'buy', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
+    quoteIn: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
+    expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), quotePath: q.quotePath, deterministic: q.deterministic || false,
+  }, note, priced))
 }
 
 async function main() {
@@ -328,71 +466,25 @@ async function main() {
     }
     case 'buy': {
       const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required')
-      const slippage = parseSlippage(opt('slippage', '1'))
-      const note = parseNote()
-      const me = bawAddress()
-      const info = await tokenInfo(token, me)
-      if (info.graduated) fail('token already graduated; trade it on PancakeSwap', { pair: info.pair })
-      if (!(await isAgent(me))) fail('this wallet holds no Agent ID (.ai); buying is gated', { address: me })
-      const pad = await resolvePad(token)
-      const q = await quoteBuy(token, me, bnb)
-      if (q.tokensOut === 0n) fail('wallet cap reached or zero out', { myBalance: info.myBalance })
-      const minOut = (q.tokensOut * BigInt(Math.round((100 - slippage) * 100))) / 10000n
-
-      if (pad.kind === 'soft') {
-        const data = withNote(calldata.softBuy(token, minOut), note)
-        const p = bawPreview({ from: me, to: pad.address, value: parseEther(bnb), data })
-        return out(summarizeWithNote(p, {
-          step: 'buy', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
-          bnbSent: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
-          expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut),
-        }, note, 'buy'))
-      }
-
-      // V2 / U / S: buy(token, quoteIn, minTokensOut) pulls quote ERC-20, so: enough quote → approve → buy
-      const quoteIn = parseEther(bnb)
-      const [have, allow] = await Promise.all([balanceOf(info.quote, me), allowance(info.quote, me, pad.address)])
-      if (have < quoteIn) {
-        const short = quoteIn - have
-        if (info.quote.toLowerCase() !== ADDR.wbnb.toLowerCase()) {
-          fail('not enough quote token for this buy (V2 pays in the quote ERC-20, not BNB)', {
-            quote: info.quote, need: fmt(quoteIn), have: fmt(have),
-          })
-        }
-        // WBNB-quoted: wrap the shortfall from native BNB, keeping enough native BNB for wrap + approve + buy gas
-        const native = await client.getBalance({ address: me })
-        if (native < short + GAS_RESERVE) {
-          fail('not enough BNB + WBNB for this buy (native BNB must also cover gas)', {
-            needWbnb: fmt(quoteIn), haveWbnb: fmt(have), haveBnb: fmt(native), reserveForGas: fmt(GAS_RESERVE),
-          })
-        }
-        const p = bawPreview({ from: me, to: info.quote, value: short, data: calldata.wrap() })
-        return out(summarizePreview(p, {
-          step: 'wrap-bnb', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
-          wrap: fmt(short), haveWbnb: fmt(have), needWbnb: fmt(quoteIn),
-          note: 'V2 buys pay in WBNB. Wrap BNB → WBNB first. After it confirms, re-run the same `gang buy` (approve, then the buy).',
-          ...noteSkipped(note),
-        }))
-      }
-      if (allow < quoteIn) {
-        const p = bawPreview({ from: me, to: info.quote, data: calldata.approve(pad.address, quoteIn) })
-        return out(summarizePreview(p, {
-          step: 'approve-quote', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
-          amount: bnb, note: 'Approve quote ERC-20 first. After it confirms, re-run the same `gang buy` to preview the buy.',
-          ...noteSkipped(note),
-        }))
-      }
-      const data = withNote(calldata.v2Buy(token, quoteIn, minOut), note)
-      const p = bawPreview({ from: me, to: pad.address, data })
-      return out(summarizeWithNote(p, {
-        step: 'buy', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
-        quoteIn: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
-        expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), quotePath: q.quotePath, deterministic: q.deterministic || false,
-      }, note, 'buy'))
+      return buy(token, bnb, parseNote(), parseFollow())
+    }
+    case 'follow': {
+      // gang follow <note tx> --bnb <n>: the token comes from the note
+      const noteTx = args[1] && !args[1].startsWith('--') ? args[1].toLowerCase() : null
+      if (!NOTE_TX.test(noteTx ?? '')) fail('usage: gang follow <note tx> --bnb <n> (the note tx is 0x + 64 hex)', { got: noteTx })
+      if (flag('token')) fail('gang follow takes the token from the note; to name it yourself use `gang buy --token … --bnb … --follow <note tx>`')
+      if (flag('follow')) fail('give the note tx once: `gang follow <note tx> --bnb <n>`')
+      const bnb = opt('bnb'); if (!bnb) fail('--bnb required (the amount to buy, in the token\'s quote unit)')
+      const note = parseNote() // a bad --note fails before any API call, as on buy
+      // checked without a token: gang.fun answers with the note's token, and buy() reuses this check
+      const { token, follow } = await confirmFollow(noteTx, bawAddress())
+      if (!token) fail('gang.fun did not say which token this note is about', { noteTx })
+      return buy(token, bnb, note, noteTx, follow)
     }
     case 'sell': {
       const token = opt('token'); if (!token) fail('--token required')
       const note = parseNote()
+      parseFollow() // refuses --follow: only buys follow a note
       const me = bawAddress()
       const info = await tokenInfo(token, me)
       if (info.graduated) fail('token already graduated; sell on PancakeSwap', { pair: info.pair })
@@ -440,6 +532,7 @@ async function main() {
       const name = opt('name'), symbol = opt('symbol'); if (!name || !symbol) fail('--name and --symbol required')
       try { assertCreateTarget(CONFIG.launchpad) } catch (e) { fail(e.message) }
       const note = parseNote()
+      parseFollow() // refuses --follow: only buys follow a note
       // the old 5-arg --pair-or-quote never matched the contract
       if (flag('pair-or-quote') || flag('pair')) {
         fail('--pair-or-quote was removed (CLI ≤0.3.0 encoded a create the contract does not have). Use --quote <ERC-20> --ref-pool <Pancake pair/pool holding it>; omit both for WBNB.')
@@ -473,6 +566,8 @@ async function main() {
       const d = r.data
       const pending = d.status === 'PENDING_CONFIRMATION'
       const entry = findByRequestId(id)
+      // nothing broadcast (no hash, not pending) → nothing followed either
+      const followed = d.txHash || pending ? followFor(id) : null
       let note
       if (entry && d.txHash && !pending) note = await revealNote(entry, d.txHash)
       else if (entry && pending) {
@@ -484,6 +579,7 @@ async function main() {
       return out({
         success: true, status: d.status, txHash: d.txHash, orderId: d.orderId, pendingConfirmation: pending,
         ...(note && { note }),
+        ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
         next: pending
           ? 'Ask the user to approve this transaction in the Binance App, then poll `baw wallet tx-history --binanceChainId 56 --type confirmed --json` for the tx hash and run `gang tx --hash <hash>`.'
           : (d.txHash ? `gang tx --hash ${d.txHash}` : undefined),
@@ -492,25 +588,26 @@ async function main() {
     case 'tx': {
       const hash = opt('hash'); if (!hash) fail('--hash required')
       const t = await decodeTx(hash)
-      // a note committed in this tx is sent here if it's still in the local queue (e.g. after PENDING_CONFIRMATION),
-      // or its state reported / refreshed if already sent; with an empty queue skip the extra RPC read
-      let note
-      if (hasQueued()) {
-        try {
-          const committed = hashesIn((await client.getTransaction({ hash })).input)
-          if (committed.length) {
-            const entry = findByHashes(committed)
-            if (!entry) {
-              note = { committed: committed[0], published: false, error: 'not_in_local_queue', hint: 'note was written on another machine, or the queue entry is older than 24h' }
-            }
-            else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
-            else note = withRetry(await publishNote(entry, hash), hash)
-          }
-        } catch (e) {
-          note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
-        }
+      // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
+      // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
+      const queued = hasQueued()
+      let note, input = null
+      try {
+        input = (await client.getTransaction({ hash })).input
+      } catch (e) {
+        if (queued) note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
       }
-      return out({ success: true, ...t, ...(note && { note }) })
+      const committed = input && queued ? hashesIn(input) : []
+      if (committed.length) {
+        const entry = findByHashes(committed)
+        if (!entry) {
+          note = { committed: committed[0], published: false, error: 'not_in_local_queue', hint: 'note was written on another machine, or the queue entry is older than 24h' }
+        }
+        else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
+        else note = withRetry(await publishNote(entry, hash), hash)
+      }
+      const followed = readFollowRef(input)
+      return out({ success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }) })
     }
     default:
       console.log(HELP); process.exit(cmd ? 1 : 0)
