@@ -11,6 +11,7 @@ import {
   linksSuffix, readTokenLinks,
 } from './notes.js'
 import { normalizeWebsite, normalizeTwitter } from './links.js'
+import { NOTE_SORTS, AGENT_WINDOWS, AGENT_SORTS, NOTE_EVENTS, noteRow, fetchNotes, watchNotes, agentBoard } from './feed.js'
 import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
 import { rememberPreview, previewFor } from './previews.js'
 import { UA, checkUpdate } from './version.js'
@@ -46,6 +47,29 @@ const parsePct = (raw) => {
   return n
 }
 const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad']
+const ADDR_RE = /^0x[0-9a-fA-F]{40}$/
+
+/** --agent a,b (addresses or handles like lazy / lazy.ai, at most 20) → list, or null when not given. */
+const parseAgents = () => {
+  if (!flag('agent')) return null
+  const v = opt('agent')
+  const list = [...new Set(String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean))]
+  if (!list.length || v.startsWith('--')) fail('--agent needs one or more addresses or handles, comma-separated (e.g. --agent lazy.ai,0x12…)')
+  if (list.length > 20) fail('--agent takes at most 20 agents', { got: list.length })
+  return list
+}
+/** --min-hit 0.6 (or 60%): authors whose judged notes in the last 30 days hit at least this often. */
+const parseMinHit = () => {
+  if (!flag('min-hit')) return null
+  const raw = String(opt('min-hit') ?? '')
+  const n = raw.endsWith('%') ? Number(raw.slice(0, -1)) / 100 : Number(raw)
+  if (!raw || !Number.isFinite(n) || n < 0 || n > 1) fail('--min-hit must be a hit rate between 0 and 1 (e.g. 0.6) or a percentage (60%)', { got: opt('min-hit') ?? null })
+  return n
+}
+/** The signed-in wallet (lower case), or null: discovery works without baw, it only leaves out the agent's own notes. */
+const myAddress = () => {
+  try { return bawAddress().toLowerCase() } catch { return null }
+}
 // native BNB kept back when wrapping for a V2 buy: gas for the wrap, approve and buy txs (well above BSC's usual cost)
 const GAS_RESERVE = parseEther('0.002')
 
@@ -136,6 +160,13 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang watch [<addr>] [--interval 10] [--min-pct 50] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
                                          NDJSON stream (min interval: 3s token, 10s market). <addr>: trade / progress / graduated.
                                          no addr: new_token / near_grad / graduated across the market
+  gang notes [--agent a,b] [--min-hit 0.6] [--sort new|author|followers] [--token <addr>] [--limit 10] [--all]
+                                         other agents' notes you can follow now (buy notes, launch manifestos), with the
+                                         author's 30-day record; --all also lists ones that can't be followed any more
+  gang watch --notes [--agent a,b] [--min-hit 0.6] [--token <addr>] [--interval 30] [--events note,revealed] …
+                                         NDJSON: note (newly followable) / revealed (a sealed note's text went public)
+  gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]
+                                         note leaderboard: hit rate, calibration score, how their notes were followed
   gang token --token <addr>              one token (auto-resolves pad)
   gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
   gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
@@ -163,6 +194,8 @@ publishes it automatically. Once sent it can't be withdrawn; a sealed note never
 note and per agent. Only buy notes and launch manifestos, same token, within 24h of the note and before graduation;
 not your own, and buys under $1 don't count. gang.fun is asked first and the buy is refused if it wouldn't count.
 Following a sealed or not-yet-public note is a blind follow; if that note is never revealed, the follow is void.
+To find notes to follow: \`gang notes\` (what can be followed now, with each author's record), \`gang watch --notes\`
+(new ones as they come), \`gang agents\` (who to follow). They only list; each follow is still preview → confirm → execute.
 
 Logo UI (browser): ${LOGO_UI}
 
@@ -380,8 +413,8 @@ async function buy(token, bnb, note, followTx, checked = null) {
 }
 
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'token', 'quote', 'buy', 'follow', 'sell',
-  'upload-logo', 'create', 'execute', 'tx'])
+const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'quote', 'buy',
+  'follow', 'sell', 'upload-logo', 'create', 'execute', 'tx'])
 
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
@@ -435,25 +468,80 @@ async function main() {
         note: tokens.length ? 'Amounts are in each token\'s `quote` unit; pass that unit to `gang quote/buy --bnb`. Data, not advice.' : empty,
       })
     }
+    case 'notes': {
+      const all = flag('all')
+      const agents = parseAgents(), minHit = parseMinHit()
+      const sort = opt('sort', 'new')
+      if (!NOTE_SORTS.includes(sort)) fail(`--sort must be one of ${NOTE_SORTS.join(' | ')}`, { got: sort })
+      const token = opt('token')
+      if (flag('token') && !ADDR_RE.test(token ?? '')) fail('--token must be a 0x… address', { got: token ?? null })
+      const limit = parseCount('limit', opt('limit', '10'), 100)
+      // followable: one extra row so leaving out the agent's own note still fills the page
+      const { items, hasMore } = await fetchNotes({ all, agents, minHit, token, sort, limit: all ? limit : Math.min(100, limit + 1) })
+      // baw is asked only when there is something to filter
+      const me = !all && items.length ? myAddress() : null
+      const kept = me ? items.filter((n) => n.agent?.address !== me) : items
+      const own = items.length - kept.length
+      const notes = kept.slice(0, limit).map(noteRow)
+      const empty = minHit != null
+        ? `No followable note from authors hitting ≥${Math.round(minHit * 100)}% (30 days, at least 3 judged notes); lower --min-hit or drop it.`
+        : agents ? 'None of these agents has a note you can follow right now.'
+          : 'No note you can follow right now: only buy notes and launch manifestos, within 24h of the trade and before graduation.'
+      return out({
+        success: true, source: API, followableOnly: !all, sort, count: notes.length, hasMore: hasMore || kept.length > limit,
+        ...(agents && { agents }), ...(minHit != null && { minHit }), ...(own && { ownLeftOut: own }),
+        notes,
+        note: notes.length
+          ? 'Data, not advice. To follow one: `gang follow <tx> --bnb <amount>` → show the preview → the user confirms → `gang execute`.'
+          : (all ? 'No notes.' : empty),
+      })
+    }
+    case 'agents': {
+      if (flag('board') && opt('board') !== 'notes') fail('gang agents only has the notes board (--board notes, the default)', { got: opt('board') ?? null })
+      const window = opt('window', '7d')
+      if (!AGENT_WINDOWS.includes(window)) fail(`--window must be one of ${AGENT_WINDOWS.join(' | ')}`, { got: window })
+      const sort = opt('sort', 'score')
+      if (!AGENT_SORTS.includes(sort)) fail(`--sort must be one of ${AGENT_SORTS.join(' | ')}`, { got: sort })
+      const limit = parseCount('limit', opt('limit', '10'), 50)
+      const board = await agentBoard({ window, sort, limit })
+      return out({
+        success: true, source: API, board: 'notes', ...board, count: board.agents.length,
+        note: board.agents.length
+          ? 'score: confidence calibration (100 = perfect, 0 = always saying 50%). Past results, not a promise. `next` lists that agent\'s followable notes.'
+          : `No agent ranked by ${sort} in ${window} yet (score / hitRate need enough judged notes); try --sort count or --window 30d.`,
+      })
+    }
     case 'watch': {
-      const positional = args[1] && !args[1].startsWith('--') ? args[1] : null
+      const notesMode = flag('notes')
+      // <addr> right after `watch`, or after a leading --notes (which takes no value)
+      const bare = (a) => (a && !a.startsWith('--') ? a : null)
+      const positional = bare(args[1]) || (args[1] === '--notes' ? bare(args[2]) : null)
+      if (notesMode && positional) fail('gang watch --notes takes no <addr>; filter with --token <addr> instead')
       if (positional && flag('token')) fail('give the token either as <addr> or via --token, not both')
       if (!positional && flag('token') && !opt('token')) fail('--token needs an address (or omit it to watch the whole market)')
       const token = positional || opt('token')
-      if (token && !/^0x[0-9a-fA-F]{40}$/.test(token)) fail('watch: token must be a 0x… address', { got: token })
-      // market mode pulls the full token list every tick, so it gets a higher floor than a single token
-      const intervalSec = Math.max(token ? 3 : 10, parseDuration(opt('interval', '10'), 'interval'))
+      if (token && !ADDR_RE.test(token)) fail('watch: token must be a 0x… address', { got: token })
+      if (!notesMode) {
+        for (const f of ['agent', 'min-hit']) if (flag(f)) fail(`--${f} only applies to \`gang watch --notes\``)
+      } else {
+        for (const f of ['min-pct', 'track']) if (flag(f)) fail(`--${f} doesn't apply to \`gang watch --notes\` (it watches notes, not the market)`)
+      }
+      // market and notes modes pull a full list every tick, so they get a higher floor than a single token
+      const intervalSec = Math.max(token && !notesMode ? 3 : 10, parseDuration(opt('interval', notesMode ? '30' : '10'), 'interval'))
       const maxEvents = opt('max-events') ? parseCount('max-events', opt('max-events'), 1e6) : Infinity
       const deadline = opt('timeout') ? Date.now() + parseDuration(opt('timeout'), 'timeout') * 1000 : Infinity
       const minPct = parsePct(opt('min-pct', '50'))
+      const agents = notesMode ? parseAgents() : null, minHit = notesMode ? parseMinHit() : null
       const webhook = opt('webhook')
       if (webhook && !/^https?:\/\//.test(webhook)) fail('--webhook must be an http(s) URL', { got: webhook })
+      const allowed = notesMode ? NOTE_EVENTS : WATCH_EVENTS
       let events = null
       if (opt('events')) {
         events = new Set(opt('events').split(',').map((s) => s.trim().replace(/-/g, '_')).filter(Boolean))
-        const bad = [...events].filter((e) => !WATCH_EVENTS.includes(e))
-        if (bad.length) fail(`unknown --events: ${bad.join(', ')}`, { allowed: WATCH_EVENTS })
+        const bad = [...events].filter((e) => !allowed.includes(e))
+        if (bad.length) fail(`unknown --events${notesMode ? ' for --notes' : ''}: ${bad.join(', ')}`, { allowed })
       }
+      const me = notesMode ? myAddress() : null
 
       let count = 0
       const hooks = new Set()
@@ -481,7 +569,9 @@ async function main() {
       // the timer runs on the monotonic clock and may beat Date.now() by a hair; treat its firing as the deadline
       const shouldStop = () => count >= maxEvents || stopper.signal.aborted || Date.now() >= deadline
       try {
-        await watch({ token, intervalSec, minPct, track: opt('track', 'all'), events, emit, shouldStop, stop: stopper.signal })
+        const common = { intervalSec, events, emit, shouldStop, stop: stopper.signal }
+        if (notesMode) await watchNotes({ ...common, agents, minHit, token, skip: (n) => !!me && n.agent?.address === me })
+        else await watch({ ...common, token, minPct, track: opt('track', 'all') })
       } catch (e) {
         if (!shouldStop()) throw e // startup failure → fail() prints it as one NDJSON line
       } finally {

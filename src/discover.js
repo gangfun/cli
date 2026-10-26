@@ -14,8 +14,11 @@ const num = (v) => (v == null || v === '' ? 0 : Number(v))
 const usd = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null)
 const now = () => Math.floor(Date.now() / 1000)
 
-/** `stop` (optional AbortSignal) cancels an in-flight request, e.g. when `gang watch --timeout` expires. */
-async function get(path, stop) {
+/**
+ * GET API + path → parsed JSON, null on 404. `stop` (optional AbortSignal) cancels an in-flight request, e.g. when
+ * `gang watch --timeout` expires. `fallback`: what to suggest when the API is unreachable.
+ */
+export async function get(path, stop, fallback = 'On-chain fallback without volume: `gang list`') {
   // own controller instead of AbortSignal.any (Node ≥20.3); listener removed after each request so a
   // long-lived `stop` signal doesn't pile up one listener per poll
   const ctl = new AbortController()
@@ -29,7 +32,7 @@ async function get(path, stop) {
       r = await fetch(`${API}${path}`, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': UA } })
     } catch (e) {
       if (stop?.aborted) throw e
-      throw new Error(`gang API unreachable (${API}${path}): ${ctl.signal.reason?.message || e.message}. On-chain fallback without volume: \`gang list\``)
+      throw new Error(`gang API unreachable (${API}${path}): ${ctl.signal.reason?.message || e.message}${fallback ? `. ${fallback}` : ''}`)
     }
     if (r.status === 404) return null
     if (!r.ok) throw new Error(`gang API ${r.status} on ${path}`)
