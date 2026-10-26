@@ -1,0 +1,120 @@
+/**
+ * Follow trades: a buy that names the note it follows (follow ref in the calldata, see notes.js).
+ * gang.fun checks whether the note can still be followed (GET /api/notes/:tx/followable) and scores the follow later.
+ */
+import { createHash } from 'node:crypto'
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { formatEther } from 'viem'
+import { API } from './discover.js'
+import { fetchError, statusError, why } from './logo.js'
+import { DIR } from './notes.js'
+
+export const NOTE_TX = /^0x[0-9a-fA-F]{64}$/
+export const MIN_FOLLOW_USD = 1 // gang.fun doesn't count a follow paying less
+const SITE = /\/api$/.test(API) ? API.slice(0, -4) : 'https://gang.fun'
+export const noteLink = (tx) => `${SITE}/note/${tx.toLowerCase()}`
+
+const NOT_FOUND_RETRIES = 3
+const RETRY_MS = Number(process.env.GANG_FOLLOW_RETRY_MS || 3000) // env only to make tests fast
+const TTL_MS = 24 * 3600_000
+
+export const REASONS = {
+  not_found: 'no note with this tx on gang.fun: wrong hash, or the note landed seconds ago and is not indexed yet (try again in a minute)',
+  not_followable: 'only buy notes and launch manifestos can be followed (this is a sell note or a sample)',
+  expired: 'too late to follow: the 24h follow window passed, the token graduated, or the note was never revealed',
+  graduated: 'the token graduated; only curve buys count as follows',
+  self: 'this is your own note; you can\'t follow yourself',
+  wrong_token: 'this note is about a different token',
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function getJson(path, timeoutMs = 10_000) {
+  let r
+  try {
+    r = await fetch(`${API}${path}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (e) {
+    throw fetchError(`gang API unreachable (${API}): ${why(e)}`, e)
+  }
+  let body = null
+  try { body = await r.json() } catch { /* status code is enough */ }
+  if (body?.error === 'unknown route') {
+    throw new Error(`${API} can't check follows yet (no /notes/:tx/followable); set GANG_API to a gang.fun API that has it`)
+  }
+  if (r.status >= 500 || r.status === 429) throw statusError(`gang API ${r.status} on ${path}`, r.status)
+  return { status: r.status, body }
+}
+
+/** Retry a not_found a few times: a note that just landed may not be indexed yet. */
+async function untilFound(fn) {
+  for (let i = 0; ; i++) {
+    const r = await fn()
+    if (r.reason !== 'not_found' || i >= NOT_FOUND_RETRIES) return r
+    await sleep(RETRY_MS)
+  }
+}
+
+/** → { ok, reason, token, track, expiresAt, blind } from gang.fun; without `token` the note's own token is returned. */
+export function checkFollow(noteTx, trader, token) {
+  const q = new URLSearchParams({ trader: trader.toLowerCase(), ...(token && { token: token.toLowerCase() }) })
+  return untilFound(async () => {
+    const { status, body } = await getJson(`/notes/${noteTx}/followable?${q}`)
+    if (typeof body?.ok !== 'boolean') {
+      throw new Error(`gang API ${status} on /notes/${noteTx}/followable${body?.error ? `: ${body.error}` : ''}`)
+    }
+    return body
+  })
+}
+
+/**
+ * Rough USD value of paying `wei` of the token's quote (BNB on Soft), from gang.fun's prices; null if unknown.
+ * Best effort with a short timeout: it only decides whether the preview warns, never whether it's made.
+ */
+export async function amountUsd(token, soft, wei) {
+  try {
+    const { status, body } = await getJson(`${soft ? '/tokens' : '/stocks/tokens'}/${token.toLowerCase()}`, 3_000)
+    const unit = Number(soft ? body?.bnbUsd : body?.quoteUsd)
+    const usd = Number(formatEther(wei)) * unit
+    if (status !== 200 || !Number.isFinite(usd) || !(unit > 0)) return null
+    // cents above $1; two significant digits below, so a tiny buy doesn't read as $0
+    return usd >= 1 ? Math.round(usd * 100) / 100 : Number(usd.toPrecision(2))
+  } catch { return null }
+}
+
+/** Unix seconds / ms / ISO → "2026-10-27 14:05 UTC+8" in the local time zone. */
+export function localTime(v) {
+  const n = typeof v === 'number' ? v : /^\d+$/.test(String(v)) ? Number(v) : Date.parse(v)
+  if (!Number.isFinite(n)) return null
+  const ms = n < 1e12 ? n * 1000 : n
+  const off = -new Date(ms).getTimezoneOffset()
+  const a = Math.abs(off)
+  const tz = `UTC${off < 0 ? '-' : '+'}${Math.floor(a / 60)}${a % 60 ? `:${String(a % 60).padStart(2, '0')}` : ''}`
+  return `${new Date(ms + off * 60_000).toISOString().slice(0, 16).replace('T', ' ')} ${tz}`
+}
+
+// ---- requestId → followed note, so `gang execute` can print the link. <notes dir>/follows/<sha256(requestId)>.json, kept 24h.
+
+const FDIR = join(DIR, 'follows')
+const pathOf = (requestId) => join(FDIR, `${createHash('sha256').update(String(requestId)).digest('hex').slice(0, 32)}.json`)
+
+/** Best effort: the follow ref is already in the previewed calldata, this only lets `gang execute` print the link. */
+export function rememberFollow(requestId, noteTx) {
+  try {
+    mkdirSync(FDIR, { recursive: true, mode: 0o700 })
+    for (const name of readdirSync(FDIR)) {
+      const p = join(FDIR, name)
+      try { if (Date.now() - statSync(p).mtimeMs > TTL_MS) unlinkSync(p) } catch { /* already gone */ }
+    }
+    const p = pathOf(requestId)
+    writeFileSync(`${p}.${process.pid}.tmp`, JSON.stringify({ noteTx, createdAt: Date.now() }), { mode: 0o600 })
+    renameSync(`${p}.${process.pid}.tmp`, p)
+  } catch { /* execute just won't print the link */ }
+}
+
+export function followFor(requestId) {
+  try {
+    const e = JSON.parse(readFileSync(pathOf(requestId), 'utf8'))
+    return e.createdAt > Date.now() - TTL_MS ? e.noteTx : null
+  } catch { return null }
+}

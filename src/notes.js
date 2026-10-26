@@ -3,6 +3,7 @@
  * baw can't sign messages, so the commitment rides at the end of the calldata (Solidity ignores trailing bytes):
  *   v1 suffix = "gang" 0x01 keccak256(UTF-8("gang-note:v1\n" salt "\n" conf "\n" text))                     (37 bytes)
  *   v2 suffix = "gang" 0x02 uint32be(revealAfter) keccak256(UTF-8("gang-note:v2\n" salt "\n" conf "\n" revealAfter "\n" text))  (41 bytes)
+ *   follow ref = "gang" 0x03 followed note tx hash (37 bytes), right before the note suffix (or last without one)
  * The text is sent after the tx lands (POST /api/notes), so anyone can check it was written before the trade.
  * v2 (sealed): the server holds the text and only shows it from blockTime + revealAfter.
  * Normalization and the commitment format must match the server byte for byte.
@@ -16,13 +17,14 @@ import { API } from './discover.js'
 
 export const MAGIC = '67616e6701' // "gang" + version 1
 export const MAGIC_V2 = '67616e6702' // "gang" + version 2 (sealed)
+export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref (01 / 02 / 03 are never reused)
 const MAX_CP = 280
 const REVEAL_MIN_H = 1, REVEAL_MAX_H = 72
 const LINK = /https?:\/\/|www\.|t\.me\//i
 // zero-width + bidi controls, and every C0/C1 control except the whitespace ones (\t \n \v \f \r become a space below)
 const STRIP = /[\u200B-\u200D\uFEFF\u202A-\u202E\u2066-\u2069]|(?![\t\n\v\f\r])\p{Cc}/gu
 const TTL_MS = 24 * 3600_000 // the server takes a note (v1 or v2) for 24h after the trade
-const DIR = process.env.GANG_NOTES_DIR || join(homedir(), '.gang', 'notes')
+export const DIR = process.env.GANG_NOTES_DIR || join(homedir(), '.gang', 'notes')
 const ENTRY = /^0x[0-9a-f]{64}\.json$/
 const TMP = /^0x[0-9a-f]{64}\.json\.\d+\.tmp$/ // left behind only if a process died between write and rename
 
@@ -71,6 +73,44 @@ export function makeNote(rawText, rawConf, rawRevealAfter) {
 }
 
 export const withNote = (data, note) => (note ? data + note.suffix : data)
+
+const TX_RE = /^0x[0-9a-f]{64}$/
+
+/** The note suffix at the very end of a tx input ({ version, hash }), or null. Same as the server's readNoteCommit. */
+function readNoteCommit(s) {
+  const v2 = s.slice(-82)
+  if (v2.length === 82 && v2.startsWith(MAGIC_V2)) {
+    const revealAfter = parseInt(v2.slice(10, 18), 16)
+    if (revealAfter >= REVEAL_MIN_H * 3600 && revealAfter <= REVEAL_MAX_H * 3600) return { version: 2, hash: `0x${v2.slice(18)}` }
+  }
+  const v1 = s.slice(-74)
+  if (v1.length === 74 && v1.startsWith(MAGIC)) return { version: 1, hash: `0x${v1.slice(10)}` }
+  return null
+}
+
+/**
+ * Follow reference (same code as the server's indexer/src/noteCommit.js): this buy follows the note of trade tx noteTx.
+ * "gang" 03 noteTx (37 bytes), lower-case hex without 0x, appended after the calldata and before the trade's own note
+ * suffix, if any: [calldata][follow][note].
+ */
+export function followSuffix(noteTx) {
+  const tx = String(noteTx || '').toLowerCase()
+  if (!TX_RE.test(tx)) throw new Error('bad note tx')
+  return `${FOLLOW_MAGIC}${tx.slice(2)}`
+}
+
+/**
+ * The note tx a tx input follows, or null. Only one place counts: the 37 bytes right before the input's note suffix,
+ * or its last 37 bytes when it has none, so one input follows at most one note.
+ */
+export function readFollowRef(input) {
+  const s = String(input || '').toLowerCase()
+  const c = readNoteCommit(s)
+  const end = s.length - (c ? (c.version === 2 ? 82 : 74) : 0)
+  const f = s.slice(Math.max(0, end - 74), end)
+  const tx = `0x${f.slice(10)}`
+  return f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(tx) ? tx : null
+}
 
 /** Commitment hashes (v1 and v2) found in a tx input (contains-match, same as the server: the call may be wrapped). */
 export function hashesIn(input) {
