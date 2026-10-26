@@ -39,7 +39,7 @@ gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <附言 tx>] [--note 
 gang follow <附言 tx> --bnb <n> [--slippage 1] [--note …]   # 跟单：买附言里的币，并标明跟的是哪条
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
 gang upload-logo (--file ./avatar.png | --url <图片地址>)
-gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -58,6 +58,11 @@ gang upload-logo --file ./avatar.png
 gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
 gang execute --request-id …
 ```
+
+网站和 X 链接（选填，0.7.0+）：`--website mycoin.xyz --twitter @mycoin`。`--twitter` 可以填账号（`@name`）或
+x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https://x.com/…`；`--website` 填 http(s) 链接
+（`mycoin.xyz` 会变成 `https://mycoin.xyz/`，不能用 IP 地址或端口）。链接写在创建交易里（调用数据之后、附言之前），gang.fun 会在币详情页展示；
+和 `logoURI` 一样，发币后不能再改。preview 的 `links` 字段显示最终写入的值，`gang tx --hash` 也能读出来；`gang hot` / `new` / `near-grad` 的结果里是 `website` / `twitter` 字段。
 
 `logoURI` 写在链上，发币后改不了，所以 logo 必须长期能打开。`--logo-uri` 填的不是 gang.fun 的图片时，CLI 会先下载这张图，
 转存到 gang.fun（png / jpeg / webp / gif，≤512 KB），上链的是转存后的地址（gang.fun 的地址只检查图片存在）；litter.catbox.moe 这类临时图床几天内就会删图。
@@ -134,4 +139,4 @@ gang buy --token 0x… --bnb 0.1 --follow 0x<附言 tx>
 
 ## 版本
 
-`0.6.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.7.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

@@ -49,7 +49,7 @@ gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <note tx>] [--note "<
 gang follow <note tx> --bnb <n> [--slippage 1] [--note …]   # buy the token a note is about, as a follow of it
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
 gang upload-logo (--file ./avatar.png | --url <image URL>)   # → https://gang.fun/api/logos/<id>.png
-gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -69,6 +69,12 @@ gang upload-logo --file ./avatar.png
 gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
 gang execute --request-id …
 ```
+
+Website and X links (optional, 0.7.0+): `--website mycoin.xyz --twitter @mycoin`. `--twitter` takes a handle or an
+x.com / twitter.com link (profile, post, community) and stores it as `https://x.com/…`; `--website` takes an http(s) link
+(`mycoin.xyz` becomes `https://mycoin.xyz/`; no IP address or port). They go into the create tx (after the call data, before any note), so
+gang.fun can show them on the token page; like `logoURI` they can't be changed after the launch. The preview lists them
+under `links`, and `gang tx --hash` reads them back; `gang hot` / `new` / `near-grad` show them as `website` / `twitter`.
 
 `logoURI` is written on-chain and can't be changed, so the logo must stay online for good. `--logo-uri` with an image hosted
 anywhere other than gang.fun is downloaded and copied to gang.fun first (png / jpeg / webp / gif, ≤512 KB), and the copy goes on-chain
@@ -156,4 +162,4 @@ gang buy --token 0x… --bnb 0.1 --follow 0x<note tx>
 
 ## Version
 
-`0.6.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.7.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
