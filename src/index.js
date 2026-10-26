@@ -9,13 +9,17 @@ import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
 } from './notes.js'
-import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime, rememberFollow, followFor } from './follow.js'
+import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
+import { rememberPreview, previewFor } from './previews.js'
+import { UA, checkUpdate } from './version.js'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
 const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : def }
 const flag = (name) => args.includes(`--${name}`)
-const out = (o) => console.log(JSON.stringify(o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
+// set once in main() when npm has a newer CLI; every JSON result then carries it (`gang watch` streams don't)
+let update = null
+const out = (o) => console.log(JSON.stringify(update ? { ...o, update } : o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
 // `gang watch` speaks NDJSON, so its failures are one line too (with event/fatal for stream consumers)
 const fail = (msg, extra = {}) => {
   if (cmd === 'watch') console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, ...extra }))
@@ -144,7 +148,13 @@ not your own, and buys under $1 don't count. gang.fun is asked first and the buy
 Following a sealed or not-yet-public note is a blind follow; if that note is never revealed, the follow is void.
 
 Logo UI (browser): ${LOGO_UI}
-env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes)`
+
+A buy / sell / create preview without --note says so in agentNote.hint. When npm has a newer CLI, results carry
+update: { current, latest, cmd, skill } (npm is asked at most once a day in the background; GANG_UPDATE_CHECK=0 turns it
+off, GANG_UPDATE_URL points it at an npm mirror).
+
+env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes),
+GANG_UPDATE_CHECK, GANG_UPDATE_URL`
 
 function summarizePreview(p, extra = {}) {
   if (!p.success) return { success: false, step: extra.step, error: p.error }
@@ -160,10 +170,25 @@ function summarizePreview(p, extra = {}) {
   }
 }
 
-/** Preview with the note's commitment already in `data`; queue the reveal under the preview's requestId. */
-function summarizeWithNote(p, extra, note, kind) {
+// shown on every buy / sell / create without --note: agents with an old local skill don't know to write one.
+// The CLI can't tell whether the user asked for no note, so the agent decides.
+const NO_NOTE = {
+  attached: false,
+  hint: 'No note attached. Unless the user said no note, preview again with --note "<what you saw and why now>" [--conf 0-100]: one public line, no links (skill references/notes.md).',
+}
+const NO_NOTE_SENT = {
+  attached: false,
+  hint: 'This trade went out without a note. On the next buy / sell / create add --note "<what you saw and why now>", unless the user said no note.',
+}
+
+/**
+ * A trade preview with the note's commitment (and follow ref) already in `data`: queue the reveal under the preview's
+ * requestId, and remember what the preview carried so `gang execute` can report on it.
+ */
+function summarizeWithNote(p, extra, note, kind, follow = null) {
   const s = summarizePreview(p, extra)
-  if (note && s.success) {
+  if (!s.success) return s
+  if (note) {
     queueNote(note, { kind, token: extra.token ?? null, requestId: s.requestId })
     s.agentNote = {
       attached: true, hash: note.hash, text: note.text, conf: note.conf,
@@ -171,16 +196,11 @@ function summarizeWithNote(p, extra, note, kind) {
         ? { revealAfterHours: note.revealAfter / 3600, visibility: `sealed: public ${note.revealAfter / 3600}h after the trade` }
         : { visibility: 'public after execute' }),
     }
+  } else {
+    s.agentNote = NO_NOTE
   }
-  return s
-}
-/** A buy preview; with --follow, remember the followed note under the requestId so `gang execute` can link it. */
-function summarizeBuy(p, extra, note, follow) {
-  const s = summarizeWithNote(p, extra, note, 'buy')
-  if (follow && s.success) {
-    rememberFollow(s.requestId, follow.noteTx)
-    s.follow = { attached: true, ...follow }
-  }
+  if (follow) s.follow = { attached: true, ...follow }
+  rememberPreview(s.requestId, { kind, noted: !!note, ...(follow && { followed: follow.noteTx }) })
   return s
 }
 /** The buy step itself: price the follow (setup steps skip this API call). */
@@ -292,11 +312,11 @@ async function buy(token, bnb, note, followTx, checked = null) {
     const data = withNote(withFollow(calldata.softBuy(token, minOut), follow), note)
     const p = bawPreview({ from: me, to: pad.address, value: parseEther(bnb), data })
     const priced = await pricedFollow(follow, token, pad, q)
-    return out(summarizeBuy(p, {
+    return out(summarizeWithNote(p, {
       step: 'buy', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
       bnbSent: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
       expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut),
-    }, note, priced))
+    }, note, 'buy', priced))
   }
 
   // V2 / U / S: buy(token, quoteIn, minTokensOut) pulls quote ERC-20, so: enough quote → approve → buy
@@ -335,14 +355,19 @@ async function buy(token, bnb, note, followTx, checked = null) {
   const data = withNote(withFollow(calldata.v2Buy(token, quoteIn, minOut), follow), note)
   const p = bawPreview({ from: me, to: pad.address, data })
   const priced = await pricedFollow(follow, token, pad, q)
-  return out(summarizeBuy(p, {
+  return out(summarizeWithNote(p, {
     step: 'buy', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
     quoteIn: bnb, expectTokens: q.tokensOutFmt, expectSpent: q.spentFmt, fee: q.feeFmt,
     expectRefund: q.refundFmt, minTokensOut: fmtTok(minOut), quotePath: q.quotePath, deterministic: q.deterministic || false,
-  }, note, priced))
+  }, note, 'buy', priced))
 }
 
+// commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
+const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'token', 'quote', 'buy', 'follow', 'sell',
+  'upload-logo', 'create', 'execute', 'tx'])
+
 async function main() {
+  if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
   switch (cmd) {
     case 'preflight': {
       const issues = []
@@ -420,7 +445,7 @@ async function main() {
         count++
         if (webhook) {
           const p = fetch(webhook, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
+            method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': UA },
             body: JSON.stringify(ev), signal: AbortSignal.timeout(10_000),
           }).then((r) => { if (!r.ok) line({ event: 'error', error: `webhook ${r.status}` }) })
             .catch((e) => line({ event: 'error', error: `webhook: ${e.message}` }))
@@ -566,8 +591,10 @@ async function main() {
       const d = r.data
       const pending = d.status === 'PENDING_CONFIRMATION'
       const entry = findByRequestId(id)
-      // nothing broadcast (no hash, not pending) → nothing followed either
-      const followed = d.txHash || pending ? followFor(id) : null
+      // nothing broadcast (no hash, not pending) → nothing followed, and no trade to remind about
+      const sent = d.txHash || pending
+      const preview = sent ? previewFor(id) : null
+      const followed = preview?.followed
       let note
       if (entry && d.txHash && !pending) note = await revealNote(entry, d.txHash)
       else if (entry && pending) {
@@ -579,6 +606,7 @@ async function main() {
       return out({
         success: true, status: d.status, txHash: d.txHash, orderId: d.orderId, pendingConfirmation: pending,
         ...(note && { note }),
+        ...(!entry && preview && !preview.noted && { agentNote: NO_NOTE_SENT }),
         ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
         next: pending
           ? 'Ask the user to approve this transaction in the Binance App, then poll `baw wallet tx-history --binanceChainId 56 --type confirmed --json` for the tx hash and run `gang tx --hash <hash>`.'

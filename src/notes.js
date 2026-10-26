@@ -14,6 +14,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { keccak256, toHex } from 'viem'
 import { API } from './discover.js'
+import { UA } from './version.js'
 
 export const MAGIC = '67616e6701' // "gang" + version 1
 export const MAGIC_V2 = '67616e6702' // "gang" + version 2 (sealed)
@@ -21,6 +22,9 @@ export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref (01 / 02 / 0
 const MAX_CP = 280
 const REVEAL_MIN_H = 1, REVEAL_MAX_H = 72
 const LINK = /https?:\/\/|www\.|t\.me\//i
+// a copied command whose placeholder was never filled in (`--note "<your reason>"`): refused by the CLI only, so the
+// server's normalization stays the same
+const PLACEHOLDER = /^<[^<>]{1,40}>$/
 // zero-width + bidi controls, and every C0/C1 control except the whitespace ones (\t \n \v \f \r become a space below)
 const STRIP = /[\u200B-\u200D\uFEFF\u202A-\u202E\u2066-\u2069]|(?![\t\n\v\f\r])\p{Cc}/gu
 const TTL_MS = 24 * 3600_000 // the server takes a note (v1 or v2) for 24h after the trade
@@ -62,6 +66,7 @@ export const noteHash = ({ salt, conf, text, revealAfter }) =>
 
 export function makeNote(rawText, rawConf, rawRevealAfter) {
   const text = normalizeNote(rawText)
+  if (PLACEHOLDER.test(text)) throw new Error(`placeholder_note: --note is still the placeholder ${text}; write the actual reason, or drop --note`)
   const conf = parseConf(rawConf)
   const revealAfter = parseRevealAfter(rawRevealAfter)
   const salt = randomBytes(16).toString('hex')
@@ -229,7 +234,7 @@ async function post(entry, tx) {
   try {
     const r = await fetch(`${API}/notes`, {
       method: 'POST', signal: ctl.signal,
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'user-agent': UA },
       body: JSON.stringify({
         tx, salt: entry.salt, conf: entry.conf, text: entry.text, ...(entry.revealAfter && { revealAfter: entry.revealAfter }),
       }),
