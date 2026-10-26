@@ -1,4 +1,5 @@
 /** Discovery for agents: ranked lists + a polling event stream, read from the gang.fun indexer API. */
+import { websiteError, twitterError } from './links.js'
 import { UA } from './version.js'
 
 export const API = (process.env.GANG_API || 'https://gang.fun/api').replace(/\/+$/, '')
@@ -73,6 +74,9 @@ export function normalize(r) {
     volume24hUsd: usd(num(r.volume24hUsd)), trades24h: num(r.trades24h), trades: num(r.trades), holders: num(r.holders),
     createdAt: r.createdAt, ageMin: r.createdAt ? Math.floor((now() - r.createdAt) / 60) : null,
     lastTradeAt: r.lastTradeAt || null, creatorHandle: r.creatorHandle || null, logoUrl: r.logoUrl || null,
+    // the creator's links from the create tx (V2, CLI ≥0.7.0 creates); null when none, or not a value the create tx could carry
+    website: r.website && !websiteError(r.website) ? r.website : null,
+    twitter: r.twitter && !twitterError(r.twitter) ? r.twitter : null,
   }
 }
 

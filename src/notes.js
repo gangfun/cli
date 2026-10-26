@@ -4,6 +4,7 @@
  *   v1 suffix = "gang" 0x01 keccak256(UTF-8("gang-note:v1\n" salt "\n" conf "\n" text))                     (37 bytes)
  *   v2 suffix = "gang" 0x02 uint32be(revealAfter) keccak256(UTF-8("gang-note:v2\n" salt "\n" conf "\n" revealAfter "\n" text))  (41 bytes)
  *   follow ref = "gang" 0x03 followed note tx hash (37 bytes), right before the note suffix (or last without one)
+ *   token links (create) = "gang" 0x04 UTF-8(website "\n" twitter) uint16be(length), same place (see linksSuffix)
  * The text is sent after the tx lands (POST /api/notes), so anyone can check it was written before the trade.
  * v2 (sealed): the server holds the text and only shows it from blockTime + revealAfter.
  * Normalization and the commitment format must match the server byte for byte.
@@ -12,13 +13,15 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { keccak256, toHex } from 'viem'
+import { hexToString, keccak256, toHex } from 'viem'
 import { API } from './discover.js'
 import { UA } from './version.js'
+import { websiteError, twitterError } from './links.js'
 
 export const MAGIC = '67616e6701' // "gang" + version 1
 export const MAGIC_V2 = '67616e6702' // "gang" + version 2 (sealed)
-export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref (01 / 02 / 03 are never reused)
+export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref
+export const LINKS_MAGIC = '67616e6704' // "gang" + 04: token links (01–04 are never reused)
 const MAX_CP = 280
 const REVEAL_MIN_H = 1, REVEAL_MAX_H = 72
 const LINK = /https?:\/\/|www\.|t\.me\//i
@@ -115,6 +118,43 @@ export function readFollowRef(input) {
   const f = s.slice(Math.max(0, end - 74), end)
   const tx = `0x${f.slice(10)}`
   return f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(tx) ? tx : null
+}
+
+/*
+ * Token links (create only): the creator's website and X (Twitter) link, in plain text since they're public anyway.
+ * "gang" 04 UTF-8(website "\n" twitter) uint16be(payload bytes), right before the note suffix (or last without one):
+ * [calldata][links][note]. The length goes last so a reader can find the start from the end. Either field may be
+ * empty, not both. Only canonical values count (links.js websiteError / twitterError), so other writers can't smuggle odd URLs.
+ */
+
+/** Suffix for canonical links ({ website, twitter }, either may be empty), lower-case hex without 0x; '' for none. */
+export function linksSuffix(links) {
+  const { website = '', twitter = '' } = links ?? {}
+  if (!website && !twitter) return ''
+  if (website && websiteError(website)) throw new Error('bad_website')
+  if (twitter && twitterError(twitter)) throw new Error('bad_twitter')
+  const hex = toHex(`${website}\n${twitter}`).slice(2)
+  return `${LINKS_MAGIC}${hex}${(hex.length / 2).toString(16).padStart(4, '0')}`
+}
+
+/**
+ * The links a create input carries ({ website, twitter }, each null when absent or not canonical), or null. Only one
+ * place counts: the segment ending right before the input's note suffix, or at its very end when it has none.
+ */
+export function readTokenLinks(input) {
+  const s = String(input || '').toLowerCase()
+  const c = readNoteCommit(s)
+  const end = s.length - (c ? (c.version === 2 ? 82 : 74) : 0)
+  const len = parseInt(s.slice(Math.max(0, end - 4), end), 16)
+  const start = end - 4 - 2 * len - 10
+  if (!(len > 0) || start < 0 || !s.startsWith(LINKS_MAGIC, start)) return null
+  const hex = s.slice(start + 10, end - 4)
+  if (!/^[0-9a-f]*$/.test(hex)) return null
+  const parts = hexToString(`0x${hex}`).split('\n')
+  if (parts.length !== 2) return null
+  const website = parts[0] && !websiteError(parts[0]) ? parts[0] : null
+  const twitter = parts[1] && !twitterError(parts[1]) ? parts[1] : null
+  return website || twitter ? { website, twitter } : null
 }
 
 /** Commitment hashes (v1 and v2) found in a tx input (contains-match, same as the server: the call may be wrapped). */

@@ -8,7 +8,9 @@ import { uploadLogoFile, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, LOG
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
+  linksSuffix, readTokenLinks,
 } from './notes.js'
+import { normalizeWebsite, normalizeTwitter } from './links.js'
 import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
 import { rememberPreview, previewFor } from './previews.js'
 import { UA, checkUpdate } from './version.js'
@@ -62,6 +64,19 @@ const parseNote = () => {
   if (flag('conf') && opt('conf') == null) fail('--conf needs a value 0–100')
   if (flag('reveal-after') && opt('reveal-after') == null) fail('--reveal-after needs whole hours 1–72, e.g. 6h')
   try { return makeNote(raw, opt('conf'), opt('reveal-after')) } catch (e) { fail(e.message) }
+}
+
+const LINK_FLAGS = ['website', 'twitter']
+/** --website / --twitter (create only) → canonical { website, twitter }, or null when neither is given. */
+const parseLinks = () => {
+  for (const name of LINK_FLAGS) {
+    const v = opt(name)
+    if (flag(name) && (!v?.trim() || v.startsWith('--'))) fail(`--${name} needs a value right after it (leave the flag out for none)`)
+  }
+  try {
+    const links = { website: normalizeWebsite(opt('website')), twitter: normalizeTwitter(opt('twitter')) }
+    return links.website || links.twitter ? links : null
+  } catch (e) { fail(e.message) }
 }
 
 /** --follow <note tx> (buy only). Syntax here; whether the note can be followed is asked from gang.fun before preview. */
@@ -130,8 +145,10 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to https://gang.fun/api/logos → logoUrl
-  gang create --name <n> --symbol <s> [--logo <file> | --logo-uri URL] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+  gang create --name <n> --symbol <s> [--logo <file> | --logo-uri URL] [--website URL] [--twitter @handle|x.com link]
+              [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
                                          LaunchpadV2 ONLY (${ADDR.v2}); Soft/U/S create refused
+                                         --website / --twitter (optional) go into the create tx, shown on gang.fun; permanent
                                          --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
                                          other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is
   gang execute --request-id <id>         broadcast a previewed call
@@ -368,6 +385,9 @@ const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 
 
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
+  for (const name of LINK_FLAGS) {
+    if (cmd !== 'create' && flag(name)) fail(`--${name} only applies to \`gang create\` (the link is written into the create tx)`)
+  }
   switch (cmd) {
     case 'preflight': {
       const issues = []
@@ -557,6 +577,7 @@ async function main() {
       const name = opt('name'), symbol = opt('symbol'); if (!name || !symbol) fail('--name and --symbol required')
       try { assertCreateTarget(CONFIG.launchpad) } catch (e) { fail(e.message) }
       const note = parseNote()
+      const links = parseLinks()
       parseFollow() // refuses --follow: only buys follow a note
       // the old 5-arg --pair-or-quote never matched the contract
       if (flag('pair-or-quote') || flag('pair')) {
@@ -567,16 +588,17 @@ async function main() {
       const wbnbQuote = [zeroAddress, ADDR.wbnb.toLowerCase()].includes(quote.toLowerCase())
       const me = bawAddress()
       if (!(await isAgent(me))) fail('this wallet holds no Agent ID (.ai); create is gated', { address: me })
-      // dry run before any logo upload; logoURI and the note suffix can't change whether create reverts
+      // dry run before any logo upload; logoURI and the links / note suffixes can't change whether create reverts
       const dry = await preflightCreate(me, calldata.createV2(name, symbol, '', taxed, quote, refPool), quote, refPool)
       if (!dry.ok && dry.reverted) fail(`create would revert: ${dry.error}`, { quote, refPool, hint: CREATE_HINTS[dry.error] })
       if (!dry.ok) fail(`could not dry-run create (RPC): ${dry.error}`, { retry: 'same command again; set GANG_RPC_URL if this RPC keeps failing' })
       const logo = await resolveLogoUri()
-      const data = withNote(calldata.createV2(name, symbol, logo.logoURI, taxed, quote, refPool), note)
+      const data = withNote(calldata.createV2(name, symbol, logo.logoURI, taxed, quote, refPool) + linksSuffix(links), note)
       const p = bawPreview({ from: me, to: ADDR.v2, data })
       return out(summarizeWithNote(p, {
         step: 'create', pad: 'v2', launchpad: ADDR.v2, name, symbol,
         logoURI: logo.logoURI || '(empty)', uploaded: logo.uploaded, upload: logo.upload,
+        ...(links && { links: { website: links.website || null, twitter: links.twitter || null } }),
         taxed, quote: wbnbQuote ? 'WBNB' : quote,
         // the contract ignores refPool for WBNB (Created.refPair = 0x0)
         refPool: wbnbQuote && refPool !== zeroAddress ? `${refPool} (ignored for WBNB)` : refPool,
@@ -634,8 +656,11 @@ async function main() {
         else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
         else note = withRetry(await publishNote(entry, hash), hash)
       }
-      const followed = readFollowRef(input)
-      return out({ success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }) })
+      const followed = readFollowRef(input), links = readTokenLinks(input)
+      return out({
+        success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
+        ...(links && { links }),
+      })
     }
     default:
       console.log(HELP); process.exit(cmd ? 1 : 0)
