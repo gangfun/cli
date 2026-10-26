@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { UA } from './version.js'
 
 const MAX_BYTES = 512 * 1024
 const FETCH_TIMEOUT_MS = 20_000
@@ -40,7 +41,7 @@ async function postLogo(buf, what) {
   try {
     res = await fetch(LOGO_API, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'user-agent': UA },
       body: JSON.stringify({ image }),
     })
     text = await res.text()
@@ -72,7 +73,7 @@ export async function checkGangLogo(uri) {
   let res
   try {
     // the logo route answers HEAD with 405, so GET and drop the body
-    res = await fetch(uri, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    res = await fetch(uri, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     await res.body?.cancel()
   } catch (e) {
     throw fetchError(`could not check logo ${uri}: ${why(e)}`, e)
@@ -94,7 +95,7 @@ export async function rehostLogoUrl(uri) {
   const msg = `could not download logo ${uri}`
   let res
   try {
-    res = await fetch(uri, { redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: { accept: 'image/*' } })
+    res = await fetch(uri, { redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: { accept: 'image/*', 'user-agent': UA } })
   } catch (e) {
     throw fetchError(`${msg}: ${why(e)}`, e)
   }

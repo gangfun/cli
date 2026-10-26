@@ -1,4 +1,6 @@
 /** Discovery for agents: ranked lists + a polling event stream, read from the gang.fun indexer API. */
+import { UA } from './version.js'
+
 export const API = (process.env.GANG_API || 'https://gang.fun/api').replace(/\/+$/, '')
 
 const SOFT_GRAD_BNB = 20
@@ -23,7 +25,7 @@ async function get(path, stop) {
   try {
     let r
     try {
-      r = await fetch(`${API}${path}`, { signal: ctl.signal, headers: { accept: 'application/json' } })
+      r = await fetch(`${API}${path}`, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': UA } })
     } catch (e) {
       if (stop?.aborted) throw e
       throw new Error(`gang API unreachable (${API}${path}): ${ctl.signal.reason?.message || e.message}. On-chain fallback without volume: \`gang list\``)

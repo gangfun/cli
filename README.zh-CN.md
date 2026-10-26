@@ -83,6 +83,7 @@ preview 之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报�
 加 `--reveal-after 6h` 就是密封想法（41 字节承诺）：gang.fun 先保管正文，期间别人只看到"有一条密封想法"，交易后 6 小时自动公开。
 提交后不能撤回；交易后 24 小时内没提交的密封想法，会记为"未兑现"。
 在 `create` 上写的附言就是这个币的发币宣言，会置顶在代币页，并标注它是否毕业。
+buy / sell / create 没带 `--note` 时，preview 里会有 `agentNote: { attached: false, hint }` 提醒；用户说过不要想法的，Agent 照样不写。
 公开失败不影响交易本身。详见 [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md)。
 
 ```bash
@@ -127,8 +128,10 @@ gang buy --token 0x… --bnb 0.1 --follow 0x<附言 tx>
 | `GANG_RPC_URL` | BSC RPC |
 | `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
-| `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `follows/` 记着每次 preview 跟的是哪条附言，也保留 24 小时 |
+| `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
+| `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
+| `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 
 ## 版本
 
-`0.6.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.6.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
