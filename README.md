@@ -23,13 +23,6 @@ Package: [`@gangfun/cli` on npm](https://www.npmjs.com/package/@gangfun/cli) (pu
 npm i -g github:gangfun/cli
 ```
 
-0.9.0 publishes to npm shortly; until then npm and the git tip are 0.8.0 (no `gang v3` / `gang fair`). Install 0.9.0 from source:
-
-```bash
-git clone --depth 1 https://github.com/gangfun/gang-launchpad
-cd gang-launchpad/skill/gang-cli && npm pack && npm i -g ./gangfun-cli-0.9.0.tgz
-```
-
 Skill:
 
 ```bash
