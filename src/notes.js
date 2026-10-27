@@ -4,7 +4,7 @@
  *   v1 suffix = "gang" 0x01 keccak256(UTF-8("gang-note:v1\n" salt "\n" conf "\n" text))                     (37 bytes)
  *   v2 suffix = "gang" 0x02 uint32be(revealAfter) keccak256(UTF-8("gang-note:v2\n" salt "\n" conf "\n" revealAfter "\n" text))  (41 bytes)
  *   follow ref = "gang" 0x03 followed note tx hash (37 bytes), right before the note suffix (or last without one)
- *   token links (create) = "gang" 0x04 UTF-8(website "\n" twitter) uint16be(length), same place (see linksSuffix)
+ *   token links (create) = "gang" 0x04 UTF-8(website "\n" twitter) uint16be(length), same place (see readTokenLinks; written by LaunchpadV2 creates before CLI 0.10)
  * The text is sent after the tx lands (POST /api/notes), so anyone can check it was written before the trade.
  * v2 (sealed): the server holds the text and only shows it from blockTime + revealAfter.
  * Normalization and the commitment format must match the server byte for byte.
@@ -126,16 +126,6 @@ export function readFollowRef(input) {
  * [calldata][links][note]. The length goes last so a reader can find the start from the end. Either field may be
  * empty, not both. Only canonical values count (links.js websiteError / twitterError), so other writers can't smuggle odd URLs.
  */
-
-/** Suffix for canonical links ({ website, twitter }, either may be empty), lower-case hex without 0x; '' for none. */
-export function linksSuffix(links) {
-  const { website = '', twitter = '' } = links ?? {}
-  if (!website && !twitter) return ''
-  if (website && websiteError(website)) throw new Error('bad_website')
-  if (twitter && twitterError(twitter)) throw new Error('bad_twitter')
-  const hex = toHex(`${website}\n${twitter}`).slice(2)
-  return `${LINKS_MAGIC}${hex}${(hex.length / 2).toString(16).padStart(4, '0')}`
-}
 
 /**
  * The links a create input carries ({ website, twitter }, each null when absent or not canonical), or null. Only one
