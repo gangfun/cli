@@ -54,13 +54,17 @@ gang fair buy --token <addr> --amount <数量> [--use-quote | --pay-bnb] [--test
 gang fair sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--confirm-out] [--testnet]  # 发射后；卖过 sellableBeforeOut 须加 --confirm-out
 gang fair status --token <addr> [--testnet]                      # 份数；发射后：是否出局、还能卖多少、待领奖励
 gang fair claim --token <addr> [--testnet]
+gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>  # 查询（可加 --testnet）
 # LaunchpadV3 税收币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的合作方）— 和打新同一个内盘合约
 gang v3 create --name <n> --symbol <s> --buy-tax 2 --sell-tax 2 [--dividend 0] --recipient 0x… [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 gang v3 buy --token <addr> --amount <报价币数量> [--testnet]      # 含内盘 1% 手续费（内盘不收税，税只在外盘收）
 gang v3 sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--testnet]  # 已毕业：buy / sell 经 GangRouter 走 PancakeSwap
 gang v3 info --token <addr> [--testnet]                           # 税率、接收地址、还欠接收地址多少
+gang v3 status --token <addr> [--testnet]                         # 我的持仓和分红：现在可领 + 已记账、还没卖出的部分
+gang v3 claim --token <addr> [--testnet]                          # 领取分红（以报价币到账）
 gang v3 release --token <addr> [--testnet]                        # 补转之前打款失败的税
 gang v3 income --recipient 0x…                                  # 接收地址按币统计的到账（读 gang.fun）
+gang v3 list [--status curve|graduated|all] | gang v3 tx --hash <0x..>  # 查询（可加 --testnet）
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
