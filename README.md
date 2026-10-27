@@ -2,7 +2,9 @@
 
 Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve buys/creates require a SPACE ID `.ai` Agent ID. This CLI builds calldata; `baw` signs — no keys in this package.
 
-**Create path (0.2.1+):** LaunchpadV2 only (`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`). Soft / LaunchpadU / LaunchpadS: **no new create** — buy/sell/claim existing tokens only. New tokens graduate at ≈ **15 BNB** (PoolCheck). Soft archive tokens still graduate at 20 BNB on-chain.
+**`gang create` (0.2.1+):** LaunchpadV2 only (`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`). Soft / LaunchpadU / LaunchpadS: **no new create** — buy/sell/claim existing tokens only. New tokens graduate at ≈ **15 BNB** (PoolCheck). Soft archive tokens still graduate at 20 BNB on-chain.
+
+**V3 tax tokens and 打新 (0.9.0+):** `gang v3` / `gang fair` on GangLaunchpad, live on BSC mainnet since 2026-10-27 (pad `0x15CFD2dc8278Fb87a1783ef42111618E20874365`, GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`, both built in); `--testnet` uses BSC testnet set 10.
 
 ## Install
 
@@ -19,6 +21,13 @@ Package: [`@gangfun/cli` on npm](https://www.npmjs.com/package/@gangfun/cli) (pu
 
 ```bash
 npm i -g github:gangfun/cli
+```
+
+0.9.0 publishes to npm shortly; until then npm and the git tip are 0.8.0 (no `gang v3` / `gang fair`). Install 0.9.0 from source:
+
+```bash
+git clone --depth 1 https://github.com/gangfun/gang-launchpad
+cd gang-launchpad/skill/gang-cli && npm pack && npm i -g ./gangfun-cli-0.9.0.tgz
 ```
 
 Skill:
@@ -53,6 +62,22 @@ gang follow <note tx> --bnb <n> [--slippage 1] [--note …]   # buy the token a 
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
 gang upload-logo (--file ./avatar.png | --url <image URL>)   # → https://gang.fun/api/logos/<id>.png
 gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+# 打新 (fair mint) and V3 share one pad (GangLaunchpad). Mainnet by default (address built in); --testnet = BSC testnet set 10
+gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+#   --cap 0.25–1% of supply per wallet (1% → at least 50 wallets), --hold 60–90% (the hold line)
+gang fair mint --token <addr> --shares <n> [--testnet]           # + the sale's mint fee (1–3%, the platform's)
+gang fair withdraw --token <addr> (--shares <n> | --all) [--testnet]
+gang fair buy --token <addr> --amount <n> [--use-quote | --pay-bnb] [--testnet]        # after launch: PancakeSwap via GangRouter
+gang fair sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--confirm-out] [--testnet]  # after launch; past sellableBeforeOut needs --confirm-out
+gang fair status --token <addr> [--testnet]                      # shares; after launch: reward on / out, sellable, to claim
+gang fair claim --token <addr> [--testnet]
+# LaunchpadV3 tax token (own buy / sell tax 1–5%, pool only, paid to the creator itself or a whitelisted recipient, in the quote) — same pad as 打新
+gang v3 create --name <n> --symbol <s> --buy-tax 2 --sell-tax 2 [--dividend 0] --recipient 0x… [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+gang v3 buy --token <addr> --amount <quote> [--testnet]           # includes the 1% curve fee (no tax on the curve; the tax is pool-only)
+gang v3 sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--testnet]  # graduated: buy / sell go to PancakeSwap via GangRouter
+gang v3 info --token <addr> [--testnet]                           # tax setting, recipient, what is still owed to it
+gang v3 release --token <addr> [--testnet]                        # push a payment that failed earlier
+gang v3 income --recipient 0x…                                  # a recipient's income per token (gang.fun)
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -162,7 +187,13 @@ gang agents --window 30d --sort follow
 - **New** creates → ≈15 BNB graduation (LaunchpadV2 / PoolCheck) → PancakeSwap V2, LP burned.
 - Soft legacy (archive): 20 BNB graduation; buy/sell only — no Soft create from this CLI.
 - Before graduation: no transfers, curve only.
-- Graduated: trade on PancakeSwap (`pair` from `gang token`).
+- Graduated: `gang buy` / `gang sell` (and `gang v3 buy|sell`, `gang fair buy|sell` after launch) trade in the PancakeSwap
+  pool through GangRouter: approve this amount only first, then `poolBuy` / `poolBuyBNB` / `poolSell` / `poolSellForBNB`
+  with a minimum from `getAmountsOut` (buy, less the buy tax) or the tax handler's `previewSellNextBlock` (sell), less
+  `--slippage`. `--use-quote` / `--pay-bnb` pick what a buy pays with, `--to-bnb` sells for BNB. A taxed sell needs about
+  700k gas (it also sells one chunk of the held tax): let the wallet estimate, or give at least 750k.
+  The router is checked first (a GangRouter with pool trades, never Pancake or an old router); `--from` works only on
+  these pool trades. Details: `references/v3.md` ("Pool trades").
 
 ## Env
 
@@ -175,7 +206,10 @@ gang agents --window 30d --sort follow
 | `GANG_NOTES_DIR` | Local note queue, one file per note: salt and send status, kept 24h (default `~/.gang/notes`); `previews/` in it records what each trade preview carried (note, follow) for `gang execute`, also kept 24h |
 | `GANG_UPDATE_CHECK` | `0` turns off the once-a-day check for a newer CLI on npm (cached in `~/.gang/update.json`) |
 | `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
+| `GANG_PAD` / `GANG_TESTNET_PAD` | Override the merged GangLaunchpad (mainnet / testnet) behind both `gang v3` and `gang fair` (defaults: mainnet `0x15CF…4365`, testnet set 10 `0xFebF…5BB1`). Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
+| `GANG_TESTNET_RPC_URL` | Testnet RPC; old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
+| `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter proxy (native-BNB V3 buys / mints, and every PancakeSwap trade of a graduated token); old name `GANG_ROUTER_TESTNET` still works. Defaults: mainnet `0xE040…79C4`, testnet set 10 `0x6bB6…C9F6` |
 
 ## Version
 
-`0.8.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.9.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main` (0.9.0 not yet: npm has 0.8.0)
