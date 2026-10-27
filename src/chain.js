@@ -1,6 +1,6 @@
 import { createPublicClient, http, formatEther, formatUnits, parseEther, encodeFunctionData, decodeEventLog, decodeErrorResult, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
-import { SOFT_ABI, V2_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
+import { SOFT_ABI, V2_ABI, S_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
 
 export const ADDR = {
   v2: '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E',
@@ -41,7 +41,7 @@ const PADS = [
   { id: 'v2', address: ADDR.v2, kind: 'v2', abi: V2_ABI },
   { id: 'soft', address: ADDR.soft, kind: 'soft', abi: SOFT_ABI },
   { id: 'u', address: ADDR.u, kind: 'v2', abi: V2_ABI },
-  { id: 's', address: ADDR.s, kind: 'v2', abi: V2_ABI },
+  { id: 's', address: ADDR.s, kind: 'v2', abi: S_ABI }, // 9-field Curve (no taxed): see S_ABI
 ]
 
 /** Resolve which pad hosts `token` by probing curves(token).creator != 0. */
@@ -71,9 +71,18 @@ function v2InfoFromCurve(c) {
   return { kind: 'v2', creator, raised: realQuote, sold, graduated, pair, quote, gradAmt, taxed, virtualQuote, refPair }
 }
 
+/** LaunchpadS: no `taxed` field — every S token is a TaxLaunchToken (1% pool tax). */
+function sInfoFromCurve(c) {
+  const [creator, quote, realQuote, sold, gradAmt, virtualQuote, graduated, pair, refPair] = c
+  return { kind: 'v2', creator, raised: realQuote, sold, graduated, pair, quote, gradAmt, taxed: true, virtualQuote, refPair }
+}
+
+/** The curve of a resolved pad in one shape, whatever the pad's layout. */
+const curveInfo = (pad) => (pad.kind === 'soft' ? softInfoFromCurve(pad.curve) : pad.id === 's' ? sInfoFromCurve(pad.curve) : v2InfoFromCurve(pad.curve))
+
 export async function tokenInfo(token, me) {
   const pad = await resolvePad(token)
-  const base = pad.kind === 'soft' ? softInfoFromCurve(pad.curve) : v2InfoFromCurve(pad.curve)
+  const base = curveInfo(pad)
   const [name, symbol] = await Promise.all([erc(token, 'name'), erc(token, 'symbol')])
   let locked = null
   try { locked = await erc(token, 'locked') } catch { /* */ }
@@ -211,7 +220,7 @@ export async function quoteBuy(token, buyer, amountHuman) {
       quotePath: 'onchain-quoteBuy' }
   }
   // Unique path: LaunchpadV2.sol _prepBuy / _tokensOut / _quoteInFor (no on-chain quoteBuy view).
-  const base = v2InfoFromCurve(pad.curve)
+  const base = curveInfo(pad)
   let room = null
   try { room = await read(pad.address, pad.abi, 'walletRoom', [token, buyer]) } catch { /* */ }
   const q = v2QuoteBuyFromCurve(base, gross, room)
@@ -229,7 +238,7 @@ export async function quoteSell(token, tokensIn) {
       tokensInFmt: fmtTok(tokensIn), outFmt: fmt(bnbToUser), feeFmt: fmt(fee), unit: 'BNB',
       quotePath: 'onchain-quoteSell' }
   }
-  const base = v2InfoFromCurve(pad.curve)
+  const base = curveInfo(pad)
   const q = v2QuoteSellFromCurve(base, tokensIn)
   return { kind: 'v2', pad: pad.id, padAddress: pad.address, quote: base.quote, tokensIn, out: q.out, fee: q.fee,
     tokensInFmt: fmtTok(tokensIn), outFmt: fmt(q.out), feeFmt: fmt(q.fee), unit: 'quote',

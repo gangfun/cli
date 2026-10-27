@@ -62,6 +62,23 @@ export const V2_ABI = [
   ] },
 ]
 
+/**
+ * LaunchpadS (stocks track): the V2 trade functions, but its Curve has 9 fields — no `taxed` (every S token is a
+ * TaxLaunchToken: 1% pool tax both ways) — and its Created event carries no logoURI / taxed / refPair.
+ */
+export const S_ABI = V2_ABI.filter((x) => !(x.name === 'curves' || (x.type === 'event' && x.name === 'Created'))).concat([
+  { type: 'function', name: 'curves', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }], outputs: [
+    { name: 'creator', type: 'address' }, { name: 'quote', type: 'address' }, { name: 'realQuote', type: 'uint128' }, { name: 'sold', type: 'uint128' },
+    { name: 'gradAmt', type: 'uint128' }, { name: 'virtualQuote', type: 'uint128' }, { name: 'graduated', type: 'bool' },
+    { name: 'pair', type: 'address' }, { name: 'refPair', type: 'address' },
+  ] },
+  { type: 'event', name: 'Created', inputs: [
+    { name: 'token', type: 'address', indexed: true }, { name: 'creator', type: 'address', indexed: true },
+    { name: 'name', type: 'string', indexed: false }, { name: 'symbol', type: 'string', indexed: false },
+    { name: 'quote', type: 'address', indexed: true }, { name: 'gradAmt', type: 'uint256', indexed: false },
+  ] },
+])
+
 export const ERC20_ABI = [
   { type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
   { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
