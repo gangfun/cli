@@ -3,7 +3,7 @@ import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, noteFlagError, notThisKind, padNets } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
@@ -238,7 +238,8 @@ const USAGE = 'usage: gang fair <list|info|status|create|mint|withdraw|buy|sell|
 export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta }) {
   if (!SUBS.includes(sub)) return fail(USAGE, { got: sub ?? null })
   // agent notes are matched to curve trades / creates on the server; fair-mint txs are not indexed there yet
-  if (flag('note') || flag('follow')) return fail('--note / --follow are not supported on gang fair yet: the server cannot match them to a fair-mint tx; leave them out')
+  const noteError = noteFlagError(flag, 'gang fair', 'a fair-mint tx')
+  if (noteError) return fail(noteError)
   const testnet = flag('testnet')
   const rawOnly = flag('calldata')
   if (sub === 'list') {

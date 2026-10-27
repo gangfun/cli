@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
-  calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, assertCreateTarget, preflightCreate, isAddress, zeroAddress, client,
+  calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
-  linksSuffix, readTokenLinks,
+  readTokenLinks,
 } from './notes.js'
 import { normalizeWebsite, normalizeTwitter } from './links.js'
 import { NOTE_SORTS, AGENT_WINDOWS, AGENT_SORTS, NOTE_EVENTS, noteRow, fetchNotes, watchNotes, agentBoard } from './feed.js'
@@ -21,6 +21,7 @@ import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn } from './steps.js'
 import { MERGED_ERRORS_ABI, padNets } from './gangpad.js'
 import { V2_ABI } from './abi.js'
+import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -190,7 +191,7 @@ const withFollow = (data, follow) => (follow ? data + followSuffix(follow.noteTx
 const followSkipped = (follow) =>
   follow ? { follow: { ...follow, attached: false, reason: 'this setup step carries no follow ref; re-run the same command' } } : {}
 
-const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · LaunchpadV2 create
+const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list                              tokens across V2 / Soft / U / S
@@ -220,10 +221,9 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          graduated: sells into the pool through GangRouter ([--to-bnb] [--from] [--calldata])
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to https://gang.fun/api/logos → logoUrl
-  gang create --name <n> --symbol <s> [--logo <file> | --logo-uri URL] [--website URL] [--twitter @handle|x.com link]
-              [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
-                                         LaunchpadV2 ONLY (${ADDR.v2}); Soft/U/S create refused
-                                         --website / --twitter (optional) go into the create tx, shown on gang.fun; permanent
+  gang create …                          = gang v3 create (below): new tokens go to GangLaunchpad. Untaxed unless
+                                         --buy-tax / --sell-tax are given. LaunchpadV2 / Soft / U / S take no new tokens
+                                         (their tokens still trade with gang buy / sell); --taxed (the old V2 track) is refused
                                          --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
                                          other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is
   gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
@@ -255,14 +255,15 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>
                                          --testnet = BSC testnet (mainnet addresses are built in); --calldata prints the raw tx
                                          instead of a baw preview, --from <addr> reads / builds for that wallet
-  gang v3 create --name <n> --symbol <s> --buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] --recipient <0x…>
+  gang v3 create --name <n> --symbol <s> [--buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] [--recipient <0x…>]]
                [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL] [--twitter @handle]
                [--description <text>]
                                          --website / --twitter / --description and the logo go into the token's metadata JSON
                                          (uploaded to gang.fun; the token's contractURI / metaURI, permanent)
+                                         no --buy-tax / --sell-tax: untaxed (no pool tax, no dividend, no recipient)
                                          LaunchpadV3: own buy / sell tax in % (fixed at create), only in the pool after
                                          graduation: 0.5% of volume to the platform; of the rest --dividend % to holders, the
-                                         remainder to --recipient (your own address, or a partner on the platform whitelist) in the quote. Curve
+                                         remainder to --recipient (default: you, the creator; or a partner on the platform whitelist) in the quote. Curve
                                          trades pay only the 1% fee, no tax
                                          --quote: WBNB (default) or any 18-decimal token; --ref-pool = a Pancake V2 pair or V3
                                          pool holding it, which prices the 15 BNB graduation target (as gang create), unless
@@ -310,11 +311,11 @@ To find notes to follow: \`gang notes\` (what can be followed now, with each aut
 
 Logo UI (browser): ${LOGO_UI}
 
-A buy / sell / create preview without --note says so in agentNote.hint. When npm has a newer CLI, results carry
+A buy / sell preview without --note says so in agentNote.hint (gang create / v3 / fair take no --note yet). When npm has a newer CLI, results carry
 update: { current, latest, cmd, skill } (npm is asked at most once a day in the background; GANG_UPDATE_CHECK=0 turns it
 off, GANG_UPDATE_URL points it at an npm mirror).
 
-env: GANG_LAUNCHPAD (default V2 ${ADDR.v2}), GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes),
+env: GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes),
 GANG_UPDATE_CHECK, GANG_UPDATE_URL,
 GANG_PAD / GANG_TESTNET_PAD (the one GangLaunchpad behind both gang v3 and gang fair; old names GANG_V3_PAD / GANG_FAIR_PAD
 and GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD still work as aliases), GANG_TESTNET_RPC_URL (aliases
@@ -395,29 +396,6 @@ async function revealNote(entry, hash) {
 const withRetry = (r, hash) =>
   !r.published && (!r.httpStatus || r.httpStatus >= 500 || r.httpStatus === 429 || r.error === 'tx_not_found')
     ? { ...r, retry: `gang tx --hash ${hash}` } : r
-
-/** --quote / --ref-pool: optional addresses, 0x0 when omitted. Mixed-case input must carry a valid checksum. */
-function createAddr(name) {
-  if (!flag(name)) return zeroAddress
-  const v = opt(name)
-  if (!isAddress(v ?? '')) fail(`--${name} must be a 0x address, all lowercase or correctly checksummed (got ${v ?? 'nothing'})`)
-  return v
-}
-
-const CREATE_HINTS = {
-  NotAgent: 'this wallet holds no Agent ID (.ai)',
-  RefPoolRequired: 'a non-WBNB --quote needs --ref-pool: a Pancake V2 pair or V3 pool that holds the quote token',
-  QuoteNotInPool: '--ref-pool does not contain the --quote token',
-  PoolNotFactory: '--ref-pool is not a PancakeSwap V2 pair / V3 pool',
-  NotContract: '--ref-pool is not a contract',
-  UnknownPoolType: '--ref-pool is not a PancakeSwap V2 pair / V3 pool',
-  ThinReferencePool: '--ref-pool is too shallow; pick the deepest pool for this quote',
-  PoolNoLiquidity: '--ref-pool has no liquidity',
-  NoBridgePool: "the pool's other side has no BNB bridge configured; use a pool paired with WBNB",
-  BridgeNotWbnb: "the pool's other side has no BNB bridge configured; use a pool paired with WBNB",
-  GradAmtTooSmall: 'the quote token is priced so high that the graduation amount rounds below the minimum',
-  GradAmtZero: 'the quote token is priced so high that the graduation amount rounds below the minimum',
-}
 
 // logo.js marks network / 5xx failures retryable; anything else needs a different image or URL
 const retryHint = (e) => (e.retryable ? { retry: 'same command again' } : {})
@@ -563,19 +541,28 @@ async function buy(token, bnb, note, followTx, checked = null) {
   }, note, 'buy', priced))
 }
 
+const TAXED_HINT = 'Set the pool tax with --buy-tax / --sell-tax (1–5% each; --buy-tax 1 --sell-tax 1 --dividend 100 is closest to the old 1% taxed track), or leave them out for an untaxed token.'
+const PAD_AGENT_ABI = parseAbi(['function isAgent(address account) view returns (bool)'])
+/**
+ * The create gate is GangLaunchpad's (mainnet); the V2 / Soft gate only if the pad can't be read. Same answer today: both
+ * pads gate on Agent ID registry 0x60B9…022f (read on chain 2026-10-28).
+ */
+const createGateAgent = (me) =>
+  client.readContract({ address: padNets('v3').mainnet.pad, abi: PAD_AGENT_ABI, functionName: 'isAgent', args: [me] }).catch(() => isAgent(me))
+
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'quote', 'buy',
   'follow', 'sell', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3'])
 
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
-  // V2 `gang create` writes the links into the create tx; `gang v3 create` / `gang fair create` into the token metadata
+  // `gang create` (= `gang v3 create`) / `gang fair create` write the links into the token metadata
   const tokenCreate = cmd === 'create' || ((cmd === 'v3' || cmd === 'fair') && args[1] === 'create')
   for (const name of LINK_FLAGS) {
     if (!tokenCreate && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang v3 create\`, \`gang fair create\`)`)
   }
-  if (flag('description') && !(tokenCreate && cmd !== 'create')) {
-    fail('--description only applies to `gang v3 create` / `gang fair create` (it goes into the token metadata)')
+  if (flag('description') && !tokenCreate) {
+    fail('--description only applies when creating a token (`gang create`, `gang v3 create`, `gang fair create`; it goes into the token metadata)')
   }
   switch (cmd) {
     case 'fair':
@@ -595,19 +582,20 @@ async function main() {
         me = bawAddress(); settings = bawSettings()
         if (!settings.devMode?.enabled) issues.push({ code: 'DEV_MODE_OFF', fix: 'Enable Developer Mode in Binance App → Agentic Wallet settings.' })
         if (!settings.tradeAllTokens) issues.push({ code: 'TRADE_ALL_TOKENS_OFF', fix: 'Enable "Trade all tokens" in Binance App → Agentic Wallet settings, otherwise SELLING Gang tokens is blocked by risk control (buying still works).' })
-        agent = await isAgent(me)
+        agent = await createGateAgent(me)
         if (!agent) issues.push({ code: 'NO_AGENT_ID', fix: 'Claim a .ai Agent ID in Binance Wallet (Agent ID banner). Gang only lets Agent ID holders buy/create.' })
       }
       return out({
         success: issues.length === 0, status, address: me,
-        launchpad: CONFIG.launchpad, createPad: ADDR.v2, isAgent: agent,
+        // `launchpad` = createPad: kept for readers of the old field (it used to be the V2 create target)
+        launchpad: padNets('v3').mainnet.pad, createPad: padNets('v3').mainnet.pad, isAgent: agent,
         devMode: settings?.devMode?.enabled ?? null, tradeAllTokens: settings?.tradeAllTokens ?? null, issues,
-        note: 'New create → LaunchpadV2 only (~15 BNB graduation). Soft/U/S: existing buy/sell/claim only.',
+        note: 'New create → GangLaunchpad (gang create = gang v3 create; gang fair create for 打新). LaunchpadV2 / Soft / U / S take no new tokens: existing buy / sell only.',
       })
     }
     case 'list': {
       const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
-      return out({ success: true, createPad: ADDR.v2, tokens: await listTokens(me) })
+      return out({ success: true, createPad: padNets('v3').mainnet.pad, tokens: await listTokens(me) })
     }
     case 'hot':
     case 'new':
@@ -834,40 +822,14 @@ async function main() {
       return out({ success: true, ...up, ui: LOGO_UI, next: `gang create --name … --symbol … --logo-uri ${up.logoUrl}` })
     }
     case 'create': {
-      const name = opt('name'), symbol = opt('symbol'); if (!name || !symbol) fail('--name and --symbol required')
-      // own buy / sell tax and a tax recipient are LaunchpadV3 settings (GangLaunchpad, `gang v3 create`), not V2
-      const v3Flag = ['buy-tax', 'sell-tax', 'dividend', 'recipient'].find((f) => flag(f))
-      if (v3Flag) fail(`--${v3Flag} is a LaunchpadV3 setting: use \`gang v3 create …\` (add --testnet for BSC testnet)`)
-      try { assertCreateTarget(CONFIG.launchpad) } catch (e) { fail(e.message) }
-      const note = parseNote()
-      const links = parseLinks()
-      parseFollow() // refuses --follow: only buys follow a note
-      // the old 5-arg --pair-or-quote never matched the contract
+      // new tokens go to GangLaunchpad (= gang v3 create); LaunchpadV2 takes none, its tokens keep trading (gang buy / sell)
+      if (flag('taxed')) fail(`--taxed was LaunchpadV2's tax track, which takes no new tokens. ${TAXED_HINT}`)
       if (flag('pair-or-quote') || flag('pair')) {
         fail('--pair-or-quote was removed (CLI ≤0.3.0 encoded a create the contract does not have). Use --quote <ERC-20> --ref-pool <Pancake pair/pool holding it>; omit both for WBNB.')
       }
-      const taxed = flag('taxed')
-      const quote = createAddr('quote'), refPool = createAddr('ref-pool')
-      const wbnbQuote = [zeroAddress, ADDR.wbnb.toLowerCase()].includes(quote.toLowerCase())
-      const me = bawAddress()
-      if (!(await isAgent(me))) fail('this wallet holds no Agent ID (.ai); create is gated', { address: me })
-      // dry run before any logo upload; logoURI and the links / note suffixes can't change whether create reverts
-      const dry = await preflightCreate(me, calldata.createV2(name, symbol, '', taxed, quote, refPool), quote, refPool)
-      if (!dry.ok && dry.reverted) fail(`create would revert: ${dry.error}`, { quote, refPool, hint: CREATE_HINTS[dry.error] })
-      if (!dry.ok) fail(`could not dry-run create (RPC): ${dry.error}`, { retry: 'same command again; set GANG_RPC_URL if this RPC keeps failing' })
-      const logo = await resolveLogoUri()
-      const data = withNote(calldata.createV2(name, symbol, logo.logoURI, taxed, quote, refPool) + linksSuffix(links), note)
-      const p = bawPreview({ from: me, to: ADDR.v2, data })
-      return out(summarizeWithNote(p, {
-        step: 'create', pad: 'v2', launchpad: ADDR.v2, name, symbol,
-        logoURI: logo.logoURI || '(empty)', uploaded: logo.uploaded, upload: logo.upload,
-        ...(links && { links: { website: links.website || null, twitter: links.twitter || null } }),
-        taxed, quote: wbnbQuote ? 'WBNB' : quote,
-        // the contract ignores refPool for WBNB (Created.refPair = 0x0)
-        refPool: wbnbQuote && refPool !== zeroAddress ? `${refPool} (ignored for WBNB)` : refPool,
-        graduationAmount: dry.gradAmt, tokenIfNext: dry.tokenIfNext,
-        note: 'LaunchpadV2 only. Graduation ≈15 BNB worth of the quote. No creation fee. Soft/U/S create archived. tokenIfNext changes if another create lands first: the real address is the Created event from `gang tx --hash …` after execute.',
-      }, note, 'launch'))
+      return runV3('create', {
+        opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri,
+      })
     }
     case 'execute': {
       const id = opt('request-id'); if (!id) fail('--request-id required')
