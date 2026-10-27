@@ -64,13 +64,17 @@ gang fair buy --token <addr> --amount <n> [--use-quote | --pay-bnb] [--testnet] 
 gang fair sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--confirm-out] [--testnet]  # after launch; past sellableBeforeOut needs --confirm-out
 gang fair status --token <addr> [--testnet]                      # shares; after launch: reward on / out, sellable, to claim
 gang fair claim --token <addr> [--testnet]
+gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>  # lookups ([--testnet])
 # LaunchpadV3 tax token (own buy / sell tax 1–5%, pool only, paid to the creator itself or a whitelisted recipient, in the quote) — same pad as 打新
 gang v3 create --name <n> --symbol <s> --buy-tax 2 --sell-tax 2 [--dividend 0] --recipient 0x… [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 gang v3 buy --token <addr> --amount <quote> [--testnet]           # includes the 1% curve fee (no tax on the curve; the tax is pool-only)
 gang v3 sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--testnet]  # graduated: buy / sell go to PancakeSwap via GangRouter
 gang v3 info --token <addr> [--testnet]                           # tax setting, recipient, what is still owed to it
+gang v3 status --token <addr> [--testnet]                         # my balance and dividend: claimable now + credited, not sold yet
+gang v3 claim --token <addr> [--testnet]                          # claim my dividend (in the quote token)
 gang v3 release --token <addr> [--testnet]                        # push a payment that failed earlier
 gang v3 income --recipient 0x…                                  # a recipient's income per token (gang.fun)
+gang v3 list [--status curve|graduated|all] | gang v3 tx --hash <0x..>  # lookups ([--testnet])
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
