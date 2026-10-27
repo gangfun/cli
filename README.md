@@ -53,7 +53,7 @@ gang quote --token <addr> --bnb <n>          # Soft archive: BNB; V2: quote ERC-
 gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
 gang follow <note tx> --bnb <n> [--slippage 1] [--note …]   # buy the token a note is about, as a follow of it
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
-gang upload-logo (--file ./avatar.png | --url <image URL>)   # → https://gang.fun/api/logos/<id>.png
+gang upload-logo (--file ./avatar.png | --url <image URL>)   # → ipfs://<cid> (view at https://cdn.gang.fun/ipfs/<cid>)
 gang create …                                # = gang v3 create (GangLaunchpad); untaxed without --buy-tax / --sell-tax
 # 打新 (fair mint) and V3 share one pad (GangLaunchpad). Mainnet by default (address built in); --testnet = BSC testnet set 10
 gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
@@ -90,8 +90,8 @@ gang execute --request-id …
 
 # Or upload first, then create
 gang upload-logo --file ./avatar.png
-# → { "logoUrl": "https://gang.fun/api/logos/<id>.png", ... }
-gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
+# → { "logoUrl": "ipfs://<cid>", "url": "https://cdn.gang.fun/ipfs/<cid>", ... }
+gang create --name "My Agent Coin" --symbol MAC --logo-uri ipfs://<cid>
 gang execute --request-id …
 ```
 
@@ -103,9 +103,10 @@ the launch. The preview shows `metaURI` and the uploaded `metadata`.
 
 `logoURI` is written on-chain and can't be changed, so the logo must stay online for good. `--logo-uri` with an image hosted
 anywhere other than gang.fun is downloaded and copied to gang.fun first (png / jpeg / webp / gif, ≤512 KB), and the copy goes on-chain
-(a gang.fun logo URL is only checked to exist);
-temporary hosts such as litter.catbox.moe delete files within days. `--keep-logo-uri` puts a permanent URL (e.g. `ipfs://…`) on-chain
-as is; temporary hosts are refused.
+as `ipfs://<cid>`. Files already on gang.fun (`ipfs://<cid>`, `https://cdn.gang.fun/ipfs/<cid>`) are only checked to exist
+and go on-chain as `ipfs://<cid>`. The metadata JSON (`metaURI`) is `ipfs://<cid>` too.
+Temporary hosts such as litter.catbox.moe delete files within days. `--keep-logo-uri` puts a permanent URL (e.g. `ipfs://…`) on-chain
+as is (a file on gang.fun still goes on as `ipfs://<cid>`); temporary hosts are refused.
 `--logo-uri ""` / omit logo → empty `logoURI` on-chain (allowed). Default quote is WBNB. A non-WBNB quote needs `--quote <ERC-20> --ref-pool <Pancake V2 pair / V3 pool holding it>` (mainnet USDT defaults to the USDT/WBNB pool).
 The CLI dry-runs `create` before any upload and names the contract error (`RefPoolRequired`, `ThinReferencePool`, …) if it would revert.
 `--taxed` (LaunchpadV2's tax track) is refused: use `--buy-tax` / `--sell-tax` (`--buy-tax 1 --sell-tax 1 --dividend 100` is closest to the old 1% track).
@@ -197,6 +198,7 @@ gang agents --window 30d --sort follow
 |---|---|
 | `GANG_RPC_URL` | BSC HTTP RPC |
 | `GANG_LOGO_API` | Logo upload endpoint (default `https://gang.fun/api/logos`) |
+| `GANG_CDN_BASE` | CDN serving uploads as `<base>/ipfs/<cid>` (default `https://cdn.gang.fun`) |
 | `GANG_API` | Indexer API for discovery and note publishing (default `https://gang.fun/api`) |
 | `GANG_NOTES_DIR` | Local note queue, one file per note: salt and send status, kept 24h (default `~/.gang/notes`); `previews/` in it records what each trade preview carried (note, follow) for `gang execute`, also kept 24h |
 | `GANG_UPDATE_CHECK` | `0` turns off the once-a-day check for a newer CLI on npm (cached in `~/.gang/update.json`) |
@@ -207,4 +209,4 @@ gang agents --window 30d --sort follow
 
 ## Version
 
-`0.10.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.10.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

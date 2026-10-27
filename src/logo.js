@@ -9,6 +9,11 @@ const UPLOAD_TIMEOUT_MS = 60_000
 
 export const LOGO_API = (process.env.GANG_LOGO_API || 'https://gang.fun/api/logos').replace(/\/+$/, '')
 export const LOGO_UI = 'https://gang.fun/dev/logo'
+// the upload endpoint stores files in an IPFS bucket as ipfs/<cid>, served by this CDN
+// (where --logo-uri ipfs://<cid> is checked; an upload's own url comes from the endpoint)
+export const CDN_BASE = (process.env.GANG_CDN_BASE || 'https://cdn.gang.fun').replace(/\/+$/, '')
+// CIDv1 (raw, sha2-256, base32) as the upload endpoint makes it
+const CID_RE = /^b[a-z2-7]{58}$/
 
 // file hosts that delete uploads after hours or days: a logoURI there turns into a broken image, and it can't be changed on-chain
 const TEMP_HOSTS = ['litter.catbox.moe', 'tmpfiles.org', '0x0.st', 'uguu.se', 'file.io', 'transfer.sh']
@@ -32,7 +37,35 @@ function sniffMime(buf) {
   return null
 }
 
-/** Image bytes → data URL → POST /api/logos → { logoUrl, id, bytes }. */
+/** On-chain form of an uploaded file: ipfs://<cid>, not the CDN URL. */
+export const ipfsUri = (cid) => `ipfs://${cid}`
+export const cdnUrl = (cid) => `${CDN_BASE}/ipfs/${cid}`
+
+export const isIpfsUri = (uri) => /^ipfs:\/\//i.test(String(uri || '').trim())
+
+/**
+ * The cid in ipfs://<cid> (also ipfs://ipfs/<cid>) or <CDN>/ipfs/<cid>, when it is a CIDv1 like ours; else null. A
+ * ?query / #hash / trailing slash is dropped: the CDN's ?x-tos-process=… thumbnail still names the original file.
+ */
+export function ipfsCid(uri) {
+  const s = String(uri || '').trim()
+  const cid = s.startsWith(`${CDN_BASE}/ipfs/`) ? s.slice(CDN_BASE.length + 6) : s.replace(/^ipfs:\/\/(ipfs\/)?/i, '')
+  if (cid === s) return null
+  const bare = cid.replace(/[?#].*$/s, '').replace(/\/+$/, '')
+  return CID_RE.test(bare) ? bare : null
+}
+
+/** The upload response's cid (or the one in its URL); an upload without one has nothing to put on-chain. */
+function uploadedCid(json, what, status) {
+  const cid = CID_RE.test(json?.cid) ? json.cid : ipfsCid(json?.url || json?.logoUrl)
+  if (!cid) {
+    throw statusError(`${what} upload returned no cid (${status}), so there is no ipfs:// URI to put on-chain; ${LOGO_API} `
+      + `must answer like gang.fun's upload endpoint (GANG_LOGO_API): ${JSON.stringify(json).slice(0, 200)}`, status)
+  }
+  return cid
+}
+
+/** Image bytes → data URL → POST /api/logos → { logoUrl: ipfs://<cid>, url: the endpoint's CDN URL, cid, id, bytes }. */
 async function postLogo(buf, what) {
   if (buf.length <= 0) throw new Error(`empty image: ${what}`)
   if (buf.length > MAX_BYTES) throw new Error(`logo too large: ${buf.length} bytes (max ${MAX_BYTES}): ${what}`)
@@ -56,12 +89,13 @@ async function postLogo(buf, what) {
   if (!res.ok || !json?.ok || !json?.logoUrl) {
     throw statusError(`logo upload failed (${res.status}): ${json?.error || text.slice(0, 200)}`, res.status)
   }
-  return { logoUrl: json.logoUrl, id: json.id, bytes: json.bytes ?? buf.length, api: LOGO_API }
+  const cid = uploadedCid(json, 'logo', res.status)
+  return { logoUrl: ipfsUri(cid), url: json.url || cdnUrl(cid), cid, id: json.id, bytes: json.bytes ?? buf.length, api: LOGO_API }
 }
 
 /**
  * Token metadata JSON (the token's contractURI / metaURI, permanent on-chain) → POST /api/logos as application/json →
- * { url, id, bytes }. Keys with no value are left out. Same upload endpoint and CDN as logos.
+ * { uri: ipfs://<cid>, url: the endpoint's CDN URL, cid, id, bytes }. Keys with no value are left out. Same upload endpoint and CDN as logos.
  */
 export async function uploadMetadata(meta) {
   const clean = Object.fromEntries(Object.entries(meta).filter(([, v]) => v != null && v !== ''))
@@ -81,14 +115,14 @@ export async function uploadMetadata(meta) {
   }
   let json
   try { json = JSON.parse(text) } catch { throw statusError(`metadata upload non-JSON (${res.status}): ${text.slice(0, 200)}`, res.status) }
-  const url = json?.url || json?.logoUrl
-  if (!res.ok || !json?.ok || !url) {
+  if (!res.ok || !json?.ok || !(json?.url || json?.logoUrl)) {
     throw statusError(`metadata upload failed (${res.status}): ${json?.error || text.slice(0, 200)}`, res.status)
   }
-  return { url, id: json.id, bytes: json.bytes ?? buf.length, metadata: clean }
+  const cid = uploadedCid(json, 'metadata', res.status)
+  return { uri: ipfsUri(cid), url: json.url || cdnUrl(cid), cid, id: json.id, bytes: json.bytes ?? buf.length, metadata: clean }
 }
 
-/** Read a local image → POST /api/logos → { logoUrl, id, bytes }. */
+/** Read a local image → POST /api/logos → { logoUrl, url, cid, id, bytes }. */
 export async function uploadLogoFile(filePath) {
   const abs = resolve(filePath)
   const st = statSync(abs)
@@ -97,7 +131,7 @@ export async function uploadLogoFile(filePath) {
   return postLogo(readFileSync(abs), abs)
 }
 
-/** True when the URL is already a gang.fun logo (nothing to copy). */
+/** True when the URL is an old gang.fun logo, from before the IPFS bucket (nothing to copy). */
 export const isGangLogo = (uri) => uri.startsWith(`${LOGO_API}/`)
 
 /** Throw unless a gang.fun logo URL serves an image (a typo'd id would go on-chain as a broken logo). Reads headers only. */
@@ -122,7 +156,7 @@ export function tempHost(uri) {
   return TEMP_HOSTS.find((h) => host === h || host.endsWith(`.${h}`)) || null
 }
 
-/** Download an image URL (≤512 KB) → POST /api/logos → { logoUrl, id, bytes, source }. */
+/** Download an image URL (≤512 KB) → POST /api/logos → { logoUrl, url, cid, id, bytes, source }. */
 export async function rehostLogoUrl(uri) {
   const msg = `could not download logo ${uri}`
   let res

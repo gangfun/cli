@@ -4,7 +4,7 @@ import {
   calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
-import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, LOGO_UI } from './logo.js'
+import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
@@ -220,12 +220,13 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
                                          graduated: sells into the pool through GangRouter ([--to-bnb] [--from] [--calldata])
   gang upload-logo (--file <path> | --url <image URL>)
-                                         copy an image to https://gang.fun/api/logos → logoUrl
+                                         copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
   gang create …                          = gang v3 create (below): new tokens go to GangLaunchpad. Untaxed unless
                                          --buy-tax / --sell-tax are given. LaunchpadV2 / Soft / U / S take no new tokens
                                          (their tokens still trade with gang buy / sell); --taxed (the old V2 track) is refused
                                          --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
-                                         other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is
+                                         other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is;
+                                         gang.fun files (ipfs://<cid>, cdn.gang.fun/ipfs/<cid>) always go on as ipfs://<cid>
   gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
                  [--shares 1] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL]
                  [--twitter @handle] [--description <text>]
@@ -408,9 +409,18 @@ async function resolveLogoUri() {
   if (uri && file) fail('use either --logo-uri or --logo/--logo-file, not both')
   if (flag('keep-logo-uri') && !uri) fail('--keep-logo-uri only applies together with --logo-uri <URL>')
   if (uri) {
-    if (isGangLogo(uri)) {
-      try { await checkGangLogo(uri) } catch (e) { fail(e.message, retryHint(e)) }
-      return { logoURI: uri, uploaded: false }
+    // a file on gang.fun's IPFS bucket (ipfs://<cid> or its CDN URL) goes on-chain as ipfs://<cid>, once the CDN serves it
+    const cid = ipfsCid(uri)
+    if (cid || isGangLogo(uri)) {
+      try {
+        await checkGangLogo(cid ? cdnUrl(cid) : uri)
+      } catch (e) {
+        // an ipfs:// file that is not on gang.fun may be pinned elsewhere: on-chain as is only when asked
+        const elsewhere = isIpfsUri(uri) && !e.retryable
+        if (elsewhere && flag('keep-logo-uri')) return { logoURI: uri, uploaded: false }
+        fail(e.message, elsewhere ? { hint: 'not on gang.fun: use --logo ./file.png, or --keep-logo-uri if this file stays pinned on IPFS' } : retryHint(e))
+      }
+      return { logoURI: cid ? ipfsUri(cid) : uri, uploaded: false }
     }
     const temp = tempHost(uri)
     // logoURI can't be changed after create, so an image on another host is copied to gang.fun first
@@ -457,7 +467,7 @@ async function resolveMetaUri({ name, symbol, logoURI }) {
   const meta = { name, symbol, description, image: logoURI, external_link: links?.website, twitter: links?.twitter }
   try {
     const up = await uploadMetadata(meta)
-    return { metaURI: up.url, metadata: up.metadata }
+    return { metaURI: up.uri, metadata: up.metadata }
   } catch (e) {
     return fail(e.message, retryHint(e))
   }
