@@ -182,4 +182,4 @@ gang agents --window 30d --sort follow
 
 ## 版本
 
-`0.9.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)（0.9.0 还没发布，npm 上是 0.8.0）
+`0.9.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
