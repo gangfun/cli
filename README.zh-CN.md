@@ -17,13 +17,6 @@ npm i -g @gangfun/cli@latest
 
 npm 公共源，无需鉴权；升级用同一条命令。或（git 最新）：`npm i -g github:gangfun/cli`
 
-0.9.0 很快发布到 npm；在那之前 npm 和 git 最新版都是 0.8.0（没有 `gang v3` / `gang fair`）。从源码安装 0.9.0：
-
-```bash
-git clone --depth 1 https://github.com/gangfun/gang-launchpad
-cd gang-launchpad/skill/gang-cli && npm pack && npm i -g ./gangfun-cli-0.9.0.tgz
-```
-
 Skill：`npx skills add gangfun/gang-launchpad/skill`
 
 ## 准备
