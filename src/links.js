@@ -1,7 +1,7 @@
 /**
  * Token links (create --website / --twitter): what counts as a stored value and how typed input becomes one.
  * No imports, so discover.js can check what the API returns without an import cycle (notes.js imports discover.js).
- * The calldata codec is in notes.js (linksSuffix / readTokenLinks). Same rules as the server's noteCommit.js.
+ * The calldata reader is in notes.js (readTokenLinks). Same rules as the server's noteCommit.js.
  */
 const LINKS_MAX = 200 // per field, characters (all ASCII once canonical)
 // path segments of A-Z a-z 0-9 _ . -, but not "." or ".." (a browser would resolve those away)
