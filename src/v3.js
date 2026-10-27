@@ -3,7 +3,7 @@ import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund,
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, noteFlagError, notThisKind, padNets } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
@@ -211,7 +211,8 @@ const USAGE = 'usage: gang v3 <list|info|status|create|buy|sell|claim|income|rel
 export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta }) {
   if (!SUBS.includes(sub)) return fail(USAGE, { got: sub ?? null })
   // agent notes are matched to the server's V2 / Soft trades; V3 txs are not matched there yet
-  if (flag('note') || flag('follow')) return fail('--note / --follow are not supported on gang v3 yet: the server cannot match them to a V3 tx; leave them out')
+  const noteError = noteFlagError(flag, 'GangLaunchpad tokens (gang create / gang v3)', 'a GangLaunchpad tx')
+  if (noteError) return fail(noteError)
   const testnet = flag('testnet')
   const net = testnet ? ' --testnet' : ''
   const rawOnly = flag('calldata')
@@ -312,17 +313,34 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const name = opt('name'), symbol = opt('symbol')
     if (!name || !symbol) fail('--name and --symbol are required')
     checkMeta() // a bad --website / --twitter / --description fails here, before any chain read or upload
-    if (!flag('buy-tax') || !flag('sell-tax')) fail('--buy-tax and --sell-tax are required (each 1–5, in %; e.g. --buy-tax 2 --sell-tax 2)')
-    const buyTax = parseNum(fail, 'buy-tax', opt('buy-tax'), 1, 5)
-    const sellTax = parseNum(fail, 'sell-tax', opt('sell-tax'), 1, 5)
-    const dividend = parseNum(fail, 'dividend', opt('dividend', '0'), 0, 100)
-    // everything to holders needs no recipient; otherwise the recipient gets the rest: yourself, or a whitelisted partner
-    const recipient = dividend === 100 && !flag('recipient') ? zeroAddress : addrArg(opt, fail, 'recipient', 'the tax recipient: your own address, or a whitelisted partner')
+    // no --buy-tax / --sell-tax (or both 0): an untaxed token (tax all 0, no dividend, no recipient; the pad never hooks it)
+    if (flag('buy-tax') !== flag('sell-tax')) {
+      fail('give both --buy-tax and --sell-tax (each 1–5, in %; e.g. --buy-tax 2 --sell-tax 2), or neither for an untaxed token')
+    }
+    const isZero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
+    const zeroTax = isZero('buy-tax') && isZero('sell-tax')
+    const taxed = flag('buy-tax') && !zeroTax
+    if (!taxed) {
+      const f = ['dividend', 'recipient'].find((x) => flag(x))
+      if (f) fail(`--${f} only applies to a taxed token: add --buy-tax and --sell-tax (each 1–5, in %), or leave --${f} out for an untaxed token`)
+    }
+    const taxOf = (f) => {
+      const n = Number(opt(f))
+      if (!(n >= 1 && n <= 5)) fail(`--${f} must be a number between 1 and 5 (in %); for an untaxed token leave out both tax flags (or give both as 0)`, { got: opt(f) ?? null })
+      return n
+    }
+    const buyTax = taxed ? taxOf('buy-tax') : 0
+    const sellTax = taxed ? taxOf('sell-tax') : 0
+    const dividend = taxed ? parseNum(fail, 'dividend', opt('dividend', '0'), 0, 100) : 0
+    const me = walletFor(ctx, opt('from'))
+    // everything to holders needs no recipient; otherwise the recipient gets the rest: --recipient (a whitelisted
+    // partner, or yourself), else the creator itself
+    const recipient = !taxed || (dividend === 100 && !flag('recipient')) ? zeroAddress
+      : flag('recipient') ? addrArg(opt, fail, 'recipient', 'the tax recipient: your own address, or a whitelisted partner') : me
     const quote = flag('quote') ? opt('quote') : ctx.wbnb
     const refPool = flag('ref-pool') ? opt('ref-pool') : (defaultRefPool(ctx.chainId, quote) ?? zeroAddress)
     if (!isAddress(quote ?? '') || !isAddress(refPool ?? '')) fail('--quote / --ref-pool must be 0x addresses')
     const tax = { buyTaxBps: Math.round(buyTax * 100), sellTaxBps: Math.round(sellTax * 100), dividendBps: Math.round(dividend * 100), recipient }
-    const me = walletFor(ctx, opt('from'))
     // the recipient may be the creator itself: checkTaxConfigFor knows who creates (a pad without it: checkTaxConfig)
     const [ok, reason] = await ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfigFor', [me, tax]).catch((e) => {
       if (!noSuchFunction(e)) throw e
@@ -356,9 +374,11 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ...(refPool !== zeroAddress && quote.toLowerCase() !== String(ctx.wbnb).toLowerCase() && { refPool }),
       buyTaxPct: buyTax, sellTaxPct: sellTax, dividendPct: dividend,
       recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: dry.result,
-      split: `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
-        + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : ''),
-      note: `tax rates and recipient are fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax: the tax starts in the pool after graduation. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang v3 tx --hash …\`.`,
+      split: taxed
+        ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
+          + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
+        : 'untaxed: no tax in the PancakeSwap pool after graduation, no dividend, no recipient',
+      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang v3 tx --hash …\`.`,
     }, rawOnly, summarize))
   }
 

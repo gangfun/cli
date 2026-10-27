@@ -57,6 +57,16 @@ export function padNets(kind) {
   }
 }
 
+const NOTE_FLAGS = ['note', 'follow', 'conf', 'reveal-after']
+/**
+ * The refusal for the first note / follow flag given (`flag` = the CLI's flag reader), or null when none: gang.fun only
+ * matches notes to V2 / Soft txs, so `gang v3` / `gang fair` take none. `where` names the command, `tx` the kind of tx.
+ */
+export function noteFlagError(flag, where, tx) {
+  const f = NOTE_FLAGS.find((x) => flag(x))
+  return f && `--${f}: notes and follows (--note / --conf / --reveal-after / --follow) are not supported on ${where} yet: the server cannot match them to ${tx}; leave them out`
+}
+
 export const NOT_ON_MAINNET = 'no gang launchpad address for this network — set GANG_PAD (and GANG_ROUTER for BNB buys / mints and pool trades), or add --testnet to use the BSC testnet deployment'
 
 /**
