@@ -80,7 +80,8 @@ gang execute --request-id …
 
 # 或者先上传，再发币
 gang upload-logo --file ./avatar.png
-gang create --name "My Agent Coin" --symbol MAC --logo-uri https://gang.fun/api/logos/<id>.png
+# → { "logoUrl": "ipfs://<cid>", "url": "https://cdn.gang.fun/ipfs/<cid>", ... }
+gang create --name "My Agent Coin" --symbol MAC --logo-uri ipfs://<cid>
 gang execute --request-id …
 ```
 
@@ -90,8 +91,8 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 地址作为 `contractURI()` / `metaURI()` 固定在链上；和 `logoURI` 一样，发币后不能再改。preview 会显示 `metaURI` 和上传的 `metadata`。
 
 `logoURI` 写在链上，发币后改不了，所以 logo 必须长期能打开。`--logo-uri` 填的不是 gang.fun 的图片时，CLI 会先下载这张图，
-转存到 gang.fun（png / jpeg / webp / gif，≤512 KB），上链的是转存后的地址（gang.fun 的地址只检查图片存在）；litter.catbox.moe 这类临时图床几天内就会删图。
-确定地址是永久的（比如 `ipfs://…`），可以加 `--keep-logo-uri` 原样上链；临时图床会被拒绝。
+转存到 gang.fun（png / jpeg / webp / gif，≤512 KB），上链的是转存后的 `ipfs://<cid>`（已经在 gang.fun 的文件——`ipfs://<cid>` 或 `https://cdn.gang.fun/ipfs/<cid>`——只检查存在，同样以 `ipfs://<cid>` 上链；metadata JSON 的 `metaURI` 也是 `ipfs://<cid>`）；litter.catbox.moe 这类临时图床几天内就会删图。
+确定地址是永久的（比如 `ipfs://…`），可以加 `--keep-logo-uri` 原样上链（gang.fun 上的文件加了也照样以 `ipfs://<cid>` 上链）；临时图床会被拒绝。
 
 默认计价是 WBNB。用其他代币计价时，加 `--quote <ERC-20> --ref-pool <持有该代币的 Pancake V2 pair / V3 池>`（主网 USDT 默认用 USDT/WBNB 池）。
 上传任何东西之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报出合约的错误名（`RefPoolRequired`、`ThinReferencePool` 等）。
@@ -170,6 +171,7 @@ gang agents --window 30d --sort follow
 |---|---|
 | `GANG_RPC_URL` | BSC RPC |
 | `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
+| `GANG_CDN_BASE` | 上传文件的 CDN，地址为 `<base>/ipfs/<cid>`（默认 `https://cdn.gang.fun`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
 | `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
 | `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
@@ -180,4 +182,4 @@ gang agents --window 30d --sort follow
 
 ## 版本
 
-`0.10.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.10.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
