@@ -2,7 +2,9 @@
 
 用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
 
-**发币路径（0.2.1+）：** 仅 LaunchpadV2（`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`）。Soft / LaunchpadU / LaunchpadS：**禁止新 create**，仅存量 buy/sell/claim。新币毕业 ≈ **15 BNB**（PoolCheck）。Soft 存量链上仍为 20 BNB 毕业。
+**`gang create`（0.2.1+）：** 仅 LaunchpadV2（`0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`）。Soft / LaunchpadU / LaunchpadS：**禁止新 create**，仅存量 buy/sell/claim。新币毕业 ≈ **15 BNB**（PoolCheck）。Soft 存量链上仍为 20 BNB 毕业。
+
+**V3 税收币和打新（0.9.0+）：** `gang v3` / `gang fair` 走 GangLaunchpad，2026-10-27 起在 BSC 主网运行（内盘 `0x15CFD2dc8278Fb87a1783ef42111618E20874365`，GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`，都已内置）；`--testnet` 走 BSC 测试网第 10 套。
 
 ## 安装
 
@@ -14,6 +16,13 @@ npm i -g @gangfun/cli@latest
 ```
 
 npm 公共源，无需鉴权；升级用同一条命令。或（git 最新）：`npm i -g github:gangfun/cli`
+
+0.9.0 很快发布到 npm；在那之前 npm 和 git 最新版都是 0.8.0（没有 `gang v3` / `gang fair`）。从源码安装 0.9.0：
+
+```bash
+git clone --depth 1 https://github.com/gangfun/gang-launchpad
+cd gang-launchpad/skill/gang-cli && npm pack && npm i -g ./gangfun-cli-0.9.0.tgz
+```
 
 Skill：`npx skills add gangfun/gang-launchpad/skill`
 
@@ -43,6 +52,22 @@ gang follow <附言 tx> --bnb <n> [--slippage 1] [--note …]   # 跟单：买�
 gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
 gang upload-logo (--file ./avatar.png | --url <图片地址>)
 gang create --name <n> --symbol <s> [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--taxed] [--quote 0x… --ref-pool 0x…] [--note … [--conf …] [--reveal-after …]]
+# 打新和 V3 共用一个内盘合约（GangLaunchpad）。默认走主网（地址已内置）；--testnet 走 BSC 测试网第 10 套
+gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+#   --cap 单地址上限 0.25–1%（1% 时至少 50 个地址），--hold 出局线 60–90%
+gang fair mint --token <addr> --shares <n> [--testnet]           # 另收该币的打新费（1–3%，归平台、不退）
+gang fair withdraw --token <addr> (--shares <n> | --all) [--testnet]
+gang fair buy --token <addr> --amount <数量> [--use-quote | --pay-bnb] [--testnet]     # 发射后：经 GangRouter 在 PancakeSwap 买
+gang fair sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--confirm-out] [--testnet]  # 发射后；卖过 sellableBeforeOut 须加 --confirm-out
+gang fair status --token <addr> [--testnet]                      # 份数；发射后：是否出局、还能卖多少、待领奖励
+gang fair claim --token <addr> [--testnet]
+# LaunchpadV3 税收币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的合作方）— 和打新同一个内盘合约
+gang v3 create --name <n> --symbol <s> --buy-tax 2 --sell-tax 2 [--dividend 0] --recipient 0x… [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+gang v3 buy --token <addr> --amount <报价币数量> [--testnet]      # 含内盘 1% 手续费（内盘不收税，税只在外盘收）
+gang v3 sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--testnet]  # 已毕业：buy / sell 经 GangRouter 走 PancakeSwap
+gang v3 info --token <addr> [--testnet]                           # 税率、接收地址、还欠接收地址多少
+gang v3 release --token <addr> [--testnet]                        # 补转之前打款失败的税
+gang v3 income --recipient 0x…                                  # 接收地址按币统计的到账（读 gang.fun）
 gang execute --request-id <id>
 gang tx --hash <0x..>
 ```
@@ -138,7 +163,10 @@ gang agents --window 30d --sort follow
 
 - 内盘每钱包 1%；多付同笔退回。
 - **新**发币 ≈15 BNB 毕业（LaunchpadV2）。Soft 存量归档：20 BNB，仅买卖。
-- 毕业前不可转账；毕业后走 PancakeSwap。
+- 毕业前不可转账；毕业后走 PancakeSwap：`gang buy` / `gang sell`（以及 `gang v3 buy|sell`、发射后的 `gang fair buy|sell`）
+  经 GangRouter 在外盘成交。先只授权本次用量，再发 `poolBuy` / `poolBuyBNB` / `poolSell` / `poolSellForBNB`；最少到手：买入按
+  `getAmountsOut` 扣买入税，卖出按税 handler 的 `previewSellNextBlock`，再扣 `--slippage`。`--use-quote` / `--pay-bnb` 选买入用什么付，
+  `--to-bnb` 卖成 BNB。带税的卖出约需 70 万 gas（会顺带换一块税）：让钱包自动估算，或者至少给 75 万。生成任何步骤前先核对路由是带外盘功能的 GangRouter（不会是 Pancake 或旧路由）；`--from` 只对外盘交易生效。详见 `references/v3.md`「Pool trades」。
 
 ## 环境变量
 
@@ -151,7 +179,10 @@ gang agents --window 30d --sort follow
 | `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
 | `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
+| `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），`gang v3` 和 `gang fair` 共用（默认：主网 `0x15CF…4365`，测试网第 10 套 `0xFebF…5BB1`）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
+| `GANG_TESTNET_RPC_URL` | 测试网 RPC；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
+| `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 `0xE040…79C4`，测试网第 10 套 `0x6bB6…C9F6` |
 
 ## 版本
 
-`0.8.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.9.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)（0.9.0 还没发布，npm 上是 0.8.0）
