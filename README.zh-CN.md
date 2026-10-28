@@ -77,8 +77,8 @@ gang bond burn --token <addr> | gang bond tx --hash <0x..>       # 推进一块�
 #   创建者用 gang sell（内盘或外盘）/ gang withdraw 卖到低于 X 会被拒，除非加 --break-bond（过了 T：--settle-first 先取回）
 # 一条命令发射：每次运行产出一笔交易，执行后再运行同一条命令，直到 launch.stage = done
 gang create … --dev-buy <报价币数量> [--bond <数量> [--bond-hold <枚数|N%|all>] --bond-days <7-90>]  # V3：发币 → dev 内盘买入 → 押金
-gang create … --buy-tax 3 --sell-tax 3 --buyback 50 [--dev-buy …]  # V3：接收地址那份税 50% 回购销毁，其余给你
-gang buyback status|set|apply --token 0x… [--pct 0-100]           # 回购合约：比例（提高立即生效，下调 3 天后）、待回购金额
+gang create … --buy-tax 3 --sell-tax 3 --buyback 50 [--buyback-to 0x…] [--dev-buy …]  # V3：接收地址那份税 50% 回购销毁，其余给你（或 --buyback-to 指定的地址）
+gang buyback status|set|set-payee|apply --token 0x… [--pct 0-100] [--to 0x…]  # 回购合约：比例（提高立即生效，下调 3 天后）、收款地址（立即生效）、待回购金额
 gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
 gang execute --request-id <id>
 gang tx --hash <0x..> [--testnet]            # 解析 V2 / Soft 和 GangLaunchpad 的事件（GangLaunchpad 的带 units "raw"，金额是 wei）
@@ -200,4 +200,4 @@ gang agents --window 30d --sort follow
 
 ## 版本
 
-`0.13.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.14.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
