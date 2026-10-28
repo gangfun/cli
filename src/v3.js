@@ -69,7 +69,7 @@ const HINTS = {
   BadTaxConfig: 'a tax setting is out of bounds, or the recipient is neither you nor on the whitelist: see reason',
   NotAgent: 'this wallet holds no Agent ID; V3 create and curve trades are Agent-only',
   WalletCapReached: 'this wallet already holds the per-wallet cap (1% of supply)',
-  AlreadyGraduated: 'the token graduated: re-run gang v3 buy / sell, which now trade it in the PancakeSwap pool',
+  AlreadyGraduated: 'the token graduated: re-run gang buy / gang sell, which now trade it in the PancakeSwap pool',
   Slippage: 'the price moved past --slippage; re-run to re-quote',
   RefPoolRequired: 'a non-WBNB --quote needs --ref-pool: a Pancake V2 pair or V3 pool that holds the quote token',
   QuoteNotInPool: '--ref-pool does not contain the --quote token',
@@ -89,6 +89,9 @@ const HINTS = {
   // not a create flag: the shared dividend vault's holding floor for this pad was raised above what V3 allows (10,000 tokens)
   VaultFloorTooHigh: 'the platform\'s dividend vault requires a larger holding than V3 dividends allow (10,000 tokens), so a dividend token can\'t be created right now; --dividend 0 still works, or ask gang to fix the vault setting',
 }
+
+/** What `gang tx` decodes a V3 trade's logs with (the pad, the tax router, the dividend vault). */
+export const V3_EVENT_ABIS = [PAD_ABI, TAX_ROUTER_ABI, VAULT_ABI]
 
 export function v3Ctx(testnet) {
   const net = V3_NETS[testnet ? 'testnet' : 'mainnet']
@@ -234,7 +237,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const path = recipient ? `/v3/recipients/${recipient.toLowerCase()}?limit=20` : `/v3/tokens?status=${status}&limit=30`
     const r = await fetch(`${API}${path}`, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(10_000) })
       .then((x) => (x.ok ? x.json() : { error: x.status })).catch((e) => ({ error: e.message }))
-    if (r.error) return out({ success: false, error: `gang.fun V3 data unavailable (${r.error})`, hint: `use gang v3 info --token <addr>${net} for one token (reads the chain)` })
+    if (r.error) return out({ success: false, error: `gang.fun V3 data unavailable (${r.error})`, hint: `use gang info --token <addr>${net} for one token (reads the chain)` })
     // the quote's own decimals from gang.fun (18 when an older server does not send them)
     const f = (x, d) => (x == null ? null : formatUnits(BigInt(x), d ?? 18))
     if (recipient) {
@@ -308,7 +311,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (d.claimableRaw === 0n) {
       return fail('nothing to claim yet', {
         ...(d.creditedUnsoldTokens && Number(d.creditedUnsoldTokens) > 0 && { creditedUnsoldEstimate: d.creditedUnsoldEstimate, note: d.note }),
-        hint: `gang v3 status --token ${token}${testnet ? ' --testnet' : ''}`,
+        hint: `gang status --token ${token}${testnet ? ' --testnet' : ''}`,
       })
     }
     const sim = await simulate(ctx, me, vault, VAULT_ABI, 'claim', [token])
@@ -388,7 +391,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
         : 'untaxed: no tax in the PancakeSwap pool after graduation, no dividend, no recipient',
-      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang v3 tx --hash …\`.`,
+      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang tx --hash …\`.`,
     }, 'create'))
   }
 
