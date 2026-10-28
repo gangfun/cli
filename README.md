@@ -74,6 +74,22 @@ gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] 
 gang v3 income --recipient 0x…               # a recipient's income per token (gang.fun)
 # aliases: gang v3 <list|info|status|create|buy|sell|claim|release|tx>, gang fair <list|info|status|create|mint|withdraw|buy|sell|claim|tx>
 #   run the same code (their results carry useInstead)
+# Creator bond (押金承诺, GangBond): from create on, the creator bonds quote that it keeps ≥ X tokens; T = graduation / launch + --days
+gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover 100) [--use-wbnb]  # creator, from create on (--cover once on the pair); WBNB quote: paid in BNB unless --use-wbnb
+gang bond topup --token <addr> (--amount <quote> | --cover <%>) | gang bond raise-hold --token <addr> --hold <tokens|N%>
+gang bond extend --token <addr> --days <n>                       # creator: bond only grows, X only rises, the commitment only gets longer
+gang bond status --token <addr>                                  # state, pending / running, X vs the creator's balance, coverage + tier, time left
+gang bond start --token <addr>                                   # anyone, once graduated / launched: start the --days clock
+gang bond report --token <addr>                                  # anyone, below X: 1% to you, the rest buys back and burns
+gang bond settle --token <addr>                                  # anyone, after T while X is held: the bond goes back to the creator
+gang bond refund --token <addr>                                  # creator: no pair 30 days after the post → ask, then 3 days later get it back
+gang bond burn --token <addr> | gang bond tx --hash <0x..>       # push one buy-back chunk / decode GangBond events
+#   A creator's gang sell (curve or pool) / gang withdraw below X is refused unless --break-bond (past T: --settle-first)
+# Launch in one command: one tx per run — execute it, run the very same command again, until launch.stage = done
+gang create … --dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>] --bond-days <7-90>]  # V3: create → dev buy → bond
+gang create … --buy-tax 3 --sell-tax 3 --buyback 50 [--dev-buy …]  # V3: the recipient's part of the tax 50% bought back + burned, the rest to you
+gang buyback status|set|apply --token 0x… [--pct 0-100]           # the buy-back splitter: ratio (raise now, cut after 3 days), what waits
+gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>                 # 打新: create (dev shares) → bond
 gang execute --request-id <id>
 gang tx --hash <0x..> [--testnet]            # V2 / Soft and GangLaunchpad events (GangLaunchpad: units "raw", amounts in wei)
 ```
@@ -206,8 +222,9 @@ gang agents --window 30d --sort follow
 | `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | Override the merged GangLaunchpad (mainnet / testnet) behind V3 and 打新 (defaults: mainnet `0x15CF…4365`, testnet set 10 `0xFebF…5BB1`). Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
 | `GANG_TESTNET_RPC_URL` | Testnet RPC; old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
+| `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond (creator bonds, `gang bond`). Testnet built in (`0xB034…EBE3`); mainnet not deployed yet |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter proxy (native-BNB V3 buys / mints, and every PancakeSwap trade of a graduated token); old name `GANG_ROUTER_TESTNET` still works. Defaults: mainnet `0xE040…79C4`, testnet set 10 `0x6bB6…C9F6` |
 
 ## Version
 
-`0.12.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.13.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

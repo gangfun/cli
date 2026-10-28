@@ -17,6 +17,9 @@ import { rememberPreview, previewFor } from './previews.js'
 import { UA, checkUpdate } from './version.js'
 import { runFair, FAIR_EVENT_ABIS } from './fair.js'
 import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
+import { runBond } from './bond.js'
+import { runBuyback } from './buyback.js'
+import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch } from './launch.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
 import { MERGED_ERRORS_ABI, kindOf, padNets } from './gangpad.js'
@@ -277,6 +280,21 @@ graduated tokens only).
                                          gang.fun; the token's contractURI / metaURI, permanent). --logo-uri images are copied
                                          to gang.fun first (other hosts expire); --keep-logo-uri puts a permanent URL (e.g.
                                          ipfs://) on-chain as is; gang.fun files always go on as ipfs://<cid>
+  LAUNCH in one command (one tx per run: execute it, then run the very same command again until launch.stage = done):
+  gang create … --dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>] --bond-days <7-90>]
+                                         V3: create → the dev buys on the curve (--dev-buy, as gang buy) → bonds what it
+                                         holds (--bond-hold, default all; gang bond post). Wrap / approve steps come in between
+  gang create … --buy-tax <1-5> --sell-tax <1-5> --buyback <0-100> [--dev-buy … [--bond …]]
+                                         V3, taxed: the recipient's part of the tax is split, --buyback % bought back in the
+                                         pool and burned (0xdead), the rest to you. Steps: clone your buy-back splitter
+                                         (GangBuybackSplitterFactory; listed as a recipient in the same tx) → create with it as
+                                         the recipient → bind → the rest of the launch. Without --buyback the tax goes to you
+  gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
+                                         打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
+                                         chain (a token this wallet created with this symbol since the plan); a run that finds
+                                         none never creates again by itself (the first may still be landing): --restart does.
+                                         Done stays done: running it again only reports. --note goes on the create only;
+                                         --bond needs GangBond on the network (testnet only for now), checked before the create
   NOTES: gang create / buy / sell, and gang mint / withdraw on a 打新 sale, take [--note "<why>" [--conf 0-100]
                                          [--reveal-after 1-72h]] (a create's note is its launch manifesto); gang buy also
                                          --follow <note tx>. Mainnet only; pool trades (graduated / launched) carry no note
@@ -295,6 +313,47 @@ graduated tokens only).
                                          The router is checked first (a GangRouter with pool trades, not Pancake / an old one);
                                          a reverted simulation with --calldata is doNotSend: true, no tx. V2 / Soft / U / S:
                                          --from only on graduated tokens, mainnet only
+                                         A creator selling below its bonded X (gang bond) is refused unless --break-bond;
+                                         past the deadline, --settle-first settles the bond before the sell.
+
+BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND / GANG_TESTNET_BOND = its address):
+  gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover <coverage %>) [--use-wbnb]
+                                         creator only, any time after create (V3: buy on the curve first): bond in the token's
+                                         quote (WBNB: paid in BNB, --use-wbnb pays WBNB; also on topup) promising the creator
+                                         keeps at least --hold tokens (N% = of the 1B supply) from now on. The --days clock
+                                         starts when the token graduates / launches (at once if it already has). --cover 100 =
+                                         exactly what dumping X fetches now (only once on the pair). No early withdrawal;
+                                         below X anyone reports it, on the curve too
+  gang bond topup --token <addr> (--amount <quote> | --cover <target %>) | gang bond raise-hold --token <addr> --hold <tokens|N%>
+  gang bond extend --token <addr> --days <n>
+                                         creator only: the bond only grows, X only rises, the commitment only gets longer (90
+                                         days in all before the pair; a deadline ≤ 90 days from now after it)
+  gang bond status --token <addr>        state, phase (pending: waiting for the pair / running), X and the creator's balance /
+                                         headroom, coverage + tier once on the pair (≥100% full cover, 50–100% bond, <50% no
+                                         badge), toFullCover, time left, buy-back progress, the creator's record
+  gang bond start --token <addr>         anyone, once the token graduated / launched: start the clock (deadline = now + days)
+  gang bond report --token <addr>        anyone, when the creator holds less than X: 1% of the bond to you, the rest buys
+                                         back and burns the token (simulated first; nothing is sent when not violated)
+  gang bond settle --token <addr>        anyone, after the deadline while X is held: the bond goes back to the creator
+  gang bond refund --token <addr>        creator, posted before the pair and still no pair 30 days later: run it once to ask
+                                         (a 3-day notice: X still binds, graduation / launch voids it), again after it to
+                                         get the bond back
+  gang bond burn --token <addr> [--slippage 1]
+                                         anyone: one buy-back chunk of a slashed bond (≤ 0.5% of the pair's quote side; waits
+                                         for a 10-minute average and skips when the price is > 2% above it). Slashed before the
+                                         pair: waits for it; none 30 days after the post → the rest goes to 0xdead as quote
+  gang bond tx --hash <0x..>             decode GangBond events. --testnet, --calldata, --from as in gang v3. A bonded
+                                         creator's gang v3 sell (curve or pool), gang fair sell and gang fair withdraw are
+                                         checked against X (--break-bond / --settle-first)
+BUYBACK (a V3 token whose recipient is a buy-back splitter; GANG_SPLITTER_FACTORY / GANG_TESTNET_SPLITTER_FACTORY):
+  gang buyback status --token <addr>     ratio, a cut asked for (applies from / lapses after), quote waiting to be bought
+                                         back, owed to the dev, the next chunk (the keeper buys it back every few minutes)
+  gang buyback set --token <addr> --pct <0-100>
+                                         dev only: a higher share applies at once; a lower one after a 3-day notice
+  gang buyback apply --token <addr>      anyone: apply a cut whose notice ran (within 7 days, or it lapses)
+  gang buyback bind --token <addr> | gang buyback release --token <addr>
+                                         anyone: bind the splitter to its token (the launch does it) / push the dev what a
+                                         failed payment left owed. --testnet, --calldata, --from as in gang v3
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
                                          打新, tax router, vaults) (publishes a queued --note; mainnet). GangLaunchpad events
@@ -662,6 +721,8 @@ const createGateAgent = (me) =>
 
 // what `gang v3` / `gang fair` (and `gang create`) get from here; each call adds its `notes` (padNotes)
 const PAD_IO = { opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri }
+/** `gang create … --dev-buy … [--bond …]` / `gang fair create … --bond …`: one command, one tx per run (launch.js). */
+const LAUNCH_DEPS = { io: PAD_IO, runV3, runFair, runBond, padNotes: (kind, sub, pre) => padNotes(kind, sub, pre) }
 
 // ---------------------------------------------------------------- one command per action, whatever the pad
 // gang buy|sell|info|status|claim|mint|withdraw|release --token <addr> ask GangLaunchpad's kindOf what the token is and
@@ -780,16 +841,19 @@ function create() {
   if (flag('fair')) {
     const wrong = V3_CREATE_FLAGS.find(flag)
     if (wrong) fail(`--${wrong} is a V3 tax setting; a 打新 sale's pool tax is fixed (1%): leave it out, or drop --fair for a V3 token`)
+    if (isLaunch('fair', flag)) return runLaunch('fair', LAUNCH_DEPS)
     return runFair('create', { ...PAD_IO, notes: padNotes('fair', 'create') })
   }
   const wrong = FAIR_CREATE_FLAGS.find(flag)
   if (wrong) fail(`--${wrong} is a 打新 (fair-mint) setting: add --fair to create a sale (gang create --fair …)`)
+  if (isLaunch('v3', flag)) return runLaunch('v3', LAUNCH_DEPS)
   return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
 }
 
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
-  'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3'])
+  'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
+  'buyback'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
 const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS]
 
@@ -803,11 +867,26 @@ async function main() {
   if (flag('description') && !tokenCreate) {
     fail('--description only applies when creating a token (`gang create`, `gang create --fair`; it goes into the token metadata)')
   }
+  // --bond-hold / --bond-days / --restart only mean something in a chained launch (--dev-buy / --bond); never drop them silently
+  // gang fair create and gang create --fair are 打新 creates; the rest V3
+  const launchKind = cmd === 'fair' || (cmd === 'create' && flag('fair')) ? 'fair' : 'v3'
+  if (tokenCreate && !isLaunch(launchKind, flag)) {
+    // a 打新 dev buys with --shares in the create itself: say so here, not "add --bond" (which would only lead to that)
+    if (launchKind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
+    const lone = LAUNCH_FLAGS.find((f) => flag(f))
+    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct>)'}`)
+  }
   switch (cmd) {
     case 'fair':
+      if (args[1] === 'create' && isLaunch('fair', flag)) return runLaunch('fair', LAUNCH_DEPS)
       return runFair(args[1], alias('fair', args[1]))
     case 'v3':
+      if (args[1] === 'create' && isLaunch('v3', flag)) return runLaunch('v3', LAUNCH_DEPS)
       return runV3(args[1], alias('v3', args[1]))
+    case 'bond':
+      return runBond(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'buyback':
+      return runBuyback(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'preflight': {
       const issues = []
       const status = bawStatus()
