@@ -1,5 +1,6 @@
 import { parseAbi, encodeFunctionData, formatUnits, parseUnits, zeroAddress } from 'viem'
 import { decimalsOf, isMissingFunction, poolSellQuote, ROUTER_ABI, routerDeadline, step, units, GAS_RESERVE } from './steps.js'
+import { bondGuard } from './bond.js'
 
 /**
  * PancakeSwap (V2 pool) buys and sells of a graduated / launched token through GangRouter — V3 and 打新 tokens
@@ -12,6 +13,7 @@ import { decimalsOf, isMissingFunction, poolSellQuote, ROUTER_ABI, routerDeadlin
  * Minimums: a buy = Pancake getAmountsOut less the token's buy tax, less --slippage; a sell = the tax handler's
  * previewSellNextBlock (the sell tax and the chunk of held tax it sells first included, as of the next block), or
  * getAmountsOut less the sell tax when there is no handler quote (V2 tokens, untaxed V3), less --slippage.
+ * A sell with `p.bond` ({ testnet, breakBond, settleFirst }) is checked against the seller's GangBond first (bondGuard).
  */
 
 // Pancake V2 routers: a GangRouter address must never be one of these (they would take an approve and swap for anyone).
@@ -185,7 +187,7 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
   const quoteSymbol = (await symbolOf(ctx, quote)) || quote
   const deadline = routerDeadline()
   const taxPct = (bps) => (bps || 0) / 100
-  let call, probe, value = 0n, pull = null, fields
+  let call, probe, value = 0n, pull = null, fields, guard = null
   try {
     if (side === 'buy') {
       const payBnb = !!p.payBnb
@@ -226,6 +228,12 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
       const amount = p.all ? bal : parseUnits(p.amount, 18)
       if (amount === 0n) throw new PoolError(`--amount ${p.amount} rounds to 0 tokens`)
       if (amount > bal) return failOut({ step: 'pool-sell', error: 'amount exceeds balance', balance: formatUnits(bal, 18) })
+      // the creator's own bond: refuse a sell that breaks it (unless --break-bond), settle first past the deadline
+      if (p.bond) {
+        guard = await bondGuard(ctx, { token, me, amount, ...p.bond }, rawOnly, summarize)
+        if (guard?.refuse) return failOut({ step: 'pool-sell', wallet: me, ...guard.refuse })
+        if (guard?.settleStep) return guard.settleStep
+      }
       const taxed = (p.sellTaxBps || 0) > 0
       let quoteOut, quotedWith
       if (taxed && p.handler) {
@@ -254,6 +262,7 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
         deadline: Number(deadline), quotedWith,
         ...(toBnb && !quoteWbnb && { expectQuoteBeforeBnb: await units(ctx, quote, quoteOut) }),
         gas: p.swapBackGas ? POOL_SELL_GAS_NOTE : 'let the wallet estimate gas',
+        ...guard?.info,
         note: quotedWith === 'getAmountsOut'
           ? `minOut = getAmountsOut of the amount less the ${taxPct(p.sellTaxBps)}% sell tax${toBnb && !quoteWbnb ? ' (then quote → WBNB)' : ''}, less --slippage (the sell reverts below it)`
           : `minOut = the tax handler's ${quotedWith} (sell tax and the chunk of held tax sold first included, as of the next block)${toBnb && !quoteWbnb ? ', then getAmountsOut quote → WBNB' : ''}, less --slippage (the sell reverts below it)`,
