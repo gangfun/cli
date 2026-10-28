@@ -357,7 +357,7 @@ BUYBACK (a V3 token whose recipient is a buy-back splitter; GANG_SPLITTER_FACTOR
                                          dev only: a higher share applies at once; a lower one after a 3-day notice
   gang buyback set-payee --token <addr> --to <addr>
                                          dev only: the part not bought back goes to --to from now on (at once; splitters
-                                         from the current factory; the first mainnet ones, buyback-burn-v1, pay the dev)
+                                         from v2 on; the first mainnet ones, buyback-burn-v1, pay the dev)
   gang buyback apply --token <addr>      anyone: apply a cut whose notice ran (within 7 days, or it lapses)
   gang buyback bind --token <addr> | gang buyback release --token <addr>
                                          anyone: bind the splitter to its token (the launch does it) / push the payee what a
