@@ -3,7 +3,7 @@ import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund,
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, noteFlagError, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
@@ -100,6 +100,7 @@ export function v3Ctx(testnet) {
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, ERC20_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100
 const VIRTUAL_TOKEN = 1_066_666_666_666_666_666_666_666_667n
+const ceilDiv = (a, b) => (a + b - 1n) / b
 
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
 const revertOf = (e) => revertIn(e, [PAD_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
@@ -178,8 +179,20 @@ export async function curveOf(ctx, token) {
     toGraduation: await units(ctx, quote, remaining),
     progressPct: graduated ? 100 : gradAmt > 0n ? Number((realQuote * 10_000n) / gradAmt) / 100 : 0,
     priceQuote: await units(ctx, quote, price), priceFrom: graduated ? 'pool' : 'curve', priceRaw: price,
-    owedToRecipient: await units(ctx, quote, owed), owedRaw: owed, reserveTokenRaw,
+    owedToRecipient: await units(ctx, quote, owed), owedRaw: owed, reserveTokenRaw, curveRaw: { realQuote, sold, virtualQuote },
   }
+}
+
+/**
+ * What a curve buy of `quoteIn` that gets `tokensOut` spends, the fee included (CurveLogic _quoteInFor + _recomputeFee):
+ * less than quoteIn when the wallet cap or the graduation cut trimmed it and the rest is refunded.
+ */
+async function spentFor(ctx, c, quoteIn, tokensOut) {
+  const { realQuote, sold, virtualQuote } = c.curveRaw
+  const net = ceilDiv(virtualQuote * VIRTUAL_TOKEN, VIRTUAL_TOKEN - sold - tokensOut) - (virtualQuote + realQuote)
+  const feeBps = BigInt(Math.round((await feesOf(ctx)).curveFeePct * 100))
+  const gross = ceilDiv(net * 10_000n, 10_000n - feeBps)
+  return gross < quoteIn ? gross : quoteIn
 }
 
 /** `token` funding for `need` toward the pad (wrap BNB, then approve): a step object, or null when ready. */
@@ -205,14 +218,11 @@ const SUBS = ['list', 'info', 'status', 'create', 'buy', 'sell', 'claim', 'incom
 const USAGE = 'usage: gang v3 <list|info|status|create|buy|sell|claim|income|release|tx> [--testnet] — see gang help'
 
 /**
- * Entry for `gang v3 <sub>`. io: { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta } from index.js
- * (summarize = summarizePreview, so previews look like every other command's).
+ * Entry for `gang v3 <sub>`. io: { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes } from
+ * index.js (summarize = summarizePreview, so previews look like every other command's; notes = padNotes: --note / --follow).
  */
-export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta }) {
+export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes }) {
   if (!SUBS.includes(sub)) return fail(USAGE, { got: sub ?? null })
-  // agent notes are matched to the server's V2 / Soft trades; V3 txs are not matched there yet
-  const noteError = noteFlagError(flag, 'GangLaunchpad tokens (gang create / gang v3)', 'a GangLaunchpad tx')
-  if (noteError) return fail(noteError)
   const testnet = flag('testnet')
   const net = testnet ? ' --testnet' : ''
   const rawOnly = flag('calldata')
@@ -254,7 +264,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const token = addrArg(opt, fail, 'token', 'a V3 token address')
     const c = await curveOf(ctx, token)
     if (!c) return notV3(token)
-    const { owedRaw: _raw, priceRaw: _p, reserveTokenRaw: rT, ...pub } = c
+    const { owedRaw: _raw, priceRaw: _p, reserveTokenRaw: rT, curveRaw: _cv, ...pub } = c
     // in the pool the tax is held as tokens and sold in small chunks under a per-block budget
     const swapBack = c.graduated && c.pair ? await swapBackState(ctx, c.taxHandler, token, rT) : null
     const fees = await feesOf(ctx)
@@ -367,7 +377,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     const rest = 100 - dividend
     const fees = await feesOf(ctx)
-    return out(step(ctx, { from: me, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata,
       quote: (await symbolOf(ctx, quote)) || quote, graduationAt: await units(ctx, quote, gradAmt),
@@ -379,7 +389,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
         : 'untaxed: no tax in the PancakeSwap pool after graduation, no dividend, no recipient',
       note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang v3 tx --hash …\`.`,
-    }, rawOnly, summarize))
+    }, 'create'))
   }
 
   if (sub === 'buy') {
@@ -389,13 +399,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (c.graduated) {
       // graduated: buy in the PancakeSwap pool through GangRouter (the buy tax applies; no Agent gate, no wallet cap)
       if (!c.pair) return fail('the pad marks this token graduated but has no PancakeSwap pair on record: nothing to trade it on', { token })
+      if (notes.following) fail('--follow only counts on curve buys before graduation; this token trades on PancakeSwap now', { pair: c.pair })
       if (!flag('amount') && !flag('bnb')) fail('--amount <quote (or BNB) to spend> required')
       const raw = parseAmount(fail, flag('amount') ? 'amount' : 'bnb', opt('amount') ?? opt('bnb'))
       return out(await poolTrade(ctx, {
         side: 'buy', token, quote: c.quote, me: walletFor(ctx, opt('from')), amount: raw,
         slippage: parseSlippage(fail, opt('slippage', '1')), buyTaxBps: Math.round(c.buyTaxPct * 100),
         sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler, payBnb: poolPayBnb(ctx, c.quote, flag),
-        base: { kind: 'v3', pair: c.pair },
+        base: { kind: 'v3', pair: c.pair, ...notes.pool },
       }, { rawOnly, summarize, revertOf }))
     }
     const me = walletFor(ctx, opt('from'))
@@ -405,6 +416,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const raw = parseAmount(fail, flag('amount') ? 'amount' : 'bnb', opt('amount') ?? opt('bnb'))
     const quoteIn = parseUnits(raw, await decimalsOf(ctx, c.quote))
     const slippage = parseSlippage(fail, opt('slippage', '1'))
+    // asked from gang.fun before any wrap / approve round, so a follow that can't count fails first
+    const follow = await notes.follow(token, me)
+    const priced = async (tokensOut) => follow && notes.priced(follow, token, await spentFor(ctx, c, quoteIn, tokensOut), await decimalsOf(ctx, c.quote))
     const extra = (tokensOut, minOut) => ({
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
       minTokensOut: formatUnits(minOut, 18), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
@@ -422,20 +436,20 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (sim.failed) return out({ success: false, step: 'buy', via: 'router', ...sim.failed })
       const minOut = minOf(sim.result, slippage)
       const data = encodeFunctionData({ abi: GANG_ROUTER_ABI, functionName: 'v3BuyBNB', args: [token, minOut, routerDeadline()] })
-      return out(step(ctx, { from: me, to: ctx.router, data, value: quoteIn }, {
+      return out(notes.step(ctx, { from: me, to: ctx.router, data, value: quoteIn }, {
         ...extra(sim.result, minOut), via: 'router', curveFeePct: (await feesOf(ctx)).curveFeePct,
         note: 'paid in BNB through GangRouter; spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap or the graduation cut the excess comes back to this wallet as WBNB (not BNB)',
-      }, rawOnly, summarize))
+      }, 'buy', await priced(sim.result)))
     }
     const pre = await fundingStep(ctx, me, c.quote, quoteIn, c.quoteSymbol, 'approve-quote', rawOnly, summarize)
-    if (pre) return out(pre)
+    if (pre) return out(pre.success ? { ...pre, ...notes.skipped(follow) } : pre)
     const sim = await simulate(ctx, me, ctx.pad, PAD_ABI, 'buy', [token, quoteIn, 0n])
     if (sim.failed) return out({ success: false, step: 'buy', ...sim.failed })
     const minOut = minOf(sim.result, slippage)
-    return out(step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, quoteIn, minOut] }) }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, quoteIn, minOut] }) }, {
       ...extra(sim.result, minOut), curveFeePct: (await feesOf(ctx)).curveFeePct,
       note: 'spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap the excess is refunded',
-    }, rawOnly, summarize))
+    }, 'buy', await priced(sim.result)))
   }
 
   if (sub === 'sell') {
@@ -454,7 +468,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         return out(await poolTrade(ctx, {
           side: 'sell', token, quote: c.quote, me, amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all'),
           slippage, buyTaxBps: Math.round(c.buyTaxPct * 100), sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler,
-          swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair },
+          swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair, ...notes.pool },
         }, { rawOnly, summarize, revertOf }))
       }
       if (flag('all')) return fail('--all needs a wallet (or --from <addr>) whose balance can be read', { pair: c.pair })
@@ -477,16 +491,16 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const amount = flag('all') ? bal : parseUnits(parseAmount(fail, 'amount', opt('amount')), 18)
     if (amount > bal) fail('amount exceeds balance', { balance: formatUnits(bal, 18) })
     const pre = await fundingStep(ctx, me, token, amount, c.quoteSymbol, 'approve', rawOnly, summarize)
-    if (pre) return out(pre)
+    if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
     const sim = await simulate(ctx, me, ctx.pad, PAD_ABI, 'sell', [token, amount, 0n])
     if (sim.failed) return out({ success: false, step: 'sell', ...sim.failed })
     const minOut = minOf(sim.result, slippage)
-    return out(step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] }) }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'sell', args: [token, amount, minOut] }) }, {
       step: 'sell', chainId: Number(ctx.chainId), token, amount: formatUnits(amount, 18), quote: c.quoteSymbol,
       expectOut: await units(ctx, c.quote, sim.result), minOut: await units(ctx, c.quote, minOut), curveTaxPct: 0,
       ...(c.sellTaxPct > 0 && { poolSellTaxPct: c.sellTaxPct }),
       curveFeePct: (await feesOf(ctx)).curveFeePct, note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
-    }, rawOnly, summarize))
+    }, 'sell'))
   }
 
   if (sub === 'release') {
