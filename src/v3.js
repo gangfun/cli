@@ -5,6 +5,8 @@ import { UA } from './version.js'
 import { walletFor } from './fair.js'
 import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
+import { bondGuard } from './bond.js'
+import { splitterOf } from './buyback.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -274,7 +276,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const taxNote = c.buyTaxPct > 0 || c.sellTaxPct > 0
       ? `buy ${c.buyTaxPct}% / sell ${c.sellTaxPct}% tax only in the PancakeSwap pool after graduation (${fees.platformTaxPct}% of volume to the platform, then ${c.dividendPct}% of the rest to holders, the remainder to the recipient); curve trades pay only the ${fees.curveFeePct}% fee, no tax`
       : `untaxed; curve trades pay the ${fees.curveFeePct}% fee`
-    return out({ success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }) })
+    // a recipient that is the dev's buy-back splitter: its ratio and what waits to be bought back
+    const buyback = c.recipient && !c.recipientIsCreator ? await splitterOf(ctx.read, c.recipient) : null
+    return out({ success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }) })
   }
 
   if (sub === 'status') {
@@ -472,6 +476,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
           side: 'sell', token, quote: c.quote, me, amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all'),
           slippage, buyTaxBps: Math.round(c.buyTaxPct * 100), sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler,
           swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair, ...notes.pool },
+          bond: { testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first') },
         }, { rawOnly, summarize, revertOf }))
       }
       if (flag('all')) return fail('--all needs a wallet (or --from <addr>) whose balance can be read', { pair: c.pair })
@@ -493,6 +498,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (bal === 0n) fail('no balance to sell')
     const amount = flag('all') ? bal : parseUnits(parseAmount(fail, 'amount', opt('amount')), 18)
     if (amount > bal) fail('amount exceeds balance', { balance: formatUnits(bal, 18) })
+    // a bond posted on the curve already binds: a creator's curve sell below X breaks it
+    const guard = await bondGuard(ctx, { token, me, amount, testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first') }, rawOnly, summarize)
+    if (guard?.refuse) return out({ success: false, step: 'sell', wallet: me, ...guard.refuse })
     const pre = await fundingStep(ctx, me, token, amount, c.quoteSymbol, 'approve', rawOnly, summarize)
     if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
     const sim = await simulate(ctx, me, ctx.pad, PAD_ABI, 'sell', [token, amount, 0n])
@@ -502,7 +510,8 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       step: 'sell', chainId: Number(ctx.chainId), token, amount: formatUnits(amount, 18), quote: c.quoteSymbol,
       expectOut: await units(ctx, c.quote, sim.result), minOut: await units(ctx, c.quote, minOut), curveTaxPct: 0,
       ...(c.sellTaxPct > 0 && { poolSellTaxPct: c.sellTaxPct }),
-      curveFeePct: (await feesOf(ctx)).curveFeePct, note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
+      curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info,
+      note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
     }, 'sell'))
   }
 
