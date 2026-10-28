@@ -17,9 +17,10 @@ import { bawAddress } from './baw.js'
 
 // script/DeployGangBond.s.sol. Testnet: 2026-10-29, block 139463214, over the set-10 pad — the audited version (two-step
 // settle, one buy-back chunk per 4 minutes; earlier testnet versions: 0x587f…5d7E after the pair only, 0x5a99…d716
-// without the refund notice, 0xB034…EBE3 before the audit; docs/TESTNET-GANG-BOND-2026-10-28.md). Mainnet: not deployed
-// yet (GANG_BOND overrides either)
-export const MAINNET_BOND = null
+// without the refund notice, 0xB034…EBE3 before the audit; docs/TESTNET-GANG-BOND-2026-10-28.md). Mainnet: 2026-10-29,
+// block 130335965, over the live pad 0x15CF…4365, same code (docs/MAINNET-GANG-BOND-2026-10-29.md). GANG_BOND /
+// GANG_TESTNET_BOND override either
+export const MAINNET_BOND = '0xf26F33432E33FcE615abf3801ca0c91D1C62C817'
 export const TESTNET_BOND = '0xd6a8dd5d1E6641a34A255f25Db2B3ED397CB1086'
 
 export const BOND_ABI = parseAbi([
