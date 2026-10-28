@@ -3,7 +3,7 @@ import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, noteFlagError, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
@@ -227,19 +227,16 @@ async function positionOf(ctx, token, me, sale, slippage) {
 }
 
 /**
- * Entry for `gang fair <sub>`. io: { args, opt, flag, out, fail, summarize } from index.js
- * (summarize = summarizePreview, so previews look like every other command's).
+ * Entry for `gang fair <sub>`. io: { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes } from
+ * index.js (summarize = summarizePreview, so previews look like every other command's; notes = padNotes: --note).
  */
 const SUBS = ['list', 'info', 'status', 'create', 'mint', 'withdraw', 'buy', 'sell', 'claim', 'tx']
 /** withdraw reverts below the preview minus this (bps): it catches an exit fee coming back (≥ 1%). */
 const WITHDRAW_TOLERANCE_BPS = 10n
 const USAGE = 'usage: gang fair <list|info|status|create|mint|withdraw|buy|sell|claim|tx> [--testnet] — see gang help'
 
-export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta }) {
+export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes }) {
   if (!SUBS.includes(sub)) return fail(USAGE, { got: sub ?? null })
-  // agent notes are matched to curve trades / creates on the server; fair-mint txs are not indexed there yet
-  const noteError = noteFlagError(flag, 'gang fair', 'a fair-mint tx')
-  if (noteError) return fail(noteError)
   const testnet = flag('testnet')
   const rawOnly = flag('calldata')
   if (sub === 'list') {
@@ -311,7 +308,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const need = sharePrice * BigInt(devShares) + fee
     const me = walletFor(ctx, opt('from'))
     const pre = await fundingStep(ctx, me, quote, need, sym, rawOnly, summarize)
-    if (pre) return out(pre)
+    if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
     // logoURI is permanent on-chain: same handling as `gang create` (--logo file upload, other hosts copied to gang.fun).
     // Done after the setup steps so a wrap / approve round does not upload the image twice.
     const createData = (logoURI, metaURI) => encodeFunctionData({
@@ -323,14 +320,14 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
     const data = createData(logo.logoURI, meta.metaURI)
-    return out(step(ctx, { from: me, to: ctx.pad, data }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata, quote: sym || quote,
       raise: await units(ctx, quote, raiseQuote), sharePrice: await units(ctx, quote, sharePrice),
       capShares: cfg.capBps * 2, minWallets: Math.ceil(10_000 / (cfg.capBps * 2)), holdPct, mintFeePct, exitFeePct, devShares,
       devCost: await units(ctx, quote, need),
       note: 'no deadline: the sale stays open until all 10,000 shares are minted, then launches. Minters can sell shares back at the mint price (minus the exit fee; none after 7 days without progress, i.e. fewer than 10 new shares). The mint fee is the platform\'s and is not returned.',
-    }, rawOnly, summarize))
+    }, 'create'))
   }
 
   if (sub === 'mint') {
@@ -368,14 +365,14 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
       const data = encodeFunctionData({ abi: ROUTER_ABI, functionName: 'fairMintBNB', args: [token, accepted, BigInt(minShares), routerDeadline()] })
       const dry = await dryRun(ctx, me, ctx.router, data, need)
       if (dry) return out({ success: false, step: 'mint', via: 'router', ...dry })
-      return out(step(ctx, { from: me, to: ctx.router, data, value: need }, { ...extra, via: 'router', payBnb: formatUnits(need, 18) }, rawOnly, summarize))
+      return out(notes.step(ctx, { from: me, to: ctx.router, data, value: need }, { ...extra, via: 'router', payBnb: formatUnits(need, 18) }, 'buy'))
     }
     const pre = await fundingStep(ctx, me, sale.quote, need, sale.quoteSymbol, rawOnly, summarize)
-    if (pre) return out(pre)
+    if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
     const data = encodeFunctionData({ abi: PAD_ABI, functionName: 'mint', args: [token, accepted, BigInt(minShares)] })
     const dry = await dryRun(ctx, me, ctx.pad, data)
     if (dry) return out({ success: false, step: 'mint', ...dry })
-    return out(step(ctx, { from: me, to: ctx.pad, data }, extra, rawOnly, summarize))
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data }, extra, 'buy'))
   }
 
   if (sub === 'withdraw') {
@@ -400,7 +397,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const data = encodeFunctionData({ abi: PAD_ABI, functionName: 'withdraw', args: [token, BigInt(shares), minPayout] })
     const dry = await dryRun(ctx, me, ctx.pad, data)
     if (dry) return out({ success: false, step: 'withdraw', ...dry })
-    return out(step(ctx, { from: me, to: ctx.pad, data }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data }, {
       step: 'withdraw', chainId: Number(ctx.chainId), token, shares,
       receive: await units(ctx, sale.quote, payout), minReceive: await units(ctx, sale.quote, minPayout),
       exitFee: await units(ctx, sale.quote, fee), quote: sale.quoteSymbol,
@@ -408,7 +405,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
       note: sale.stale
         ? `no progress for 7 days: no exit fee, the full mint price back; the ${sale.mintFeePct}% paid at mint is not returned`
         : `mint price − ${sale.exitFeeNowPct}% exit fee (none after 7 days without 10 new shares); the ${sale.mintFeePct}% paid at mint is not returned`,
-    }, rawOnly, summarize))
+    }, 'sell'))
   }
 
   if (sub === 'buy' || sub === 'sell') {
@@ -461,7 +458,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
       side: sub, token, quote: sale.quote, me, slippage, buyTaxBps: Number(buyTaxBps), sellTaxBps: Number(sellTaxBps), handler,
       amount: sub === 'sell' && flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: sub === 'sell' && flag('all'),
       swapBackGas: Number(sellTaxBps) > 0, payBnb: sub === 'buy' && poolPayBnb(ctx, sale.quote, flag), toBnb: flag('to-bnb'),
-      base: { kind: 'fair', pair: sale.pair, ...(outWarning && { ...outWarning, confirmedOut: true }) },
+      base: { kind: 'fair', pair: sale.pair, ...notes.pool, ...(outWarning && { ...outWarning, confirmedOut: true }) },
     }, { rawOnly, summarize, revertOf }))
   }
 

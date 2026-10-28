@@ -2,7 +2,7 @@
  * Follow trades: a buy that names the note it follows (follow ref in the calldata, see notes.js).
  * gang.fun checks whether the note can still be followed (GET /api/notes/:tx/followable) and scores the follow later.
  */
-import { formatEther } from 'viem'
+import { formatUnits } from 'viem'
 import { API } from './discover.js'
 import { fetchError, statusError, why } from './logo.js'
 import { UA } from './version.js'
@@ -63,15 +63,18 @@ export function checkFollow(noteTx, trader, token) {
   })
 }
 
+// gang.fun's token page per track: Soft (BNB), the LaunchpadV2 family, GangLaunchpad V3
+const TRACK_PATH = { soft: '/tokens', v2: '/stocks/tokens', v3: '/v3/tokens' }
+
 /**
- * Rough USD value of paying `wei` of the token's quote (BNB on Soft), from gang.fun's prices; null if unknown.
- * Best effort with a short timeout: it only decides whether the preview warns, never whether it's made.
+ * Rough USD value of paying `wei` of the token's quote (BNB on Soft; `decimals` of the quote), from gang.fun's prices;
+ * null if unknown. Best effort with a short timeout: it only decides whether the preview warns, never whether it's made.
  */
-export async function amountUsd(token, soft, wei) {
+export async function amountUsd(token, track, wei, decimals = 18) {
   try {
-    const { status, body } = await getJson(`${soft ? '/tokens' : '/stocks/tokens'}/${token.toLowerCase()}`, 3_000)
-    const unit = Number(soft ? body?.bnbUsd : body?.quoteUsd)
-    const usd = Number(formatEther(wei)) * unit
+    const { status, body } = await getJson(`${TRACK_PATH[track]}/${token.toLowerCase()}`, 3_000)
+    const unit = Number(track === 'soft' ? body?.bnbUsd : body?.quoteUsd)
+    const usd = Number(formatUnits(wei, decimals)) * unit
     if (status !== 200 || !Number.isFinite(usd) || !(unit > 0)) return null
     // cents above $1; two significant digits below, so a tiny buy doesn't read as $0
     return usd >= 1 ? Math.round(usd * 100) / 100 : Number(usd.toPrecision(2))

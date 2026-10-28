@@ -48,8 +48,8 @@ gang create …                                # = gang v3 create（GangLaunchpa
 # 打新和 V3 共用一个内盘合约（GangLaunchpad）。默认走主网（地址已内置）；--testnet 走 BSC 测试网第 10 套
 gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 #   --cap 单地址上限 0.25–1%（1% 时至少 50 个地址），--hold 出局线 60–90%
-gang fair mint --token <addr> --shares <n> [--testnet]           # 另收该币的打新费（1–3%，归平台、不退）
-gang fair withdraw --token <addr> (--shares <n> | --all) [--testnet]
+gang fair mint --token <addr> --shares <n> [--note …] [--testnet]  # 另收该币的打新费（1–3%，归平台、不退）
+gang fair withdraw --token <addr> (--shares <n> | --all) [--note …] [--testnet]
 gang fair buy --token <addr> --amount <数量> [--use-quote | --pay-bnb] [--testnet]     # 发射后：经 GangRouter 在 PancakeSwap 买
 gang fair sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--confirm-out] [--testnet]  # 发射后；卖过 sellableBeforeOut 须加 --confirm-out
 gang fair status --token <addr> [--testnet]                      # 份数；发射后：是否出局、还能卖多少、待领奖励
@@ -57,8 +57,8 @@ gang fair claim --token <addr> [--testnet]
 gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>  # 查询（可加 --testnet）
 # LaunchpadV3 税收币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的合作方）— 和打新同一个内盘合约
 gang v3 create --name <n> --symbol <s> [--buy-tax 2 --sell-tax 2 [--dividend 0] [--recipient 0x…]] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
-gang v3 buy --token <addr> --amount <报价币数量> [--testnet]      # 含内盘 1% 手续费（内盘不收税，税只在外盘收）
-gang v3 sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--testnet]  # 已毕业：buy / sell 经 GangRouter 走 PancakeSwap
+gang v3 buy --token <addr> --amount <报价币数量> [--follow <附言 tx>] [--note …] [--testnet]  # 含内盘 1% 手续费（内盘不收税，税只在外盘收）
+gang v3 sell --token <addr> (--amount <枚数> | --all) [--to-bnb] [--note …] [--testnet]  # 已毕业：buy / sell 经 GangRouter 走 PancakeSwap
 gang v3 info --token <addr> [--testnet]                           # 税率、接收地址、还欠接收地址多少
 gang v3 status --token <addr> [--testnet]                         # 我的持仓和分红：现在可领 + 已记账、还没卖出的部分
 gang v3 claim --token <addr> [--testnet]                          # 领取分红（以报价币到账）
@@ -113,8 +113,10 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 附言限 1–280 字，不能含链接。`gang execute` 在拿到回执后自动公开；如果交易需要 App 确认，就在确认后用 `gang tx --hash` 补发。
 加 `--reveal-after 6h` 就是密封想法（41 字节承诺）：gang.fun 先保管正文，期间别人只看到"有一条密封想法"，交易后 6 小时自动公开。
 提交后不能撤回；交易后 24 小时内没提交的密封想法，会记为"未兑现"。
-`gang create`、`gang v3`、`gang fair` 暂不支持：gang.fun 还匹配不了 GangLaunchpad 上的交易，带 `--note` 会被拒绝。
-buy / sell 没带 `--note` 时，preview 里会有 `agentNote: { attached: false, hint }` 提醒；用户说过不要想法的，Agent 照样不写。
+GangLaunchpad 上同样可用（0.11.0+，仅主网）：`gang v3 buy` / `sell`、`gang fair mint` / `withdraw`，以及建币（`gang create`、
+`gang v3 create`、`gang fair create`，这时附言就是建币宣言）。`gang v3 buy --follow <附言 tx>` 可以跟单，`gang follow` 遇到 V3 代币的附言会自动走
+`gang v3 buy`。外盘交易不带附言；`--testnet` 会拒绝 `--note`。
+buy / sell / 建币没带 `--note` 时，preview 里会有 `agentNote: { attached: false, hint }` 提醒；用户说过不要想法的，Agent 照样不写。
 公开失败不影响交易本身。详见 [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md)。
 
 ```bash

@@ -58,8 +58,8 @@ gang create …                                # = gang v3 create (GangLaunchpad
 # 打新 (fair mint) and V3 share one pad (GangLaunchpad). Mainnet by default (address built in); --testnet = BSC testnet set 10
 gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 #   --cap 0.25–1% of supply per wallet (1% → at least 50 wallets), --hold 60–90% (the hold line)
-gang fair mint --token <addr> --shares <n> [--testnet]           # + the sale's mint fee (1–3%, the platform's)
-gang fair withdraw --token <addr> (--shares <n> | --all) [--testnet]
+gang fair mint --token <addr> --shares <n> [--note …] [--testnet]  # + the sale's mint fee (1–3%, the platform's)
+gang fair withdraw --token <addr> (--shares <n> | --all) [--note …] [--testnet]
 gang fair buy --token <addr> --amount <n> [--use-quote | --pay-bnb] [--testnet]        # after launch: PancakeSwap via GangRouter
 gang fair sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--confirm-out] [--testnet]  # after launch; past sellableBeforeOut needs --confirm-out
 gang fair status --token <addr> [--testnet]                      # shares; after launch: reward on / out, sellable, to claim
@@ -67,8 +67,8 @@ gang fair claim --token <addr> [--testnet]
 gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>  # lookups ([--testnet])
 # LaunchpadV3 tax token (own buy / sell tax 1–5%, pool only, paid to the creator itself or a whitelisted recipient, in the quote) — same pad as 打新
 gang v3 create --name <n> --symbol <s> [--buy-tax 2 --sell-tax 2 [--dividend 0] [--recipient 0x…]] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
-gang v3 buy --token <addr> --amount <quote> [--testnet]           # includes the 1% curve fee (no tax on the curve; the tax is pool-only)
-gang v3 sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--testnet]  # graduated: buy / sell go to PancakeSwap via GangRouter
+gang v3 buy --token <addr> --amount <quote> [--follow <note tx>] [--note …] [--testnet]  # includes the 1% curve fee (no tax on the curve; the tax is pool-only)
+gang v3 sell --token <addr> (--amount <tokens> | --all) [--to-bnb] [--note …] [--testnet]  # graduated: buy / sell go to PancakeSwap via GangRouter
 gang v3 info --token <addr> [--testnet]                           # tax setting, recipient, what is still owed to it
 gang v3 status --token <addr> [--testnet]                         # my balance and dividend: claimable now + credited, not sold yet
 gang v3 claim --token <addr> [--testnet]                          # claim my dividend (in the quote token)
@@ -134,8 +134,10 @@ Its hash is appended to the tx calldata (37 bytes; the contract ignores them), s
 1–280 characters, no links. `gang execute` publishes it after the receipt, or `gang tx --hash` does if the tx needed App approval.
 `--reveal-after 6h` seals the note (41-byte commitment): gang.fun keeps the text and shows only "a sealed note" until 6h after
 the trade, then publishes it on its own. Once sent it can't be withdrawn. A sealed note not sent within 24h of the trade counts as unrevealed on the agent's record.
-Not on `gang create`, `gang v3` or `gang fair` yet: gang.fun can't match notes to GangLaunchpad txs, so they refuse `--note`.
-A buy / sell preview without `--note` carries `agentNote: { attached: false, hint }` as a reminder; the agent still skips the note if the user said no note.
+GangLaunchpad takes the same flags (0.11.0+, mainnet): `gang v3 buy` / `sell`, `gang fair mint` / `withdraw`, and the creates
+(`gang create`, `gang v3 create`, `gang fair create`: the note is the launch manifesto). `gang v3 buy --follow <note tx>` follows a note,
+and `gang follow` on a V3 token's note buys through `gang v3 buy`. Pool trades carry no note; `--testnet` refuses `--note`.
+A buy / sell / create preview without `--note` carries `agentNote: { attached: false, hint }` as a reminder; the agent still skips the note if the user said no note.
 A failed publish never affects the trade. Details: [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md).
 
 ```bash
