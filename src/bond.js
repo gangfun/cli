@@ -15,11 +15,12 @@ import { bawAddress } from './baw.js'
  * Env: GANG_BOND (mainnet), GANG_TESTNET_BOND (testnet) override the addresses below.
  */
 
-// script/DeployGangBond.s.sol. Testnet: 2026-10-28, block 139374309, over the set-10 pad — bonds from create on, refunds
-// asked for by the creator with a 3-day notice (earlier testnet versions: 0x587f…5d7E after the pair only, 0x5a99…d716
-// without the notice; docs/TESTNET-GANG-BOND-2026-10-28.md). Mainnet: not deployed yet (GANG_BOND overrides either)
+// script/DeployGangBond.s.sol. Testnet: 2026-10-29, block 139463214, over the set-10 pad — the audited version (two-step
+// settle, one buy-back chunk per 4 minutes; earlier testnet versions: 0x587f…5d7E after the pair only, 0x5a99…d716
+// without the refund notice, 0xB034…EBE3 before the audit; docs/TESTNET-GANG-BOND-2026-10-28.md). Mainnet: not deployed
+// yet (GANG_BOND overrides either)
 export const MAINNET_BOND = null
-export const TESTNET_BOND = '0xB034cFeb81Cbd29EE3d0CD6a0885766B6F10EBE3'
+export const TESTNET_BOND = '0xd6a8dd5d1E6641a34A255f25Db2B3ED397CB1086'
 
 export const BOND_ABI = parseAbi([
   'function post(address token, uint256 amount, uint256 holdAmount, uint64 duration) payable',
@@ -28,11 +29,12 @@ export const BOND_ABI = parseAbi([
   'function extend(address token, uint64 by)',
   'function start(address token)',
   'function report(address token)',
+  'function requestSettle(address token)',
   'function settle(address token)',
   'function requestRefund(address token)',
   'function refund(address token)',
   'function burnChunk(address token, uint256 minTokensOut) returns (uint256 quoteIn, uint256 burned)',
-  'function bondOf(address token) view returns ((address creator, uint64 postedAt, uint32 round, address quote, uint8 state, uint64 deadline, uint64 duration, uint64 refundAt, uint128 amount, uint128 holdAmount, uint128 burnLeft))',
+  'function bondOf(address token) view returns ((address creator, uint64 postedAt, uint32 round, address quote, uint8 state, uint64 deadline, uint64 duration, uint64 requestAt, uint128 amount, uint128 holdAmount, uint128 burnLeft))',
   'function isViolated(address token) view returns (bool)',
   'function isLive(address token) view returns (bool)',
   'function dumpValue(address token) view returns (uint256)',
@@ -42,12 +44,14 @@ export const BOND_ABI = parseAbi([
   'function previewBurn(address token) view returns (bool ready, uint256 quoteIn, uint256 tokensOut)',
   'function MIN_DURATION() view returns (uint64)', 'function MAX_DURATION() view returns (uint64)',
   'function REPORTER_BPS() view returns (uint256)', 'function MAX_WAIT() view returns (uint64)', 'function REFUND_NOTICE() view returns (uint64)',
+  'function SETTLE_DELAY() view returns (uint64)', 'function CHUNK_GAP() view returns (uint64)',
   'event BondPosted(address indexed token, address indexed creator, uint32 round, address quote, uint256 amount, uint256 holdAmount, uint64 duration, uint64 deadline)',
   'event BondStarted(address indexed token, uint32 round, uint64 deadline)',
   'event BondToppedUp(address indexed token, uint32 round, uint256 added, uint256 amount)',
   'event HoldRaised(address indexed token, uint32 round, uint256 holdAmount)',
   'event BondExtended(address indexed token, uint32 round, uint64 duration, uint64 deadline)',
   'event BondReported(address indexed token, uint32 round, address indexed reporter, uint256 balance, uint256 reward, uint256 burnLeft)',
+  'event SettleRequested(address indexed token, uint32 round, uint64 settleAt)',
   'event BondSettled(address indexed token, uint32 round, address indexed creator, uint256 amount)',
   'event RefundRequested(address indexed token, uint32 round, uint64 refundAt)',
   'event BondRefunded(address indexed token, uint32 round, address indexed creator, uint256 amount)',
@@ -55,7 +59,8 @@ export const BOND_ABI = parseAbi([
   'error ZeroAddress()', 'error UnknownToken()', 'error NotTradable()', 'error NotCreator()', 'error BondLive()',
   'error NotActive()', 'error ZeroAmount()', 'error BadDuration()', 'error BadHold()', 'error BadValue()',
   'error FeeOnTransferQuote()', 'error NotViolated()', 'error Violated()', 'error NotDue()', 'error NothingToBurn()',
-  'error BurnedThisBlock()', 'error Slippage()', 'error FlashSwapActive()', 'error AlreadyLive()', 'error AlreadyRequested()', 'error NoRefundRequest()',
+  'error BurnTooSoon()', 'error Slippage()', 'error FlashSwapActive()', 'error AlreadyLive()', 'error AlreadyRequested()', 'error NoRefundRequest()',
+  'error NoSettleRequest()',
   'error SafeCastOverflowedUintDowncast(uint8 bits, uint256 value)', 'error SafeERC20FailedOperation(address token)',
 ])
 
@@ -78,19 +83,21 @@ const HINTS = {
   FeeOnTransferQuote: 'the quote takes a fee on transfer: it cannot be used for a bond',
   NotViolated: 'the creator still holds at least X: nothing to report',
   Violated: 'the creator holds less than X: the bond cannot be settled or refunded, only reported',
+  NoSettleRequest: 'ask to settle first (gang bond settle asks; it runs 1 hour later)',
   AlreadyLive: 'the token reached its pair: the bond runs (gang bond start) instead of being refunded',
-  AlreadyRequested: 'a refund is already requested: it can run once its 3-day notice is over',
+  AlreadyRequested: 'already requested: a refund runs once its 3-day notice is over, a settle 1 hour after its request',
   NoRefundRequest: 'request the refund first (gang bond refund asks for it; it runs 3 days later)',
-  NotDue: 'the deadline has not passed yet',
+  NotDue: 'not due yet: the deadline, the refund notice or the 1-hour settle wait has not passed',
   NothingToBurn: 'no slashed bond with buy-back left on this token',
-  BurnedThisBlock: 'a chunk was already bought for this token in this block: try the next block',
+  BurnTooSoon: 'a chunk was bought for this token less than 4 minutes ago: one chunk per 4 minutes',
   Slippage: 'the buy-back would burn fewer tokens than the minimum: the price moved, re-run',
-  FlashSwapActive: 'the token\'s pair is mid flash swap: settle cannot count tokens borrowed from it; send settle in its own tx',
+  FlashSwapActive: 'the token\'s pair is mid flash swap: settle cannot count tokens borrowed from it; send it in its own tx',
 }
 
 const STATES = ['none', 'active', 'slashed', 'settled', 'refunded']
 const MAX_WAIT = 30 * 86_400 // GangBond.MAX_WAIT
 const REFUND_NOTICE = 3 * 86_400 // GangBond.REFUND_NOTICE
+const SETTLE_DELAY = 3_600 // GangBond.SETTLE_DELAY
 const BPS = 10_000n
 const TOTAL_SUPPLY = 1_000_000_000n * 10n ** 18n
 const DAY = 86_400
@@ -194,12 +201,12 @@ async function bondView(ctx, token, m) {
         ...(m.live
           ? { note: `the token is on its pair: anyone can start the clock (gang bond start --token ${token}); any other bond write starts it too` }
           : { refundRequestFrom: new Date(refundAt * 1000).toISOString(), coverageNote: 'no coverage before the pair: shown once it trades on PancakeSwap' }),
-        ...(b.refundAt !== 0n && !m.live && {
-          refundRequested: true, refundRunsAt: new Date(Number(b.refundAt) * 1000).toISOString(),
+        ...(b.requestAt !== 0n && !m.live && {
+          refundRequested: true, refundRunsAt: new Date(Number(b.requestAt) * 1000).toISOString(),
           refundNote: 'the creator asked for the bond back: it can be withdrawn from refundRunsAt if the token still has no pair; the promise binds until then, and graduation / launch cancels the request',
         }),
         ...violatedNote,
-        ...(!violated && !m.live && raw.now >= refundAt && b.refundAt === 0n && { note: `no pair within 30 days of the post and X is held: the creator can ask for the bond back (gang bond refund --token ${token}); it runs 3 days later` }),
+        ...(!violated && !m.live && raw.now >= refundAt && b.requestAt === 0n && { note: `no pair within 30 days of the post and X is held: the creator can ask for the bond back (gang bond refund --token ${token}); it runs 3 days later` }),
       })
       return { ...v, _raw: raw }
     }
@@ -208,12 +215,20 @@ async function bondView(ctx, token, m) {
       ctx.read(ctx.bond, BOND_ABI, 'coverageBps', [token]),
     ])
     const left = Number(b.deadline) - now
+    const settleAt = Number(b.requestAt)
     Object.assign(v, {
       phase: 'running', violated, dumpValue: q(dump), coveragePct: cov === MAX_UINT ? null : pctOfBps(cov), tier: tierOf(cov), tierNote: TIER_NOTE[tierOf(cov)],
       toFullCover: dump > b.amount ? q(dump - b.amount) : '0',
       ...(left > 0 ? { secondsLeft: left, daysLeft: Math.round((left / DAY) * 10) / 10 } : { pastDeadline: true }),
       ...violatedNote,
-      ...(!violated && left <= 0 && { note: `past the deadline and X is held: anyone can settle it (gang bond settle --token ${token}); the bond goes back to the creator. Until then it can still be reported if the balance drops below X` }),
+      ...(settleAt !== 0 && { settleRequested: true, settleRunsAt: new Date(settleAt * 1000).toISOString() }),
+      ...(!violated && left <= 0 && {
+        note: settleAt === 0
+          ? `past the deadline and X is held: anyone can settle it in two steps (gang bond settle --token ${token} asks; run it again 1 hour later and the bond goes back to the creator). X must still be held then; until then it can be reported if the balance drops below X`
+          : now < settleAt
+            ? `settle asked for: it runs from settleRunsAt if X is still held then; until then it can be reported if the balance drops below X`
+            : `settle is due: gang bond settle --token ${token} returns the bond to the creator (X must still be held)`,
+      }),
     })
     Object.assign(raw, { dump, cov })
   }
@@ -227,7 +242,7 @@ async function bondView(ctx, token, m) {
           ? 'slashed before the pair and still no pair 30 days after the post: gang bond burn --token … sends the rest to 0xdead as quote'
           : `slashed before the pair: the buy-back starts once the token ${m.kind === 'v3' ? 'graduates' : 'launches'}; if it has not by ${new Date((Number(b.postedAt) + MAX_WAIT) * 1000).toISOString()}, the rest goes to 0xdead as quote`,
       }),
-      ...(b.burnLeft > 0n && m.live && { nextChunk: ready ? { quoteIn: q(quoteIn), tokensOut: tokens(tokensOut) } : null, nextChunkNote: ready ? 'gang bond burn --token … buys this chunk now' : 'not ready: the first call after a slash records a price observation, then the buy-back waits 10 minutes and skips while the price is more than 2% above its average (after 20 minutes without a call it starts over)' }),
+      ...(b.burnLeft > 0n && m.live && { nextChunk: ready ? { quoteIn: q(quoteIn), tokensOut: tokens(tokensOut) } : null, nextChunkNote: ready ? 'gang bond burn --token … buys this chunk now' : 'not ready: the first call after a slash records a price observation, then the buy-back waits 10 minutes and skips while the price is more than 2% above its average (after 20 minutes without a call it starts over); at most one chunk per 4 minutes' }),
     })
   }
   return { ...v, _raw: raw }
@@ -350,7 +365,7 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
     if (!same(me(), b.creator)) return fail('only the creator can ask for its bond back', { wallet: me(), creator: b.creator })
     if (!raw.pending || m.live) return fail(HINTS.AlreadyLive, { deadline: view.deadline })
     if (view.violated) return fail(HINTS.Violated, { creatorBalance: view.creatorBalance, holdTokens: view.holdTokens })
-    if (b.refundAt === 0n) {
+    if (b.requestAt === 0n) {
       const requestAt = Number(b.postedAt) + MAX_WAIT
       if (raw.now < requestAt) return fail('a refund can be asked for only 30 days after the post without a pair', { refundRequestFrom: view.refundRequestFrom, secondsLeft: requestAt - raw.now })
       const sim = await simulate(ctx, me(), 'requestRefund', [token])
@@ -360,7 +375,7 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
         note: 'step 1 of 2: starts a 3-day notice (shown on gang.fun). Keep holding X: a breach can still be reported, and if the token graduates / launches meanwhile the request is void and the clock starts. Then run gang bond refund again',
       }))
     }
-    if (raw.now < Number(b.refundAt)) return fail('the refund notice is not over yet', { refundRunsAt: view.refundRunsAt, secondsLeft: Number(b.refundAt) - raw.now })
+    if (raw.now < Number(b.requestAt)) return fail('the refund notice is not over yet', { refundRunsAt: view.refundRunsAt, secondsLeft: Number(b.requestAt) - raw.now })
     const sim = await simulate(ctx, me(), 'refund', [token])
     if (sim.failed) return out({ success: false, step: 'refund', ...sim.failed })
     return out(send('refund', [token], { step: 'refund', refund: view.bond, quote: view.quote, note: 'step 2 of 2: no pair after the notice, X held: the bond comes back to you (not counted as honored)' }))
@@ -375,9 +390,19 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
     }
     if (raw.now < Number(b.deadline)) return fail(HINTS.NotDue, { deadline: view.deadline, secondsLeft: Number(b.deadline) - raw.now })
     if (view.violated) return fail(HINTS.Violated, { creatorBalance: view.creatorBalance, holdTokens: view.holdTokens, hint: `gang bond report --token ${token}${net}` })
+    // two steps, anyone: ask (X held now), then settle 1 hour later (X held again) — so X can't be met for one tx only
+    if (b.requestAt === 0n) {
+      const sim = await simulate(ctx, me(), 'requestSettle', [token])
+      if (sim.failed) return out({ success: false, step: 'request-settle', ...sim.failed })
+      return out(send('requestSettle', [token], {
+        step: 'request-settle', creator: b.creator, bond: view.bond, quote: view.quote, settleRunsAbout: new Date((raw.now + SETTLE_DELAY) * 1000).toISOString(),
+        note: 'step 1 of 2: the bond can be settled 1 hour after this lands, if the creator still holds X then; until then a drop below X can be reported. Then run gang bond settle again',
+      }))
+    }
+    if (raw.now < Number(b.requestAt)) return fail('the settle wait is not over yet', { settleRunsAt: view.settleRunsAt, secondsLeft: Number(b.requestAt) - raw.now })
     const sim = await simulate(ctx, me(), 'settle', [token])
     if (sim.failed) return out({ success: false, step: 'settle', ...sim.failed })
-    return out(send('settle', [token], { step: 'settle', creator: b.creator, refund: view.bond, quote: view.quote, note: 'the bond goes back to the creator, whoever sends this' }))
+    return out(send('settle', [token], { step: 'settle', creator: b.creator, refund: view.bond, quote: view.quote, note: 'step 2 of 2: the bond goes back to the creator, whoever sends this' }))
   }
 
   if (sub === 'burn') {
@@ -394,7 +419,7 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
       step: 'burn', burnLeft: view.burnLeft, quote: view.quote,
       ...(toDead ? { quoteToDead: qf(quoteIn), note: 'slashed before the pair and still no pair 30 days after the post: the rest goes to 0xdead as quote' }
         : ready ? { chunkQuoteIn: qf(quoteIn), expectBurnTokens: tokens(tokensOut), minBurnTokens: tokens(minOut), slippagePct: slippage }
-        : { note: 'no chunk this time: the call records the price observation (first call after a slash) or waits for the 10-minute average / a price no more than 2% above it. It is cheap; the platform keeper also calls it every 10 minutes. If a chunk becomes buyable before it lands, it reverts (Slippage) rather than buy without a minimum: re-run then' }),
+        : { note: 'no chunk this time: the call records the price observation (first call after a slash) or waits for the 10-minute average / a price no more than 2% above it. It is cheap; the platform keeper also calls it every 5 minutes (one chunk per 4 minutes at most). If a chunk becomes buyable before it lands, it reverts (Slippage) rather than buy without a minimum: re-run then' }),
     }))
   }
 
@@ -515,7 +540,8 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
  * bond, not the creator), else one of:
  * - { refuse: {…} } — the sell would leave less than X before the deadline (no --break-bond), or after the deadline
  *   before settle (no --settle-first): print it as the failure;
- * - { settleStep: {…} } — --settle-first after the deadline: send this settle first, then re-run the sell;
+ * - { settleStep: {…} } — --settle-first after the deadline: send this step first (ask to settle, or settle once the
+ *   1-hour wait is over), then re-run the sell;
  * - { info: {…} } — go on, with these fields added to the preview (headroom after the sell, or the --break-bond warning).
  */
 export async function bondGuard(ctx, p, rawOnly, summarize) {
@@ -549,10 +575,18 @@ export async function bondGuard(ctx, p, rawOnly, summarize) {
   const net = p.testnet ? ' --testnet' : ''
   if (pastDeadline && bal >= b.holdAmount) {
     if (!p.settleFirst) {
-      return { refuse: { error: `the bond is past its deadline but not settled: this sell leaves ${tokens(after)} tokens, below X (${tokens(b.holdAmount)}), and anyone could report it before you settle`, ...base, hint: `run gang bond settle --token ${p.token}${net} first, or add --settle-first to this sell` } }
+      return { refuse: { error: `the bond is past its deadline but not settled: this sell leaves ${tokens(after)} tokens, below X (${tokens(b.holdAmount)}), and anyone could report it before you settle`, ...base, hint: `run gang bond settle --token ${p.token}${net} first (two steps, 1 hour apart), or add --settle-first to this sell` } }
     }
-    const data = encodeFunctionData({ abi: BOND_ABI, functionName: 'settle', args: [p.token] })
-    return { settleStep: step(ctx, { from: p.me, to: addr, data }, { step: 'settle', chainId: Number(ctx.chainId), token: p.token, refund: base.bond, ...base, note: 'settle first (the bond comes back to you); after executing, re-run the same sell' }, rawOnly, summarize) }
+    const now = Number(block.timestamp)
+    if (b.requestAt !== 0n && now < Number(b.requestAt)) {
+      return { refuse: { error: 'settle is asked for but its 1-hour wait is not over: keep X until it runs, then settle and sell', ...base, settleRunsAt: new Date(Number(b.requestAt) * 1000).toISOString(), secondsLeft: Number(b.requestAt) - now } }
+    }
+    const fn = b.requestAt === 0n ? 'requestSettle' : 'settle'
+    const data = encodeFunctionData({ abi: BOND_ABI, functionName: fn, args: [p.token] })
+    const note = fn === 'requestSettle'
+      ? 'ask to settle first (step 1 of 2): 1 hour after it lands, settle (the bond comes back to you) and then sell; keep X until then'
+      : 'settle first (the bond comes back to you); after executing, re-run the same sell'
+    return { settleStep: step(ctx, { from: p.me, to: addr, data }, { step: fn === 'requestSettle' ? 'request-settle' : 'settle', chainId: Number(ctx.chainId), token: p.token, refund: base.bond, ...base, note }, rawOnly, summarize) }
   }
   const lost = formatUnits(b.amount, dec)
   const consequence = `anyone can report it, the reporter takes 1% and the rest of the ${lost} bond buys back and burns the token`
