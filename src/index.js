@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
-  calldata, decodeTx, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
+  calldata, decodeTx, decodeLogs, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
 import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
@@ -15,8 +15,8 @@ import { NOTE_SORTS, AGENT_WINDOWS, AGENT_SORTS, NOTE_EVENTS, noteRow, fetchNote
 import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
 import { rememberPreview, previewFor } from './previews.js'
 import { UA, checkUpdate } from './version.js'
-import { runFair } from './fair.js'
-import { runV3 } from './v3.js'
+import { runFair, FAIR_EVENT_ABIS } from './fair.js'
+import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
 import { MERGED_ERRORS_ABI, kindOf, padNets } from './gangpad.js'
@@ -113,7 +113,7 @@ const fromArg = () => {
   return a
 }
 const FROM_CURVE = '--from only applies to a graduated token (a PancakeSwap trade through GangRouter); curve trades are previewed for the Agentic Wallet: leave --from out'
-const NOT_TESTNET = 'gang buy / gang sell trade the mainnet V2 / Soft / U / S pads only (no testnet deployment): leave --testnet out, or use gang v3 … / gang fair … --testnet'
+const NOT_TESTNET = 'V2 / Soft / U / S tokens trade on mainnet only (no testnet deployment): leave --testnet out (--testnet is for GangLaunchpad V3 / 打新 tokens)'
 
 // --note is validated before any RPC / preview, so a bad note never reaches calldata
 const parseNote = () => {
@@ -149,7 +149,7 @@ const parseLinks = () => {
 const parseFollow = () => {
   if (!flag('follow')) return null
   if (cmd !== 'buy' && !(cmd === 'v3' && args[1] === 'buy')) {
-    fail('--follow only applies to `gang buy` / `gang v3 buy` (or use `gang follow <note tx> --bnb <n>`)')
+    fail('--follow only applies to `gang buy` (or use `gang follow <note tx> --amount <n>`)')
   }
   const tx = opt('follow')
   if (!NOTE_TX.test(tx ?? '')) fail('--follow needs the tx hash of the note to follow (0x + 64 hex)', { got: tx ?? null })
@@ -195,8 +195,16 @@ const followSkipped = (follow) =>
 
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
+One command per action, whatever pad the token is on: buy / sell / info / status / claim / mint / withdraw / release
+read the token's kind (GangLaunchpad kindOf: V3 curve or 打新 sale; otherwise the V2 / Soft / U / S pads) and run that
+kind's trade. Results of V3 / 打新 tokens carry kind: "v3" | "fair". --testnet = BSC testnet GangLaunchpad (V3 / 打新
+only); --calldata prints the raw tx instead of a baw preview; --from <addr> reads / builds for that wallet (V2 / Soft:
+graduated tokens only).
+
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
-  gang list                              tokens across V2 / Soft / U / S
+  gang list [--kind v3|fair [--status …]]
+                                         V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
+                                         (--status minting|launched|all): GangLaunchpad tokens from gang.fun
   gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]
                                          curve tokens ranked by 24h USD volume
   gang new [--limit 10] [--max-age 2h] [--track …]      newest curve tokens first
@@ -211,87 +219,72 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          NDJSON: note (newly followable) / revealed (a sealed note's text went public)
   gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]
                                          note leaderboard: hit rate, calibration score, how their notes were followed
-  gang token --token <addr>              one token (auto-resolves pad)
-  gang quote --token <addr> --bnb <n>    Soft: BNB quote; V2/U/S: quote-token amount (same flag)
-  gang buy --token <addr> --bnb <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
-                                         Soft: payable BNB; V2: wrap BNB→WBNB if short, approve quote, then buy
-                                         graduated: buys in the PancakeSwap pool through GangRouter (see POOL below;
-                                         [--use-quote | --pay-bnb] [--from <addr>] [--calldata]; no --note / --follow)
-  gang follow <note tx> --bnb <n> [--slippage 1] [--note …]
-                                         buy the token that note is about, marked on-chain as following it (= buy --follow;
-                                         a V3 token: = gang v3 buy --follow, --bnb = the quote to spend)
-  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
-                                         graduated: sells into the pool through GangRouter ([--to-bnb] [--from] [--calldata])
+
+  gang info --token <addr>               one token (gang token is the older name). V3: curve, tax setting (taxNote: pool
+                                         only), recipient, what the router still owes it; graduated: swapBack (tax not sold
+                                         yet, the per-block chunk budget, the next chunk). 打新: the sale. V2 / Soft: the curve
+  gang status --token <addr> [--slippage 1]
+                                         my position. V3: balance and dividend (claimable now + tax credited, not sold yet,
+                                         estimate). 打新: my shares; after launch reward on / out, how much I can sell and stay
+                                         in, to claim. Graduated / launched: poolSellAll (what selling my balance into the pool
+                                         pays as of the next block: expectOut / minOut for amountOutMin). V2 / Soft: balance
+  gang quote --token <addr> --amount <n> V2 / Soft / U / S curve buy (Soft: BNB; V2 / U / S: the quote ERC-20). V3 / 打新:
+                                         gang buy simulates the trade and shows expectTokens (nothing sent before gang execute)
+  gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
+                                         --amount = what to spend, in the token's quote (--bnb is the older name of the flag).
+                                         V3 curve: includes the 1% fee (no tax on the curve); WBNB-quoted pays native BNB via
+                                         GangRouter in one tx (--use-wbnb: from WBNB). 打新: after launch only (before it:
+                                         gang mint). Soft: payable BNB; V2: wraps BNB→WBNB if short, approves the quote, then
+                                         buys. Graduated / launched: the PancakeSwap pool through GangRouter (POOL below;
+                                         [--use-quote | --pay-bnb]; no --note / --follow)
+  gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--to-bnb] [--note … [--conf …] [--reveal-after …]]
+                                         on the curve, or (graduated / launched) into the pool through GangRouter. 打新: before
+                                         launch use gang withdraw; after it a sell past status.sellableBeforeOut (ends the
+                                         holder reward for good) is refused unless --confirm-out
+  gang mint --token <addr> --shares <n> [--min-shares <n>] [--use-wbnb]
+                                         打新 before it fills: + the sale's mint fee (the platform's, not returned); WBNB
+                                         sales pay native BNB through GangRouter in one tx (--use-wbnb: from WBNB)
+  gang withdraw --token <addr> (--shares <n> | --all)
+                                         打新: sell shares back before it fills: mint price − exit fee (none once stale)
+  gang claim --token <addr>              V3: my dividend (the quote token); 打新: the holder reward
+  gang release --token <addr>            V3: push a tax payment that failed earlier (anyone may; the recipient gets it)
+  gang follow <note tx> --amount <n> [--slippage 1] [--note …]
+                                         buy the token that note is about, marked on-chain as following it (= gang buy
+                                         --follow; curve buys only)
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
-  gang create …                          = gang v3 create (below): new tokens go to GangLaunchpad. Untaxed unless
-                                         --buy-tax / --sell-tax are given. LaunchpadV2 / Soft / U / S take no new tokens
-                                         (their tokens still trade with gang buy / sell); --taxed (the old V2 track) is refused
-                                         --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
-                                         other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is;
-                                         gang.fun files (ipfs://<cid>, cdn.gang.fun/ipfs/<cid>) always go on as ipfs://<cid>
-  NOTES on GangLaunchpad: gang create / gang v3 create|buy|sell / gang fair create|mint|withdraw take
-                                         [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]] as gang buy / sell (a create's
-                                         note is its launch manifesto); gang v3 buy also --follow <note tx>. Mainnet only;
-                                         pool trades (graduated / launched) carry no note
-  gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
-                 [--shares 1] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL]
-                 [--twitter @handle] [--description <text>]
-                                         打新 (fair mint): one price per share both ways, the last share launches on PancakeSwap at
-                                         that price. No deadline, no refund: open until it fills. raise 5–50 BNB, cap 0.25–1% of
-                                         supply per wallet (1% → at least 50 wallets), hold line 60–90%, mint fee 1–3%, withdraw fee 1–2% (none after 7 days without 10 new shares).
-                                         Wraps / approves first when needed (re-run after each)
-                                         --quote: WBNB (default) or any 18-decimal token; --ref-pool = a Pancake V2 pair or V3
-                                         pool holding it, which prices the raise (as gang create; mainnet USDT defaults to the USDT/WBNB pool)
-                                         --website / --twitter / --description and the logo go into the token's metadata JSON
-                                         (uploaded to gang.fun; the token's contractURI / metaURI, permanent)
-  gang fair mint --token <addr> --shares <n> [--min-shares <n>] [--use-wbnb]
-                                         + the sale's mint fee (the platform's, not returned); WBNB sales pay native BNB
-                                         through GangRouter in one tx (--use-wbnb: from WBNB, wrap / approve first)
-  gang fair withdraw --token <addr> (--shares <n> | --all)           sell back before it fills: mint price − exit fee (none once stale)
-  gang fair buy --token <addr> --amount <n> [--slippage 1] [--use-quote | --pay-bnb]
-  gang fair sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--to-bnb] [--confirm-out]
-                                         after launch: trade in the PancakeSwap pool through GangRouter (POOL below);
-                                         a sell past status.sellableBeforeOut (ends the holder reward for good) is refused
-                                         unless --confirm-out
-  gang fair status --token <addr> [--slippage 1]
-                                         my shares; after launch: reward on / out, how much I can sell and stay in, to claim
-                                         (claimable now + reward credited when tax was paid, not sold yet), poolSellAll
-                                         (what selling my balance into the pool pays, as of the next block: expectOut /
-                                         minOut for amountOutMin; also for a wallet that only bought in the pool)
-  gang fair claim --token <addr>         claim the holder reward
-  gang fair info --token <addr> | gang fair list [--status minting|launched|all] | gang fair tx --hash <0x..>
-                                         --testnet = BSC testnet (mainnet addresses are built in); --calldata prints the raw tx
-                                         instead of a baw preview, --from <addr> reads / builds for that wallet
-  gang v3 create --name <n> --symbol <s> [--buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] [--recipient <0x…>]]
-               [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL] [--twitter @handle]
-               [--description <text>]
-                                         --website / --twitter / --description and the logo go into the token's metadata JSON
-                                         (uploaded to gang.fun; the token's contractURI / metaURI, permanent)
-                                         no --buy-tax / --sell-tax: untaxed (no pool tax, no dividend, no recipient)
-                                         LaunchpadV3: own buy / sell tax in % (fixed at create), only in the pool after
-                                         graduation: 0.5% of volume to the platform; of the rest --dividend % to holders, the
-                                         remainder to --recipient (default: you, the creator; or a partner on the platform whitelist) in the quote. Curve
-                                         trades pay only the 1% fee, no tax
-                                         --quote: WBNB (default) or any 18-decimal token; --ref-pool = a Pancake V2 pair or V3
-                                         pool holding it, which prices the 15 BNB graduation target (as gang create), unless
-                                         gang set a fixed rate. The output shows graduationAt
-  gang v3 buy --token <addr> --amount <quote> [--slippage 1] [--use-wbnb] [--follow <note tx>] [--note …]
-                                         amount includes the 1% fee (no tax on the curve); WBNB-quoted: native BNB via GangRouter
-  gang v3 sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--to-bnb] [--note …]
-                                         on the curve; graduated: buy / sell trade in the PancakeSwap pool (POOL below)
-  gang v3 info --token <addr>            curve, tax setting (taxNote: pool only), recipient, what the router still owes it; graduated: swapBack
-                                         (tax not sold yet, the per-block chunk budget, what the latest block has left of it
-                                         and the next chunk)
-  gang v3 status --token <addr> [--slippage 1]
-                                         my balance and dividend: claimable now + tax credited to me, not sold yet (estimate);
-                                         graduated: poolSellAll (expectOut / minOut for amountOutMin)
-  gang v3 claim --token <addr>           claim my dividend (the quote token)
-  gang v3 release --token <addr>         push a tax payment that failed earlier (anyone may; the recipient gets it)
-  gang v3 income --recipient <addr> | gang v3 list [--status curve|graduated|all] | gang v3 tx --hash <0x..>
-                                         V3 tokens and 打新 sales share one pad: a token of the other kind is pointed at the
-                                         other command (kindOf). --testnet / mainnet, --calldata / --from as in gang fair
-  POOL (graduated / launched token; gang v3 buy|sell, gang fair buy|sell, gang buy|sell): PancakeSwap through GangRouter.
+
+  gang create --name <n> --symbol <s> [--buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] [--recipient <0x…>]]
+              [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL] [--twitter @handle]
+              [--description <text>] [--testnet]
+                                         a V3 token on GangLaunchpad (LaunchpadV2 / Soft / U / S take no new tokens; --taxed,
+                                         the old V2 track, is refused). No --buy-tax / --sell-tax: untaxed (no pool tax, no
+                                         dividend, no recipient). Taxed: own buy / sell tax in % (fixed at create), only in the
+                                         pool after graduation: 0.5% of volume to the platform; of the rest --dividend % to
+                                         holders, the remainder to --recipient (default: you, the creator; or a partner on the
+                                         platform whitelist) in the quote. Curve trades pay only the 1% fee, no tax
+  gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
+              [--shares 1] [--quote 0x… --ref-pool 0x…] [--logo …] [--website URL] [--twitter @handle] [--description …]
+                                         a 打新 (fair mint) sale: one price per share both ways, the last share launches on
+                                         PancakeSwap at that price. No deadline, no refund: open until it fills. raise 5–50
+                                         BNB, cap 0.25–1% of supply per wallet (1% → at least 50 wallets), hold line 60–90%,
+                                         mint fee 1–3%, withdraw fee 1–2% (none after 7 days without 10 new shares). Wraps /
+                                         approves first when needed (re-run after each)
+                                         both: --quote = WBNB (default) or any 18-decimal token; --ref-pool = a Pancake V2 pair
+                                         or V3 pool holding it, which prices the 15 BNB graduation target / the raise (mainnet
+                                         USDT defaults to the USDT/WBNB pool) unless gang set a fixed rate. --website /
+                                         --twitter / --description and the logo go into the token's metadata JSON (uploaded to
+                                         gang.fun; the token's contractURI / metaURI, permanent). --logo-uri images are copied
+                                         to gang.fun first (other hosts expire); --keep-logo-uri puts a permanent URL (e.g.
+                                         ipfs://) on-chain as is; gang.fun files always go on as ipfs://<cid>
+  NOTES: gang create / buy / sell, and gang mint / withdraw on a 打新 sale, take [--note "<why>" [--conf 0-100]
+                                         [--reveal-after 1-72h]] (a create's note is its launch manifesto); gang buy also
+                                         --follow <note tx>. Mainnet only; pool trades (graduated / launched) carry no note
+  gang v3 income --recipient <addr>      a tax recipient's income per token (gang.fun)
+  ALIASES: gang v3 <list|info|status|create|buy|sell|claim|release|tx> and gang fair <list|info|status|create|mint|
+                                         withdraw|buy|sell|claim|tx> run the same code as the commands above (their results
+                                         carry useInstead)
+  POOL (graduated / launched token; gang buy|sell): PancakeSwap through GangRouter.
                                          buy: WBNB quote → native BNB (poolBuyBNB), --use-quote pays WBNB; other quote → the
                                          quote (poolBuy), --pay-bnb pays BNB via WBNB → quote → token. minTokensOut =
                                          getAmountsOut − buy tax − --slippage. sell: poolSell → quote, --to-bnb poolSellForBNB
@@ -300,10 +293,12 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          --calldata: all txs in steps[] in order). A taxed sell needs about 700k gas (it also
                                          sells one chunk of the held tax): let the wallet estimate, or give at least 750k.
                                          The router is checked first (a GangRouter with pool trades, not Pancake / an old one);
-                                         a reverted simulation with --calldata is doNotSend: true, no tx. gang buy|sell:
+                                         a reverted simulation with --calldata is doNotSend: true, no tx. V2 / Soft / U / S:
                                          --from only on graduated tokens, mainnet only
   gang execute --request-id <id>         broadcast a previewed call
-  gang tx --hash <0x..>                  wait for receipt and decode Gang events (publishes a queued --note)
+  gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
+                                         打新, tax router, vaults) (publishes a queued --note; mainnet). GangLaunchpad events
+                                         carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
 before the trade and can't be edited later. 1–280 chars, no links. Sent by \`gang execute\` (or \`gang tx\`) within 24h.
@@ -407,7 +402,7 @@ function padNotes(kind, sub, pre = {}) {
   }
   const note = 'note' in pre ? pre.note : parseNote()
   const followTx = pre.checked ? pre.checked.noteTx : parseFollow()
-  if (note && !PAD_NOTED[kind].includes(sub)) fail(`--note applies to gang ${kind} ${PAD_NOTED[kind].join(' / ')} only`)
+  if (note && !PAD_NOTED[kind].includes(sub)) fail(`--note applies to ${PAD_NOTED[kind].join(' / ')} on ${KIND_NAMES[kind]} only`)
   const rawOnly = flag('calldata')
   return {
     following: !!followTx,
@@ -610,6 +605,52 @@ async function buy(token, bnb, note, followTx, checked = null) {
   }, note, 'buy', priced))
 }
 
+/** gang sell on a V2 / Soft / U / S token: the curve, or (graduated) the PancakeSwap pool through GangRouter. */
+async function legacySell(token) {
+  const note = parseNote()
+  parseFollow() // refuses --follow: only buys follow a note
+  if (flag('testnet')) fail(NOT_TESTNET)
+  const from = fromArg()
+  const me = from || bawAddress()
+  const info = await tokenInfo(token, me)
+  if (from && !info.graduated) fail(FROM_CURVE)
+  if (!flag('all') && !opt('amount')) fail('pass --amount <tokens> or --all (full sell is no longer the default)')
+  if (flag('all') && opt('amount')) fail('use either --all or --amount, not both')
+  // graduated: sell into the PancakeSwap pool through GangRouter
+  if (info.graduated) {
+    return v2PoolTrade('sell', token, info, me, note, { amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all') })
+  }
+  const bal = await balanceOf(token, me)
+  if (bal === 0n) fail('no balance to sell')
+  const amount = flag('all') ? bal : parseEther(opt('amount'))
+  if (amount > bal) fail('amount exceeds balance', { balance: fmtTok(bal) })
+  const pad = await resolvePad(token)
+  const allow = await allowance(token, me, pad.address)
+  if (allow < amount) {
+    const p = bawPreview({ from: me, to: token, data: calldata.approve(pad.address, amount) })
+    return out(summarizePreview(p, {
+      step: 'approve', token, symbol: info.symbol, pad: pad.id, amount: fmtTok(amount),
+      note: 'Approve first. After it confirms on-chain, run the same `gang sell` again to preview the sell.',
+      ...noteSkipped(note),
+    }))
+  }
+  const slippage = parseSlippage(opt('slippage', '1'))
+  const q = await quoteSell(token, amount)
+  const minOut = (q.out * BigInt(Math.round((100 - slippage) * 100))) / 10000n
+  if (pad.kind === 'soft') {
+    const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.softSell(token, amount, minOut), note) })
+    return out(summarizeWithNote(p, {
+      step: 'sell', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
+      amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'BNB',
+    }, note, 'sell'))
+  }
+  const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.v2Sell(token, amount, minOut), note) })
+  return out(summarizeWithNote(p, {
+    step: 'sell', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
+    amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', quotePath: q.quotePath, deterministic: q.deterministic || false,
+  }, note, 'sell'))
+}
+
 const TAXED_HINT = 'Set the pool tax with --buy-tax / --sell-tax (1–5% each; --buy-tax 1 --sell-tax 1 --dividend 100 is closest to the old 1% taxed track), or leave them out for an untaxed token.'
 const PAD_AGENT_ABI = parseAbi(['function isAgent(address account) view returns (bool)'])
 /**
@@ -622,25 +663,151 @@ const createGateAgent = (me) =>
 // what `gang v3` / `gang fair` (and `gang create`) get from here; each call adds its `notes` (padNotes)
 const PAD_IO = { opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri }
 
+// ---------------------------------------------------------------- one command per action, whatever the pad
+// gang buy|sell|info|status|claim|mint|withdraw|release --token <addr> ask GangLaunchpad's kindOf what the token is and
+// run that kind's code: V3 curve (v3.js), 打新 sale (fair.js), else the mainnet V2 / Soft / U / S pads (here). A new pad
+// is a new kind in this table, not new commands; gang v3 <sub> / gang fair <sub> stay as aliases of the same code.
+const V3_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'release'])
+const FAIR_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'mint', 'withdraw'])
+const KIND_NAMES = { v3: 'a V3 (bonding-curve) token', fair: 'a 打新 (fair-mint) token', legacy: 'a V2 / Soft / U / S token' }
+// what the V2 / Soft / U / S code runs: it looks the token up on those pads itself, so it can also take a token whose kindOf
+// could not be read (a GangLaunchpad token then gets a pointer from resolvePad instead of a wrong answer)
+const LEGACY_VERBS = new Set(['buy', 'sell', 'info', 'status', 'quote'])
+/** Why a command does not apply to a kind, and what to run instead. */
+const NOT_FOR = {
+  v3: {
+    mint: 'a V3 token has no shares: gang buy --token … --amount <quote>',
+    withdraw: 'a V3 token has no shares: gang sell --token … (--amount <tokens> | --all)',
+  },
+  fair: { release: '打新 tokens have no tax recipient: the pool tax goes to minters and the platform (gang claim for the reward)' },
+  legacy: {
+    claim: 'V2 / Soft / U / S tokens pay no dividend here',
+    release: 'V2 / Soft / U / S tokens have no tax recipient to pay',
+    mint: 'mint / withdraw are for 打新 sales: gang buy / gang sell trade this token',
+    withdraw: 'mint / withdraw are for 打新 sales: gang buy / gang sell trade this token',
+  },
+}
+
+/**
+ * 'v3' | 'fair' on GangLaunchpad (mainnet, or BSC testnet with --testnet); else 'legacy' (mainnet V2 / Soft / U / S).
+ * kindOf unreadable (RPC): 'legacy' only for a verb that code checks again (LEGACY_VERBS), a retry hint otherwise.
+ */
+async function padKind(token, verb) {
+  const testnet = flag('testnet')
+  let ctx
+  try { ctx = v3Ctx(testnet) } catch (e) { fail(e.message) }
+  const kind = await kindOf(ctx, token)
+  if (kind === 'v3' || kind === 'fair') return kind
+  if (kind === null && (testnet || !LEGACY_VERBS.has(verb))) {
+    fail('could not read the token\'s kind from GangLaunchpad (kindOf; RPC error)', { token, retry: 'same command again' })
+  }
+  if (testnet) fail('not a GangLaunchpad token on BSC testnet (V2 / Soft / U / S have no testnet deployment)', { token })
+  return 'legacy'
+}
+
+/** --amount (or --bnb, its older name on buy / quote): what a buy spends, in the token's quote (BNB / WBNB for most). */
+const spendArg = () => {
+  if (flag('amount') && flag('bnb')) fail('give the amount once: --amount <n> (--bnb is the older name of the same flag)')
+  return opt('amount') ?? opt('bnb')
+}
+// gang fair buy reads --amount only: --bnb is handed to it under that name
+const amountIo = (io) => (flag('bnb') && !flag('amount')
+  ? { ...io, opt: (n, d) => (n === 'amount' ? opt('bnb') : opt(n, d)), flag: (n) => (n === 'amount' || flag(n)) }
+  : io)
+// every result of a routed V3 / 打新 command says which kind ran (V2 / Soft results carry their own kind already)
+const tagKind = (kind) => (o) => out(o && typeof o === 'object' && !('kind' in o) ? { kind, ...o } : o)
+
+/** --token: missing and malformed told apart (viem refuses a mixed-case address whose checksum is wrong). */
+const tokenArg = () => {
+  const token = opt('token')
+  if (!token || token.startsWith('--')) fail('--token <address> required')
+  if (!isAddress(token)) fail('--token must be a 0x address (40 hex; in mixed case the checksum must be right, or write it all in lower case)', { got: token })
+  return token
+}
+
+/** gang <verb> --token <addr>: the kind's code for it, or why it does not apply. */
+async function routed(verb) {
+  const token = tokenArg()
+  // refused before any RPC: both --amount and --bnb, a malformed --note / --conf / --reveal-after, a bad --follow (the
+  // note itself is built again by the kind's code)
+  if (verb === 'buy') spendArg()
+  parseNote()
+  parseFollow()
+  const kind = await padKind(token, verb)
+  const io = { ...PAD_IO, out: tagKind(kind) }
+  if (kind === 'v3' && V3_VERBS.has(verb)) return runV3(verb, { ...io, notes: padNotes('v3', verb) })
+  if (kind === 'fair' && FAIR_VERBS.has(verb)) {
+    if (flag('follow')) fail('--follow only counts on curve buys (V3 / V2 tokens): a 打新 token has no curve', { token })
+    return runFair(verb, { ...amountIo(io), notes: padNotes('fair', verb) })
+  }
+  if (kind === 'legacy') {
+    if (verb === 'buy') {
+      const amount = spendArg()
+      if (!amount) fail('--amount <n> required (what to spend: BNB on Soft, the quote ERC-20 on V2 / U / S)')
+      return buy(token, amount, parseNote(), parseFollow())
+    }
+    if (verb === 'sell') return legacySell(token)
+    // a note goes on a trade only (as on V3 / 打新, where padNotes refuses it on info / status)
+    if (flag('note')) fail(`--note applies to buy / sell on ${KIND_NAMES.legacy} only`)
+    // no wallet needed (baw is optional here): with one, the result also shows its balance
+    if (verb === 'info') return out({ success: true, ...(await tokenInfo(token, myAddress() ?? undefined)) })
+    if (verb === 'status') {
+      const me = fromArg() || bawAddress()
+      return out({ success: true, wallet: me, ...(await tokenInfo(token, me)) })
+    }
+  }
+  // a V2 / Soft result names its pad's kind ('v2' | 'soft'); here the pad is not looked up, so no kind for them
+  return fail(`gang ${verb} does not apply to ${KIND_NAMES[kind]}`, { token, ...(kind !== 'legacy' && { kind }), hint: NOT_FOR[kind][verb] })
+}
+
+// what each gang v3 / gang fair subcommand is now: their results carry it as `useInstead` (the aliases keep working)
+const UNIFIED = {
+  v3: { create: 'gang create', list: 'gang list --kind v3', tx: 'gang tx' },
+  fair: { create: 'gang create --fair', list: 'gang list --kind fair', tx: 'gang tx' },
+}
+function alias(kind, sub) {
+  const verbs = kind === 'v3' ? V3_VERBS : FAIR_VERBS
+  const use = UNIFIED[kind][sub] ?? (verbs.has(sub) ? `gang ${sub}` : null)
+  const io = { ...PAD_IO, notes: padNotes(kind, sub) }
+  if (!use) return io
+  return { ...io, out: (o) => out(o && typeof o === 'object' ? { ...o, useInstead: `${use} (same flags)` } : o) }
+}
+
+// gang create: V3 by default, a 打新 sale with --fair; a setting of the other kind is refused, not ignored
+const V3_CREATE_FLAGS = ['buy-tax', 'sell-tax', 'dividend', 'recipient']
+const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee', 'shares']
+function create() {
+  if (flag('fair')) {
+    const wrong = V3_CREATE_FLAGS.find(flag)
+    if (wrong) fail(`--${wrong} is a V3 tax setting; a 打新 sale's pool tax is fixed (1%): leave it out, or drop --fair for a V3 token`)
+    return runFair('create', { ...PAD_IO, notes: padNotes('fair', 'create') })
+  }
+  const wrong = FAIR_CREATE_FLAGS.find(flag)
+  if (wrong) fail(`--${wrong} is a 打新 (fair-mint) setting: add --fair to create a sale (gang create --fair …)`)
+  return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
+}
+
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'quote', 'buy',
-  'follow', 'sell', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3'])
+const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
+  'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3'])
+// gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS]
 
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
   // `gang create` (= `gang v3 create`) / `gang fair create` write the links into the token metadata
   const tokenCreate = cmd === 'create' || ((cmd === 'v3' || cmd === 'fair') && args[1] === 'create')
   for (const name of LINK_FLAGS) {
-    if (!tokenCreate && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang v3 create\`, \`gang fair create\`)`)
+    if (!tokenCreate && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang create --fair\`)`)
   }
   if (flag('description') && !tokenCreate) {
-    fail('--description only applies when creating a token (`gang create`, `gang v3 create`, `gang fair create`; it goes into the token metadata)')
+    fail('--description only applies when creating a token (`gang create`, `gang create --fair`; it goes into the token metadata)')
   }
   switch (cmd) {
     case 'fair':
-      return runFair(args[1], { ...PAD_IO, notes: padNotes('fair', args[1]) })
+      return runFair(args[1], alias('fair', args[1]))
     case 'v3':
-      return runV3(args[1], { ...PAD_IO, notes: padNotes('v3', args[1]) })
+      return runV3(args[1], alias('v3', args[1]))
     case 'preflight': {
       const issues = []
       const status = bawStatus()
@@ -662,6 +829,13 @@ async function main() {
       })
     }
     case 'list': {
+      // --kind v3 / fair: GangLaunchpad tokens (from gang.fun); without it the V2 / Soft / U / S pads, as before
+      if (flag('kind')) {
+        const kind = opt('kind')
+        if (kind === 'v3') return runV3('list', { ...PAD_IO, notes: padNotes('v3', 'list') })
+        if (kind === 'fair') return runFair('list', { ...PAD_IO, notes: padNotes('fair', 'list') })
+        fail('--kind must be v3 or fair (leave it out for the V2 / Soft / U / S tokens)', { got: kind ?? null })
+      }
       const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
       return out({ success: true, createPad: padNets('v3').mainnet.pad, tokens: await listTokens(me) })
     }
@@ -801,13 +975,21 @@ async function main() {
       await Promise.allSettled([...hooks])
       return
     }
-    case 'token': {
-      const token = opt('token'); if (!token) fail('--token required')
-      const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
-      return out({ success: true, ...(await tokenInfo(token, me)) })
-    }
+    case 'info':
+    case 'token': // the older name of gang info
+      return routed('info')
+    case 'status':
+    case 'claim':
+    case 'mint':
+    case 'withdraw':
+    case 'release':
+      return routed(cmd)
     case 'quote': {
-      const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required (Soft archive: BNB; V2: quote ERC-20 amount)')
+      const token = tokenArg(), bnb = spendArg()
+      if (!bnb) fail('--amount required (Soft archive: BNB; V2: quote ERC-20 amount; --bnb is the older name)')
+      if ((await padKind(token, 'quote')) !== 'legacy') {
+        fail('gang quote prices V2 / Soft / U / S curve buys; on GangLaunchpad, gang buy simulates the trade and shows expectTokens (nothing is sent before gang execute)', { token })
+      }
       const me = bawAddress()
       const q = await quoteBuy(token, me, bnb)
       return out({
@@ -819,23 +1001,21 @@ async function main() {
           : (q.deterministic ? 'V2 quote = LaunchpadV2.sol curve math (unique path; no Soft/U/S fallback).' : undefined),
       })
     }
-    case 'buy': {
-      const token = opt('token'), bnb = opt('bnb'); if (!token || !bnb) fail('--token and --bnb required')
-      return buy(token, bnb, parseNote(), parseFollow())
-    }
+    case 'buy':
+      return routed('buy')
     case 'follow': {
-      // gang follow <note tx> --bnb <n>: the token comes from the note
+      // gang follow <note tx> --amount <n>: the token comes from the note
       const noteTx = args[1] && !args[1].startsWith('--') ? args[1].toLowerCase() : null
-      if (!NOTE_TX.test(noteTx ?? '')) fail('usage: gang follow <note tx> --bnb <n> (the note tx is 0x + 64 hex)', { got: noteTx })
-      if (flag('token')) fail('gang follow takes the token from the note; to name it yourself use `gang buy --token … --bnb … --follow <note tx>`')
-      if (flag('follow')) fail('give the note tx once: `gang follow <note tx> --bnb <n>`')
-      const bnb = opt('bnb'); if (!bnb) fail('--bnb required (the amount to buy, in the token\'s quote unit)')
+      if (!NOTE_TX.test(noteTx ?? '')) fail('usage: gang follow <note tx> --amount <n> (the note tx is 0x + 64 hex)', { got: noteTx })
+      if (flag('token')) fail('gang follow takes the token from the note; to name it yourself use `gang buy --token … --amount … --follow <note tx>`')
+      if (flag('follow')) fail('give the note tx once: `gang follow <note tx> --amount <n>`')
+      const bnb = spendArg(); if (!bnb) fail('--amount required (the amount to buy, in the token\'s quote unit; --bnb is the older name)')
       const note = parseNote() // a bad --note fails before any API call, as on buy
       // checked without a token: gang.fun answers with the note's token, and buy() reuses this check. The wallet is the
       // one that buys: --from builds for another one (gang v3 buy takes it on the curve; buy() refuses it there)
       const { token, follow } = await confirmFollow(noteTx, fromArg() || bawAddress())
       if (!token) fail('gang.fun did not say which token this note is about', { noteTx })
-      // a GangLaunchpad token: the same buy as `gang v3 buy` (--bnb = the quote to spend)
+      // a GangLaunchpad token: the V3 curve buy (--amount / --bnb = the quote to spend)
       const onPad = await kindOf(v2PoolCtx(), token)
       if (onPad === 'fair') fail('this note is on a 打新 (fair-mint) token: only curve buys can follow a note', { noteTx, token })
       if (onPad === 'v3') {
@@ -843,51 +1023,8 @@ async function main() {
       }
       return buy(token, bnb, note, noteTx, follow)
     }
-    case 'sell': {
-      const token = opt('token'); if (!token) fail('--token required')
-      const note = parseNote()
-      parseFollow() // refuses --follow: only buys follow a note
-      if (flag('testnet')) fail(NOT_TESTNET)
-      const from = fromArg()
-      const me = from || bawAddress()
-      const info = await tokenInfo(token, me)
-      if (from && !info.graduated) fail(FROM_CURVE)
-      if (!flag('all') && !opt('amount')) fail('pass --amount <tokens> or --all (full sell is no longer the default)')
-      if (flag('all') && opt('amount')) fail('use either --all or --amount, not both')
-      // graduated: sell into the PancakeSwap pool through GangRouter
-      if (info.graduated) {
-        return v2PoolTrade('sell', token, info, me, note, { amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all') })
-      }
-      const bal = await balanceOf(token, me)
-      if (bal === 0n) fail('no balance to sell')
-      const amount = flag('all') ? bal : parseEther(opt('amount'))
-      if (amount > bal) fail('amount exceeds balance', { balance: fmtTok(bal) })
-      const pad = await resolvePad(token)
-      const allow = await allowance(token, me, pad.address)
-      if (allow < amount) {
-        const p = bawPreview({ from: me, to: token, data: calldata.approve(pad.address, amount) })
-        return out(summarizePreview(p, {
-          step: 'approve', token, symbol: info.symbol, pad: pad.id, amount: fmtTok(amount),
-          note: 'Approve first. After it confirms on-chain, run the same `gang sell` again to preview the sell.',
-          ...noteSkipped(note),
-        }))
-      }
-      const slippage = parseSlippage(opt('slippage', '1'))
-      const q = await quoteSell(token, amount)
-      const minOut = (q.out * BigInt(Math.round((100 - slippage) * 100))) / 10000n
-      if (pad.kind === 'soft') {
-        const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.softSell(token, amount, minOut), note) })
-        return out(summarizeWithNote(p, {
-          step: 'sell', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
-          amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'BNB',
-        }, note, 'sell'))
-      }
-      const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.v2Sell(token, amount, minOut), note) })
-      return out(summarizeWithNote(p, {
-        step: 'sell', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
-        amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', quotePath: q.quotePath, deterministic: q.deterministic || false,
-      }, note, 'sell'))
-    }
+    case 'sell':
+      return routed('sell')
     case 'upload-logo': {
       const file = opt('file') || opt('path') || opt('logo')
       const url = opt('url')
@@ -902,7 +1039,7 @@ async function main() {
       if (flag('pair-or-quote') || flag('pair')) {
         fail('--pair-or-quote was removed (CLI ≤0.3.0 encoded a create the contract does not have). Use --quote <ERC-20> --ref-pool <Pancake pair/pool holding it>; omit both for WBNB.')
       }
-      return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
+      return create()
     }
     case 'execute': {
       const id = opt('request-id'); if (!id) fail('--request-id required')
@@ -934,8 +1071,18 @@ async function main() {
       })
     }
     case 'tx': {
-      const hash = opt('hash'); if (!hash) fail('--hash required')
-      const t = await decodeTx(hash)
+      const hash = opt('hash'); if (!/^0x[0-9a-fA-F]{64}$/.test(hash ?? '')) fail('--hash must be a tx hash (0x + 64 hex)')
+      if (flag('testnet')) {
+        // BSC testnet: GangLaunchpad only (no V2 / Soft there, and gang.fun indexes no testnet notes)
+        let ctx
+        try { ctx = v3Ctx(true) } catch (e) { fail(e.message) }
+        const r = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
+        return out({
+          success: true, chainId: Number(ctx.chainId), hash, status: r.status, block: Number(r.blockNumber),
+          events: decodeLogs(r.logs, GANG_EVENT_ABIS), explorer: `${ctx.explorer}/tx/${hash}`,
+        })
+      }
+      const t = await decodeTx(hash, GANG_EVENT_ABIS)
       // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
       // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
       const queued = hasQueued()
