@@ -284,9 +284,10 @@ graduated tokens only).
   gang create … --dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>] --bond-days <7-90>]
                                          V3: create → the dev buys on the curve (--dev-buy, as gang buy) → bonds what it
                                          holds (--bond-hold, default all; gang bond post). Wrap / approve steps come in between
-  gang create … --buy-tax <1-5> --sell-tax <1-5> --buyback <0-100> [--dev-buy … [--bond …]]
+  gang create … --buy-tax <1-5> --sell-tax <1-5> --buyback <0-100> [--buyback-to <addr>] [--dev-buy … [--bond …]]
                                          V3, taxed: the recipient's part of the tax is split, --buyback % bought back in the
-                                         pool and burned (0xdead), the rest to you. Steps: clone your buy-back splitter
+                                         pool and burned (0xdead), the rest to you (or --buyback-to <addr>; changeable later
+                                         with gang buyback set-payee). Steps: clone your buy-back splitter
                                          (GangBuybackSplitterFactory; listed as a recipient in the same tx) → create with it as
                                          the recipient → bind → the rest of the launch. Without --buyback the tax goes to you
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
@@ -347,12 +348,16 @@ BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND
                                          checked against X (--break-bond / --settle-first)
 BUYBACK (a V3 token whose recipient is a buy-back splitter; GANG_SPLITTER_FACTORY / GANG_TESTNET_SPLITTER_FACTORY):
   gang buyback status --token <addr>     ratio, a cut asked for (applies from / lapses after), quote waiting to be bought
-                                         back, owed to the dev, the next chunk (the keeper buys it back every few minutes)
+                                         back, the payee and what is owed to it, the next chunk (the keeper buys it back
+                                         every few minutes)
   gang buyback set --token <addr> --pct <0-100>
                                          dev only: a higher share applies at once; a lower one after a 3-day notice
+  gang buyback set-payee --token <addr> --to <addr>
+                                         dev only: the part not bought back goes to --to from now on (at once; splitters
+                                         from the current factory; the first mainnet ones, buyback-burn-v1, pay the dev)
   gang buyback apply --token <addr>      anyone: apply a cut whose notice ran (within 7 days, or it lapses)
   gang buyback bind --token <addr> | gang buyback release --token <addr>
-                                         anyone: bind the splitter to its token (the launch does it) / push the dev what a
+                                         anyone: bind the splitter to its token (the launch does it) / push the payee what a
                                          failed payment left owed. --testnet, --calldata, --from as in gang v3
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
