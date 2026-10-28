@@ -315,7 +315,8 @@ graduated tokens only).
                                          a reverted simulation with --calldata is doNotSend: true, no tx. V2 / Soft / U / S:
                                          --from only on graduated tokens, mainnet only
                                          A creator selling below its bonded X (gang bond) is refused unless --break-bond;
-                                         past the deadline, --settle-first settles the bond before the sell.
+                                         past the deadline, --settle-first settles the bond before the sell (asks first;
+                                         settles 1 hour later).
 
 BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND / GANG_TESTNET_BOND = its address):
   gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover <coverage %>) [--use-wbnb]
@@ -335,13 +336,15 @@ BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND
   gang bond start --token <addr>         anyone, once the token graduated / launched: start the clock (deadline = now + days)
   gang bond report --token <addr>        anyone, when the creator holds less than X: 1% of the bond to you, the rest buys
                                          back and burns the token (simulated first; nothing is sent when not violated)
-  gang bond settle --token <addr>        anyone, after the deadline while X is held: the bond goes back to the creator
+  gang bond settle --token <addr>        anyone, after the deadline while X is held, two steps: run it once to ask, again
+                                         1 hour later (X still held) and the bond goes back to the creator
   gang bond refund --token <addr>        creator, posted before the pair and still no pair 30 days later: run it once to ask
                                          (a 3-day notice: X still binds, graduation / launch voids it), again after it to
                                          get the bond back
   gang bond burn --token <addr> [--slippage 1]
-                                         anyone: one buy-back chunk of a slashed bond (≤ 0.5% of the pair's quote side; waits
-                                         for a 10-minute average and skips when the price is > 2% above it). Slashed before the
+                                         anyone: one buy-back chunk of a slashed bond (≤ 0.5% of the pair's quote side, one
+                                         per 4 minutes; waits for a 10-minute average and skips when the price is > 2% above
+                                         it). Slashed before the
                                          pair: waits for it; none 30 days after the post → the rest goes to 0xdead as quote
   gang bond tx --hash <0x..>             decode GangBond events. --testnet, --calldata, --from as in gang v3. A bonded
                                          creator's gang v3 sell (curve or pool), gang fair sell and gang fair withdraw are
