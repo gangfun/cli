@@ -18,8 +18,8 @@ import { UA, checkUpdate } from './version.js'
 import { runFair } from './fair.js'
 import { runV3 } from './v3.js'
 import { poolPayBnb, poolTrade } from './pool.js'
-import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn } from './steps.js'
-import { MERGED_ERRORS_ABI, padNets } from './gangpad.js'
+import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
+import { MERGED_ERRORS_ABI, kindOf, padNets } from './gangpad.js'
 import { V2_ABI } from './abi.js'
 import { parseAbi } from 'viem'
 
@@ -98,7 +98,7 @@ async function v2PoolTrade(side, token, info, me, note, { amount, all = false })
     handler: null, swapBackGas: false, payBnb: side === 'buy' && poolPayBnb(ctx, info.quote, flag), toBnb: flag('to-bnb'),
     base: {
       kind: info.kind, pad: info.pad, symbol: info.symbol, pair: info.pair,
-      ...(note && { agentNote: { attached: false, reason: 'notes are matched to curve trades only: this PancakeSwap trade carries none' } }),
+      ...(note && { agentNote: POOL_NO_NOTE }),
     },
   }, {
     rawOnly: flag('calldata'), summarize: summarizePreview,
@@ -145,10 +145,12 @@ const parseLinks = () => {
   } catch (e) { fail(e.message) }
 }
 
-/** --follow <note tx> (buy only). Syntax here; whether the note can be followed is asked from gang.fun before preview. */
+/** --follow <note tx> (buys only). Syntax here; whether the note can be followed is asked from gang.fun before preview. */
 const parseFollow = () => {
   if (!flag('follow')) return null
-  if (cmd !== 'buy') fail('--follow only applies to `gang buy` (or use `gang follow <note tx> --bnb <n>`)')
+  if (cmd !== 'buy' && !(cmd === 'v3' && args[1] === 'buy')) {
+    fail('--follow only applies to `gang buy` / `gang v3 buy` (or use `gang follow <note tx> --bnb <n>`)')
+  }
   const tx = opt('follow')
   if (!NOTE_TX.test(tx ?? '')) fail('--follow needs the tx hash of the note to follow (0x + 64 hex)', { got: tx ?? null })
   return tx.toLowerCase()
@@ -179,8 +181,8 @@ async function confirmFollow(noteTx, me, token) {
  * Adds the rough USD value of what the buy pays (after any cap refund: gang.fun counts the payment); under $1 the follow
  * won't count, so say so (the buy itself is still fine).
  */
-async function withUsd(follow, token, soft, spent) {
-  const usd = await amountUsd(token, soft, spent)
+async function withUsd(follow, token, track, spent, decimals) {
+  const usd = await amountUsd(token, track, spent, decimals)
   return {
     ...follow, usd,
     ...(usd != null && usd < MIN_FOLLOW_USD && { warning: `this buy is about $${usd}; buys under $${MIN_FOLLOW_USD} don't count as a follow` }),
@@ -216,7 +218,8 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          graduated: buys in the PancakeSwap pool through GangRouter (see POOL below;
                                          [--use-quote | --pay-bnb] [--from <addr>] [--calldata]; no --note / --follow)
   gang follow <note tx> --bnb <n> [--slippage 1] [--note …]
-                                         buy the token that note is about, marked on-chain as following it (= buy --follow)
+                                         buy the token that note is about, marked on-chain as following it (= buy --follow;
+                                         a V3 token: = gang v3 buy --follow, --bnb = the quote to spend)
   gang sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--note … [--conf …] [--reveal-after …]]
                                          graduated: sells into the pool through GangRouter ([--to-bnb] [--from] [--calldata])
   gang upload-logo (--file <path> | --url <image URL>)
@@ -227,6 +230,10 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          --logo-uri images are copied to gang.fun first (logoURI is permanent on-chain;
                                          other hosts expire). --keep-logo-uri puts a permanent URL (e.g. ipfs://) on-chain as is;
                                          gang.fun files (ipfs://<cid>, cdn.gang.fun/ipfs/<cid>) always go on as ipfs://<cid>
+  NOTES on GangLaunchpad: gang create / gang v3 create|buy|sell / gang fair create|mint|withdraw take
+                                         [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]] as gang buy / sell (a create's
+                                         note is its launch manifesto); gang v3 buy also --follow <note tx>. Mainnet only;
+                                         pool trades (graduated / launched) carry no note
   gang fair create --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
                  [--shares 1] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL]
                  [--twitter @handle] [--description <text>]
@@ -269,9 +276,9 @@ const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet
                                          --quote: WBNB (default) or any 18-decimal token; --ref-pool = a Pancake V2 pair or V3
                                          pool holding it, which prices the 15 BNB graduation target (as gang create), unless
                                          gang set a fixed rate. The output shows graduationAt
-  gang v3 buy --token <addr> --amount <quote> [--slippage 1] [--use-wbnb]
+  gang v3 buy --token <addr> --amount <quote> [--slippage 1] [--use-wbnb] [--follow <note tx>] [--note …]
                                          amount includes the 1% fee (no tax on the curve); WBNB-quoted: native BNB via GangRouter
-  gang v3 sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--to-bnb]
+  gang v3 sell --token <addr> (--amount <tokens> | --all) [--slippage 1] [--to-bnb] [--note …]
                                          on the curve; graduated: buy / sell trade in the PancakeSwap pool (POOL below)
   gang v3 info --token <addr>            curve, tax setting (taxNote: pool only), recipient, what the router still owes it; graduated: swapBack
                                          (tax not sold yet, the per-block chunk budget, what the latest block has left of it
@@ -312,7 +319,7 @@ To find notes to follow: \`gang notes\` (what can be followed now, with each aut
 
 Logo UI (browser): ${LOGO_UI}
 
-A buy / sell preview without --note says so in agentNote.hint (gang create / v3 / fair take no --note yet). When npm has a newer CLI, results carry
+A buy / sell / create preview without --note says so in agentNote.hint (also gang v3 / gang fair). When npm has a newer CLI, results carry
 update: { current, latest, cmd, skill } (npm is asked at most once a day in the background; GANG_UPDATE_CHECK=0 turns it
 off, GANG_UPDATE_URL points it at an npm mirror).
 
@@ -337,7 +344,8 @@ function summarizePreview(p, extra = {}) {
   }
 }
 
-// shown on every buy / sell / create without --note: agents with an old local skill don't know to write one.
+// shown on every noted step (buy / sell / create, fair mint / withdraw) without --note: agents with an old local skill
+// don't know to write one.
 // The CLI can't tell whether the user asked for no note, so the agent decides.
 const NO_NOTE = {
   attached: false,
@@ -348,6 +356,13 @@ const NO_NOTE_SENT = {
   hint: 'This trade went out without a note. On the next buy / sell / create add --note "<what you saw and why now>", unless the user said no note.',
 }
 
+const attachedNote = (note) => ({
+  attached: true, hash: note.hash, text: note.text, conf: note.conf,
+  ...(note.revealAfter
+    ? { revealAfterHours: note.revealAfter / 3600, visibility: `sealed: public ${note.revealAfter / 3600}h after the trade` }
+    : { visibility: 'public after execute' }),
+})
+
 /**
  * A trade preview with the note's commitment (and follow ref) already in `data`: queue the reveal under the preview's
  * requestId, and remember what the preview carried so `gang execute` can report on it.
@@ -357,12 +372,7 @@ function summarizeWithNote(p, extra, note, kind, follow = null) {
   if (!s.success) return s
   if (note) {
     queueNote(note, { kind, token: extra.token ?? null, requestId: s.requestId })
-    s.agentNote = {
-      attached: true, hash: note.hash, text: note.text, conf: note.conf,
-      ...(note.revealAfter
-        ? { revealAfterHours: note.revealAfter / 3600, visibility: `sealed: public ${note.revealAfter / 3600}h after the trade` }
-        : { visibility: 'public after execute' }),
-    }
+    s.agentNote = attachedNote(note)
   } else {
     s.agentNote = NO_NOTE
   }
@@ -371,9 +381,58 @@ function summarizeWithNote(p, extra, note, kind, follow = null) {
   return s
 }
 /** The buy step itself: price the follow (setup steps skip this API call). */
-const pricedFollow = (follow, token, pad, q) => follow && withUsd(follow, token, pad.kind === 'soft', q.spent)
+const pricedFollow = (follow, token, pad, q) => follow && withUsd(follow, token, pad.kind === 'soft' ? 'soft' : 'v2', q.spent)
 const noteSkipped = (note) =>
   note ? { agentNote: { attached: false, reason: 'this setup step carries no note; pass --note again on the re-run' } } : {}
+
+// GangLaunchpad steps gang.fun matches a note to (mainnet): curve trades, creates and fair-mint txs. buy / sell of a
+// graduated or launched token are PancakeSwap trades: they take --note but carry none, as `gang buy` / `gang sell`.
+const PAD_NOTED = { v3: ['create', 'buy', 'sell'], fair: ['create', 'mint', 'withdraw', 'buy', 'sell'] }
+const POOL_NO_NOTE = { attached: false, reason: 'notes are matched to curve trades only: this PancakeSwap trade carries none' }
+
+/**
+ * --note / --follow for `gang v3 <sub>` / `gang fair <sub>` (`gang create` = gang v3 create). `pre`: the note and the
+ * follow `gang follow` already parsed / confirmed. The pad modules use:
+ *   following → a follow was asked for (--follow, or `gang follow`)
+ *   follow(token, me) → the follow, checked with gang.fun (null without one; fails if it can't count)
+ *   priced(follow, token, spent, decimals) → it with the buy's USD value (only on the buy step: setup steps skip the call)
+ *   step(ctx, tx, extra, kind, follow) → the write step with the follow ref and note commitment in its calldata
+ *   skipped(follow) → the fields a wrap / approve step shows instead
+ *   pool → the fields a PancakeSwap trade shows
+ */
+function padNotes(kind, sub, pre = {}) {
+  const testnet = flag('testnet')
+  if (testnet && (flag('note') || flag('follow') || pre.checked)) {
+    fail('--note / --follow are mainnet only: gang.fun does not index testnet txs; leave them out with --testnet')
+  }
+  const note = 'note' in pre ? pre.note : parseNote()
+  const followTx = pre.checked ? pre.checked.noteTx : parseFollow()
+  if (note && !PAD_NOTED[kind].includes(sub)) fail(`--note applies to gang ${kind} ${PAD_NOTED[kind].join(' / ')} only`)
+  const rawOnly = flag('calldata')
+  return {
+    following: !!followTx,
+    async follow(token, me) {
+      if (!followTx) return null
+      return pre.checked ?? (await confirmFollow(followTx, me, token)).follow
+    },
+    priced: (follow, token, spent, decimals) => follow && withUsd(follow, token, 'v3', spent, decimals),
+    step(ctx, { data, ...tx }, extra, noteKind, follow = null) {
+      if (testnet) return writeStep(ctx, { data, ...tx }, extra, rawOnly, summarizePreview)
+      const noted = { ...tx, data: withNote(withFollow(data, follow), note) }
+      if (!rawOnly) return writeStep(ctx, noted, extra, false, (p, e) => summarizeWithNote(p, e, note, noteKind, follow))
+      // --calldata: signed elsewhere, so the note waits in the local queue for `gang tx --hash` once the tx lands
+      const r = writeStep(ctx, noted, extra, true)
+      if (note) queueNote(note, { kind: noteKind, token: extra.token ?? null, requestId: null })
+      return {
+        ...r,
+        agentNote: note ? { ...attachedNote(note), publish: 'after the tx lands, `gang tx --hash <hash>` on this machine publishes it' } : NO_NOTE,
+        ...(follow && { follow: { attached: true, ...follow } }),
+      }
+    },
+    skipped: (follow) => ({ ...noteSkipped(note), ...followSkipped(follow) }),
+    pool: note ? { agentNote: POOL_NO_NOTE } : {},
+  }
+}
 
 /** Reveal after the tx is mined (the server checks receipt status). Failures don't affect the trade. */
 async function revealNote(entry, hash) {
@@ -560,6 +619,9 @@ const PAD_AGENT_ABI = parseAbi(['function isAgent(address account) view returns 
 const createGateAgent = (me) =>
   client.readContract({ address: padNets('v3').mainnet.pad, abi: PAD_AGENT_ABI, functionName: 'isAgent', args: [me] }).catch(() => isAgent(me))
 
+// what `gang v3` / `gang fair` (and `gang create`) get from here; each call adds its `notes` (padNotes)
+const PAD_IO = { opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri }
+
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'quote', 'buy',
   'follow', 'sell', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3'])
@@ -576,13 +638,9 @@ async function main() {
   }
   switch (cmd) {
     case 'fair':
-      return runFair(args[1], {
-        opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri,
-      })
+      return runFair(args[1], { ...PAD_IO, notes: padNotes('fair', args[1]) })
     case 'v3':
-      return runV3(args[1], {
-        opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri,
-      })
+      return runV3(args[1], { ...PAD_IO, notes: padNotes('v3', args[1]) })
     case 'preflight': {
       const issues = []
       const status = bawStatus()
@@ -773,9 +831,16 @@ async function main() {
       if (flag('follow')) fail('give the note tx once: `gang follow <note tx> --bnb <n>`')
       const bnb = opt('bnb'); if (!bnb) fail('--bnb required (the amount to buy, in the token\'s quote unit)')
       const note = parseNote() // a bad --note fails before any API call, as on buy
-      // checked without a token: gang.fun answers with the note's token, and buy() reuses this check
-      const { token, follow } = await confirmFollow(noteTx, bawAddress())
+      // checked without a token: gang.fun answers with the note's token, and buy() reuses this check. The wallet is the
+      // one that buys: --from builds for another one (gang v3 buy takes it on the curve; buy() refuses it there)
+      const { token, follow } = await confirmFollow(noteTx, fromArg() || bawAddress())
       if (!token) fail('gang.fun did not say which token this note is about', { noteTx })
+      // a GangLaunchpad token: the same buy as `gang v3 buy` (--bnb = the quote to spend)
+      const onPad = await kindOf(v2PoolCtx(), token)
+      if (onPad === 'fair') fail('this note is on a 打新 (fair-mint) token: only curve buys can follow a note', { noteTx, token })
+      if (onPad === 'v3') {
+        return runV3('buy', { ...PAD_IO, opt: (n, d) => (n === 'token' ? token : opt(n, d)), notes: padNotes('v3', 'buy', { note, checked: follow }) })
+      }
       return buy(token, bnb, note, noteTx, follow)
     }
     case 'sell': {
@@ -837,9 +902,7 @@ async function main() {
       if (flag('pair-or-quote') || flag('pair')) {
         fail('--pair-or-quote was removed (CLI ≤0.3.0 encoded a create the contract does not have). Use --quote <ERC-20> --ref-pool <Pancake pair/pool holding it>; omit both for WBNB.')
       }
-      return runV3('create', {
-        opt, flag, out, fail, summarize: summarizePreview, resolveLogo: resolveLogoUri, checkMeta: parseMeta, resolveMeta: resolveMetaUri,
-      })
+      return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
     }
     case 'execute': {
       const id = opt('request-id'); if (!id) fail('--request-id required')
