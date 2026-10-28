@@ -4,9 +4,10 @@ import { walletFor } from './fair.js'
 import { parseNum, revertOf as revertIn, step } from './steps.js'
 
 /**
- * `gang buyback …` and `gang create … --buyback <pct>` — GangBuybackSplitter (dev 税按比例回购销毁): a V3 token's tax
- * recipient that splits each payment between a buy-back in the token's PancakeSwap pool, sent to 0xdead, and the dev.
- * GangBuybackSplitterFactory clones one per token for the dev (`create(bps, salt)`, at `predict(dev, salt)`) and has
+ * `gang buyback …` and `gang create … --buyback <pct> [--buyback-to <addr>]` — GangBuybackSplitter (dev 税按比例回购
+ * 销毁): a V3 token's tax recipient that splits each payment between a buy-back in the token's PancakeSwap pool, sent to
+ * 0xdead, and the dev's payee (the dev unless it names another address; v2 splitters only, `gang buyback set-payee`).
+ * GangBuybackSplitterFactory clones one per token for the dev (`create(bps, salt, payee)`, at `predict(dev, salt)`) and has
  * GangHandlerAdmin list it, so the dev names it as the recipient at create (launch.js does the three steps: clone →
  * create → bind). A dev who doesn't
  * want it leaves --buyback out: the tax goes to their own address as before.
@@ -15,13 +16,15 @@ import { parseNum, revertOf as revertIn, step } from './steps.js'
  * Env: GANG_SPLITTER_FACTORY / GANG_TESTNET_SPLITTER_FACTORY override the built-in factory addresses.
  */
 
-// BSC 56, 2026-10-28 (docs/MAINNET-BUYBACK-SPLITTER-2026-10-28.md); lists clones once the Safe ran its batch
-export const MAINNET_SPLITTER_FACTORY = '0x6bcd79206da85Aa0643Db2164Ab887b468618546'
-export const TESTNET_SPLITTER_FACTORY = '0x0Ff5C8801BdeaDac374fC14fEd6e7B31977c9DA1'
-export const BUYBACK_TYPE = 'buyback-burn-v1'
+// BSC 56, factory v2 (payee; docs/MAINNET-BUYBACK-SPLITTER-2026-10-28.md). v1 was 0x6bcd…8546 (2-argument create)
+export const MAINNET_SPLITTER_FACTORY = '0x93467Cb38B9Cb7f6EF3b67d2226Eb8b77ca58F2f'
+export const TESTNET_SPLITTER_FACTORY = '0x08b9E2Cf5F666b55F262239b19e25de25b8ba87D'
+/** The factory's clones; v1 (mainnet's first factory, 0x6bcd…8546) pays the dev, v2 its payee. */
+export const BUYBACK_TYPE = 'buyback-burn-v2'
+const BUYBACK_TYPES = ['buyback-burn-v1', BUYBACK_TYPE]
 
 export const FACTORY_ABI = parseAbi([
-  'function create(uint16 buybackBps, bytes32 salt) returns (address splitter)',
+  'function create(uint16 buybackBps, bytes32 salt, address payee) returns (address splitter)',
   'function predict(address dev, bytes32 salt) view returns (address)',
   'function pad() view returns (address)',
   'error NotAgent()',
@@ -44,6 +47,8 @@ export const SPLITTER_ABI = parseAbi([
   'function setBuybackBps(uint16 newBps)',
   'function applyBuybackBps()',
   'function releaseDev() returns (uint256)',
+  'function payee() view returns (address)',
+  'function setPayee(address newPayee)',
   'error NotDev()',
   'error BadBps()',
   'error AlreadyBound()',
@@ -93,17 +98,22 @@ export async function splitterOf(read, addr) {
   if (!addr || addr === zeroAddress) return null
   let type
   try { type = await read(addr, SPLITTER_ABI, 'moduleType') } catch { return null }
-  if (hexToString(type, { size: 32 }) !== BUYBACK_TYPE) return null
+  const moduleType = hexToString(type, { size: 32 }).replace(/\0+$/, '')
+  if (!BUYBACK_TYPES.includes(moduleType)) return null
   const [dev, token, bps, cut, left, unsplit, owed, burn] = await Promise.all(
     ['dev', 'token', 'buybackBps', 'pendingCut', 'buybackLeft', 'unsplit', 'devOwed', 'previewBurn'].map((f) => read(addr, SPLITTER_ABI, f)))
+  // v1 has no payee: it pays the dev
+  const hasPayee = moduleType !== 'buyback-burn-v1'
+  const payee = hasPayee ? await read(addr, SPLITTER_ABI, 'payee') : dev
+  const toDev = payee.toLowerCase() === dev.toLowerCase()
   // the pad takes 18-decimal quotes only
   const q = (x) => formatUnits(x, 18)
   return {
-    splitter: addr, moduleType: BUYBACK_TYPE, dev, token: token === zeroAddress ? null : token, buybackPct: pct(bps), buybackBps: Number(bps),
+    splitter: addr, moduleType, dev, payee, payeeChangeable: hasPayee, token: token === zeroAddress ? null : token, buybackPct: pct(bps), buybackBps: Number(bps),
     pendingCut: cut[0] ? { toPct: pct(cut[1]), appliesFrom: iso(cut[2]), lapsesAfter: iso(Number(cut[2]) + 7 * 86400) } : null,
     buybackLeft: q(left), unsplit: q(unsplit), devOwed: q(owed),
     nextChunk: burn[0] ? { quoteIn: q(burn[1]), tokensBurned: formatUnits(burn[2], 18) } : null,
-    note: `${pct(bps)}% of each tax payment to this recipient is bought back in the pool and burned (0xdead), the rest goes to the dev; a raise applies at once, a cut only 3 days after it is asked for`,
+    note: `${pct(bps)}% of each tax payment to this recipient is bought back in the pool and burned (0xdead), the rest goes to ${toDev ? 'the dev' : `the payee ${payee}`}; a raise applies at once, a cut only 3 days after it is asked for${hasPayee ? '; the dev can change the payee at once (gang buyback set-payee)' : ''}`,
   }
 }
 
@@ -125,8 +135,8 @@ export async function simulateCall(client, from, address, abi, functionName, arg
   }
 }
 
-const SUBS = ['status', 'set', 'apply', 'bind', 'release']
-const USAGE = 'usage: gang buyback <status|set|apply|bind|release> --token <addr> [--pct <0-100>] [--testnet] — see gang help'
+const SUBS = ['status', 'set', 'set-payee', 'apply', 'bind', 'release']
+const USAGE = 'usage: gang buyback <status|set|set-payee|apply|bind|release> --token <addr> [--pct <0-100>] [--to <addr>] [--testnet] — see gang help'
 
 /** `gang buyback <sub>`: the splitter of a V3 token (its tax recipient), found from --token. */
 export async function runBuyback(sub, { opt, flag, out, fail, summarize }) {
@@ -171,6 +181,18 @@ export async function runBuyback(sub, { opt, flag, out, fail, summarize }) {
         })
   }
 
+  if (sub === 'set-payee') {
+    if (!s.payeeChangeable) return fail('this splitter (buyback-burn-v1) has no payee: it pays the dev; only splitters from the current factory (v2) can name another address')
+    if (me().toLowerCase() !== s.dev.toLowerCase()) return fail('only the dev this splitter was made for can change its payee', { wallet: me(), dev: s.dev })
+    const to = opt('to')
+    if (!isAddress(to ?? '') || to === zeroAddress) fail('--to <0x…> required (checksummed or all lowercase): the address the dev\'s part goes to from now on', { got: to ?? null })
+    if (to.toLowerCase() === s.payee.toLowerCase()) return fail('that is the payee already', { payee: s.payee })
+    return send('setPayee', [to], {
+      step: 'set-payee', fromPayee: s.payee, toPayee: to,
+      note: 'applies at once (the dev\'s own share; holders are not affected). Quote that arrived before is split to the current payee first; what is owed goes to the new one',
+    })
+  }
+
   if (sub === 'apply') {
     if (!s.pendingCut) return fail(HINTS.NoProposal, { buybackPct: s.buybackPct })
     if (Date.parse(s.pendingCut.appliesFrom) > Date.now()) return fail(HINTS.NotDue, { appliesFrom: s.pendingCut.appliesFrom })
@@ -179,5 +201,5 @@ export async function runBuyback(sub, { opt, flag, out, fail, summarize }) {
 
   // release
   if (!(Number(s.devOwed) > 0)) return fail(HINTS.NothingOwed)
-  return send('releaseDev', [], { step: 'release', amount: s.devOwed, note: 'anyone may; the dev gets what a failed push left owed' })
+  return send('releaseDev', [], { step: 'release', amount: s.devOwed, payee: s.payee, note: 'anyone may; the payee gets what a failed push left owed' })
 }
