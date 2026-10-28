@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createPublicClient, http, parseAbi, formatUnits, encodeFunctionData, zeroAddress } from 'viem'
+import { createPublicClient, http, parseAbi, formatUnits, encodeFunctionData, isAddress, zeroAddress } from 'viem'
 import { DIR } from './notes.js'
 import { padNets, NOT_ON_MAINNET } from './gangpad.js'
 import { bondAddress, BOND_ABI } from './bond.js'
@@ -26,6 +26,7 @@ import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, spl
  * predict(dev, salt), with a fresh salt per plan kept in it (so the address is known before the clone and never another
  * launch's), the create names it as the recipient, and a bind step follows the create. A launch keeps the mode it began
  * with: adding --buyback after the create (or dropping it before) is refused rather than starting over.
+ * --buyback-to <addr> names where the dev's part goes (default: the dev); the dev can change it later at once.
  */
 
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
@@ -39,7 +40,7 @@ const PAD_ABI = parseAbi([
 ])
 const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)', 'function symbol() view returns (string)'])
 /** Flags only the chain reads; everything else goes to the step's own command. */
-export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'restart']
+export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'restart']
 const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 /** `gang fair create --dev-buy`, with or without --bond (index.js stops the lone flag, runLaunch the chained one). */
 export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: use --shares <n> (not --dev-buy)'
@@ -108,6 +109,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // --buyback: a taxed V3 token whose recipient (the part left after holders) is the dev's splitter
   let buyback = null
+  if (flag('buyback-to') && !flag('buyback')) fail('--buyback-to <addr> goes with --buyback <pct>: it names where the part not bought back goes')
   if (flag('buyback')) {
     const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
     if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
@@ -117,7 +119,12 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (/^0*100(\.0+)?$/.test(opt('dividend', '0'))) fail('--dividend 100 leaves nothing for the recipient, so nothing to buy back: lower it or drop --buyback')
     const factory = splitterFactoryAddress(testnet)
     if (!factory) fail(notDeployed(testnet))
-    buyback = { bps: buybackBpsOf(fail, opt('buyback')), factory }
+    let payee = null
+    if (flag('buyback-to')) {
+      payee = opt('buyback-to')
+      if (!isAddress(payee ?? '') || payee === zeroAddress) fail('--buyback-to must be a 0x address, checksummed or all lowercase (where the part not bought back goes; leave it out for your own wallet)', { got: payee ?? null })
+    }
+    buyback = { bps: buybackBpsOf(fail, opt('buyback')), factory, payee }
   }
 
   const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
@@ -147,15 +154,16 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!plan?.salt) {
       const salt = `0x${randomBytes(32).toString('hex')}`
       const at = await read(buyback.factory, FACTORY_ABI, 'predict', [me, salt])
-      const sim = await simulateCall(client, me, buyback.factory, FACTORY_ABI, 'create', [buyback.bps, salt])
+      const args = [buyback.bps, salt, buyback.payee ?? zeroAddress]
+      const sim = await simulateCall(client, me, buyback.factory, FACTORY_ABI, 'create', args)
       if (sim.failed) return out({ success: false, step: 'buyback-splitter', ...tag('buyback-splitter'), ...sim.failed })
       writePlan(key, { ...base, salt, splitter: at, factory: buyback.factory })
-      const data = encodeFunctionData({ abi: FACTORY_ABI, functionName: 'create', args: [buyback.bps, salt] })
+      const data = encodeFunctionData({ abi: FACTORY_ABI, functionName: 'create', args })
       return out({
         ...step({ chainId: net.chainId }, { from: me, to: buyback.factory, data }, {
           step: 'buyback-splitter', chainId: Number(net.chainId), factory: buyback.factory, buybackPct: buyback.bps / 100,
-          splitter: at,
-          note: `clones your buy-back splitter (listed as a tax recipient in the same tx): ${buyback.bps / 100}% of the recipient's part is bought back and burned, the rest goes to you. A raise applies at once later, a cut only after a 3-day notice`,
+          splitter: at, payee: buyback.payee ?? me,
+          note: `clones your buy-back splitter (listed as a tax recipient in the same tx): ${buyback.bps / 100}% of the recipient's part is bought back and burned, the rest goes to ${buyback.payee ? `${buyback.payee} (--buyback-to)` : 'you'}. Later a raise applies at once, a cut only after a 3-day notice; the payee can be changed at once (gang buyback set-payee)`,
         }, flag('calldata'), io.summarize),
         ...tag('buyback-splitter', { splitter: at, next: `${rerun}: it then builds the create with the splitter as the recipient` }),
       })
@@ -172,6 +180,11 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     if (s.buybackBps !== buyback.bps) {
       return fail(`this launch's splitter buys back ${s.buybackPct}%, not ${buyback.bps / 100}%: run it again with --buyback ${s.buybackPct}, or add --restart for a new splitter (gang buyback set changes it after the create)`, { splitter: plan.splitter })
+    }
+    const wantPayee = (buyback.payee ?? me).toLowerCase()
+    if (s.payee.toLowerCase() !== wantPayee) {
+      const was = s.payee.toLowerCase() === me.toLowerCase() ? 'leave --buyback-to out' : `--buyback-to ${s.payee}`
+      return fail(`this launch's splitter pays ${s.payee}, not ${buyback.payee ?? me}: run it again with ${was}, or add --restart for a new splitter (gang buyback set-payee changes it after the create)`, { splitter: plan.splitter })
     }
   }
 
