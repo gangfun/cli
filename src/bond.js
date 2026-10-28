@@ -156,9 +156,10 @@ const tokens = (x) => formatUnits(x, 18)
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
-/** Display tier of a coverage (bps): ≥ 100% full cover badge, 50–100% bond badge, below 50% no badge. */
+/** Coverage tier (bps): ≥ 100% full cover, 50–100% bond, below 50% none. gang.fun colours a tier only for an
+ *  allow-listed quote and an X of at least half the creator's balance; every other active bond gets a gray badge. */
 const tierOf = (bps) => (bps >= BPS ? 'full' : bps >= 5_000n ? 'bond' : 'none')
-const TIER_NOTE = { full: '押金全覆盖: dumping X now loses money (bond ≥ what the sale fetches)', bond: '押金: bond covers 50–100% of what dumping X fetches', none: 'below 50% coverage: no badge on gang.fun (bond and coverage still shown)' }
+const TIER_NOTE = { full: '押金全覆盖: dumping X now loses money (bond ≥ what the sale fetches)', bond: '押金: bond covers 50–100% of what dumping X fetches', none: 'below 50% coverage: a plain gray 押金 badge on gang.fun (bond and coverage still shown)' }
 
 async function nowOf(ctx) {
   return Number((await ctx.client.getBlock()).timestamp)
