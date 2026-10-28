@@ -295,7 +295,7 @@ graduated tokens only).
                                          chain (a token this wallet created with this symbol since the plan); a run that finds
                                          none never creates again by itself (the first may still be landing): --restart does.
                                          Done stays done: running it again only reports. --note goes on the create only;
-                                         --bond needs GangBond on the network (testnet only for now), checked before the create
+                                         --bond needs GangBond on the network (mainnet and testnet), checked before the create
   NOTES: gang create / buy / sell, and gang mint / withdraw on a 打新 sale, take [--note "<why>" [--conf 0-100]
                                          [--reveal-after 1-72h]] (a create's note is its launch manifesto); gang buy also
                                          --follow <note tx>. Mainnet only; pool trades (graduated / launched) carry no note
@@ -331,8 +331,8 @@ BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND
                                          creator only: the bond only grows, X only rises, the commitment only gets longer (90
                                          days in all before the pair; a deadline ≤ 90 days from now after it)
   gang bond status --token <addr>        state, phase (pending: waiting for the pair / running), X and the creator's balance /
-                                         headroom, coverage + tier once on the pair (≥100% full cover, 50–100% bond, <50% no
-                                         badge), toFullCover, time left, buy-back progress, the creator's record
+                                         headroom, coverage + tier once on the pair (≥100% full cover, 50–100% bond, <50% plain
+                                         gray badge), toFullCover, time left, buy-back progress, the creator's record
   gang bond start --token <addr>         anyone, once the token graduated / launched: start the clock (deadline = now + days)
   gang bond report --token <addr>        anyone, when the creator holds less than X: 1% of the bond to you, the rest buys
                                          back and burns the token (simulated first; nothing is sent when not violated)
