@@ -3,7 +3,7 @@ import { decimalsOf, isMissingFunction, poolSellQuote, ROUTER_ABI, routerDeadlin
 
 /**
  * PancakeSwap (V2 pool) buys and sells of a graduated / launched token through GangRouter — V3 and 打新 tokens
- * (`gang v3 buy|sell`, `gang fair buy|sell`) and V2 / Soft / U / S tokens (`gang buy|sell`), all the same way:
+ * (V3 / 打新, also as `gang v3|fair buy|sell`) and V2 / Soft / U / S tokens (`gang buy|sell`), all the same way:
  *   poolBuyBNB(token, quote, minTokensOut, deadline) payable  path [WBNB, token] or [WBNB, quote, token]
  *   poolBuy(token, quote, quoteIn, minTokensOut, deadline)     path [quote, token]; approve quote → router first
  *   poolSell(token, quote, amountIn, minQuoteOut, deadline)    path [token, quote]; approve token → router first

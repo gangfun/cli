@@ -32,8 +32,8 @@ const PADS = [
 ]
 
 const GANG_POINTER = {
-  v3: (t) => `a GangLaunchpad V3 (bonding-curve) token: use gang v3 (gang v3 info|buy|sell|status --token ${t})`,
-  fair: (t) => `a GangLaunchpad 打新 (fair-mint) token: use gang fair (gang fair info|status --token ${t}; before launch mint / withdraw, after it buy / sell)`,
+  v3: (t) => `a GangLaunchpad V3 (bonding-curve) token: gang info|buy|sell|status --token ${t} trade it (re-run if this was an RPC hiccup)`,
+  fair: (t) => `a GangLaunchpad 打新 (fair-mint) token: gang info|status --token ${t}; before launch gang mint / withdraw, after it gang buy / sell (re-run if this was an RPC hiccup)`,
 }
 
 /** Resolve which pad hosts `token` by probing curves(token).creator != 0; a GangLaunchpad token is pointed at its command. */
@@ -261,13 +261,36 @@ export const calldata = {
   wrap: () => encodeFunctionData({ abi: WBNB_ABI, functionName: 'deposit' }),
 }
 
-export async function decodeTx(hash) {
+/**
+ * Events of the logs that decode with one of `abis`, each with the emitting contract: GangLaunchpad logs, which `gang tx`
+ * reads beside the V2 / Soft / U / S pads'. Integers stay as on chain (strings), marked `units: 'raw'`: amounts are in wei
+ * (18 decimals), bps / shares / counts as they are; the V2 / Soft events are formatted (no `units`).
+ */
+export function decodeLogs(logs, abis) {
+  const events = []
+  for (const log of logs) {
+    for (const abi of abis) {
+      try {
+        const ev = decodeEventLog({ abi, data: log.data, topics: log.topics })
+        events.push({ event: ev.eventName, contract: log.address, units: 'raw', ...Object.fromEntries(Object.entries(ev.args).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])) })
+        break
+      } catch { /* other contract / event */ }
+    }
+  }
+  return events
+}
+
+/** `extraAbis`: decoders for logs not from the V2 / Soft / U / S pads (see decodeLogs). */
+export async function decodeTx(hash, extraAbis = []) {
   const r = await client.waitForTransactionReceipt({ hash, timeout: 120_000 })
   const events = []
   const known = new Map(PADS.map((p) => [p.address.toLowerCase(), p]))
   for (const log of r.logs) {
     const pad = known.get(log.address.toLowerCase())
-    if (!pad) continue
+    if (!pad) {
+      events.push(...decodeLogs([log], extraAbis))
+      continue
+    }
     try {
       const ev = decodeEventLog({ abi: pad.abi, data: log.data, topics: log.topics })
       const a = Object.fromEntries(Object.entries(ev.args).map(([k, v]) => {

@@ -69,7 +69,7 @@ export const MERGED_ERRORS_ABI = parseAbi([
 ])
 export const MERGED_HINTS = {
   Untaxed: 'this token is untaxed (0% / 0%): it never gets a pool tax, a tax route or dividends; nothing to release or claim on it',
-  NotReclaimable: 'only a 打新 (fair-mint) token can be sold back to the pad; a V3 token is sold on its curve (gang v3 sell)',
+  NotReclaimable: 'only a 打新 (fair-mint) token can be sold back to the pad; a V3 token is sold on its curve (gang sell)',
   NotLocked: 'the sale already launched (the token is unlocked): sell-back is over, trade the token on PancakeSwap',
   WrongKind: 'this token is the other kind on the merged pad: V3 tokens use `gang v3 …`, 打新 tokens use `gang fair …`',
   BadKind: 'the tax handler refused the token kind (a pad / handler wiring problem): report it to gang',
@@ -99,10 +99,10 @@ export async function notThisKind(ctx, token, want, net = '') {
   const kind = await kindOf(ctx, token)
   const ask = want === 'v3' ? 'a LaunchpadV3 (tax) token' : 'a 打新 (fair-mint) sale'
   if (kind === 'fair' && want === 'v3') {
-    return { error: `this is a 打新 (fair-mint) token, not a V3 token: use gang fair (e.g. gang fair info --token ${token}${net})`, kind }
+    return { error: `this is a 打新 (fair-mint) token, not a V3 token: gang info / buy / sell / mint / withdraw --token ${token}${net} pick the right pad code`, kind }
   }
   if (kind === 'v3' && want === 'fair') {
-    return { error: `this is a V3 (bonding-curve) token, not a 打新 sale: use gang v3 (e.g. gang v3 info --token ${token}${net})`, kind }
+    return { error: `this is a V3 (bonding-curve) token, not a 打新 sale: gang info / buy / sell --token ${token}${net} pick the right pad code`, kind }
   }
   return { error: `not ${ask} on this pad`, kind }
 }

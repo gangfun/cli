@@ -81,7 +81,7 @@ const STATUS = ['none', 'minting', 'launched']
 const HINTS = {
   BadConfig: 'a rule is out of bounds: see reason',
   NotAgent: 'this wallet holds no Agent ID; fair mint is Agent-only',
-  NotMinting: 'the sale already launched: trade the token in the pool with gang fair buy / gang fair sell',
+  NotMinting: 'the sale already launched: trade the token in the pool with gang buy / gang sell',
   WalletCapReached: 'this wallet already holds the per-wallet cap of shares',
   Slippage: 'fewer shares are left than --min-shares (someone filled first)',
   BadAmount: '--shares is more than this wallet holds in the sale',
@@ -103,6 +103,9 @@ const HINTS = {
   // not a create flag: the shared dividend vault's holding floor for this pad was raised above what 打新 allows
   VaultFloorTooHigh: 'the platform\'s dividend vault requires a larger holding than fair-mint rewards allow, so no sale can be created right now; ask gang to fix the vault setting',
 }
+
+/** What `gang tx` decodes a 打新 trade's logs with (the pad, the holder-reward vault). */
+export const FAIR_EVENT_ABIS = [PAD_ABI, VAULT_ABI]
 
 export function fairCtx(testnet) {
   const net = FAIR_NETS[testnet ? 'testnet' : 'mainnet']
@@ -244,7 +247,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     if (!['minting', 'launched', 'all'].includes(status)) fail('--status must be minting, launched or all')
     const r = await fetch(`${API}/fair/sales?status=${status}&limit=30`, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(10_000) })
       .then((x) => (x.ok ? x.json() : { error: x.status })).catch((e) => ({ error: e.message }))
-    if (r.error) return out({ success: false, error: `gang.fun fair list unavailable (${r.error})`, hint: `use gang fair info --token <addr>${testnet ? ' --testnet' : ''} for one sale` })
+    if (r.error) return out({ success: false, error: `gang.fun fair list unavailable (${r.error})`, hint: `use gang info --token <addr>${testnet ? ' --testnet' : ''} for one sale` })
     return out({ success: true, status, items: (r.items || []).map((x) => ({
       token: x.address, symbol: x.symbol, status: x.status, sold: x.sold, participants: x.participants,
       sharePrice: x.sharePrice && formatUnits(BigInt(x.sharePrice), 18), quote: x.quoteSymbol, chainId: x.chainId,
@@ -336,7 +339,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const sale = await saleOf(ctx, token)
     if (!sale) return notFair(token)
     if (sale.status !== 'minting') {
-      return fail(`sale is ${sale.status}, not minting`, { hint: `it launched: buy in the pool with gang fair buy --token ${token} --amount <quote>${testnet ? ' --testnet' : ''}` })
+      return fail(`sale is ${sale.status}, not minting`, { hint: `it launched: buy in the pool with gang buy --token ${token} --amount <quote>${testnet ? ' --testnet' : ''}` })
     }
     const me = walletFor(ctx, opt('from'))
     if (sale.gate !== zeroAddress && (await ctx.read(sale.gate, ERC721_ABI, 'balanceOf', [me])) === 0n) {
@@ -382,7 +385,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     if (sale.status !== 'minting') {
       return fail(`sale is ${sale.status}: withdraw only while minting`, sale.launched ? {
         pair: sale.pair,
-        hint: `it launched: sell in the pool with \`gang fair sell --token ${token} (--amount <tokens> | --all)${testnet ? ' --testnet' : ''}${opt('from') ? ` --from ${opt('from')}` : ''} [--slippage 1] [--to-bnb]\``
+        hint: `it launched: sell in the pool with \`gang sell --token ${token} (--amount <tokens> | --all)${testnet ? ' --testnet' : ''}${opt('from') ? ` --from ${opt('from')}` : ''} [--slippage 1] [--to-bnb]\``
           + ' (through GangRouter; minOut from the tax handler\'s previewSellNextBlock)',
       } : {})
     }
@@ -414,8 +417,8 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const sale = await saleOf(ctx, token)
     if (!sale) return notFair(token)
     if (!sale.launched || !sale.pair) {
-      return fail(`sale is ${sale.status}: gang fair ${sub} trades the token in its pool after launch`, {
-        hint: sub === 'buy' ? 'while minting, buy shares with gang fair mint --shares <n>' : 'while minting, sell shares back with gang fair withdraw (--shares <n> | --all)',
+      return fail(`sale is ${sale.status}: gang ${sub} trades the token in its pool after launch`, {
+        hint: sub === 'buy' ? `while minting, buy shares with gang mint --token ${token} --shares <n>` : `while minting, sell shares back with gang withdraw --token ${token} (--shares <n> | --all)`,
       })
     }
     const slippage = parseNum(fail, 'slippage', opt('slippage', '1'), 0, 50)
@@ -473,7 +476,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     if (r.claimableRaw === 0n) {
       return fail('nothing to claim yet', {
         ...(unsold && { creditedUnsoldEstimate: r.creditedUnsoldEstimate, note: r.note }),
-        hint: `gang fair status --token ${token}${testnet ? ' --testnet' : ''}`,
+        hint: `gang status --token ${token}${testnet ? ' --testnet' : ''}`,
       })
     }
     const data = encodeFunctionData({ abi: VAULT_ABI, functionName: 'claim', args: [token] })

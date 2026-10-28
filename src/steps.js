@@ -263,7 +263,7 @@ export async function swapBackState(ctx, handler, token, reserveToken) {
 }
 
 /** Hint for selling a graduated / launched token on PancakeSwap with the minOut of a pool quote (poolSellQuote) as amountOutMin. */
-export const POOL_SELL_HINT = '`gang v3 sell` / `gang fair sell` build this sell through GangRouter (poolSell / --to-bnb poolSellForBNB, minOut as here); '
+export const POOL_SELL_HINT = '`gang sell` builds this sell through GangRouter (poolSell / --to-bnb poolSellForBNB, minOut as here); '
   + 'or sell on PancakeSwap with swapExactTokensForTokensSupportingFeeOnTransferTokens (the token takes its sell tax in the transfer), passing minOut (poolQuote.minOut / poolSellAll.minOut, set by --slippage) as amountOutMin so the sell reverts rather than fills below it; '
   + 'the quote includes the small chunk of tax the handler sells right before a sell and assumes the tx lands in a new block (previewSellNextBlock). '
   + 'Let the wallet estimate gas, or give at least 750k: a sell that triggers a chunk uses about 660k (about 330k without), and too little gas reverts with SwapBackOutOfGas'
