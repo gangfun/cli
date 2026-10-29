@@ -218,6 +218,11 @@ Claude Code: `claude mcp add gang -- gang mcp`. `baw` must be signed in on the s
 Local files (`--logo`, `upload-logo --file`) are read by the MCP server, whose working directory is the host's choice
 (Claude Desktop does not start it in your project): pass absolute paths, or an image URL (`--logo-uri`, `upload-logo --url`).
 
+A GUI host may start the server with the system directories only on `PATH`. The server adds node's directory, npm's
+global bin and `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, `~/.npm-global/bin` to the `PATH` of the commands
+it runs, so `baw` is found (0.17.3+). If the host cannot start `gang` at all, give it full paths:
+`{ "command": "<output of which node>", "args": ["<output of which gang>", "mcp"] }`.
+
 A cancelled call (or a client that closes stdin / stops the server) stops a read at once. A write (`gang_execute`,
 `gang_tx`, the previews, `gang_cli`) always runs to its end, since the wallet may already have sent the tx: after a
 timed-out `gang_execute`, check `gang_status` / the wallet history instead of executing again.
@@ -260,4 +265,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.17.2` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.17.3` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
