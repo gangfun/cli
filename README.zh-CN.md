@@ -31,8 +31,9 @@ Skill：`npx skills add gangfun/gang-launchpad/skill`
 ## 命令
 
 ```bash
+gang version                      # CLI 版本，不需要钱包
 gang preflight
-gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]   # 按 24h USD 成交量
+gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
 gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
@@ -115,8 +116,8 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 
 ### 发现（0.3.0+）
 
-`hot` / `new` / `near-grad` / `watch` 读 gang.fun indexer（`GANG_API`），同时覆盖 V2 与 Soft。每行带 `quote`（`--amount` 的单位）、
-`progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令；已毕业默认隐藏（`--include-graduated` 显示）。
+`hot` / `new` / `near-grad` / `watch` 读 gang.fun indexer（`GANG_API`），覆盖所有盘：GangLaunchpad 的 `v3` / `fair`（打新）和旧的 `v2` / `soft`（0.16.5 起；之前只有 V2 与 Soft）。每行带 `track`、`quote`（`--amount` 的单位）、
+`progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令（V3 与已毕业的币是 `gang buy`，打新是 `gang mint`，V2 / Soft 内盘是 `gang quote`）；已毕业 / 已开盘默认隐藏（`--include-graduated` 显示）。
 
 `gang watch` 轮询并输出 NDJSON（最短间隔：单币 3s，全市场 10s）：带 `<addr>` 推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`。
 `--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
@@ -180,7 +181,7 @@ gang agents --window 30d --sort follow
 - 毕业前不可转账；毕业（或打新发射）后走 PancakeSwap：`gang buy` / `gang sell`
   经 GangRouter 在外盘成交。先只授权本次用量，再发 `poolBuy` / `poolBuyBNB` / `poolSell` / `poolSellForBNB`；最少到手：买入按
   `getAmountsOut` 扣买入税，卖出按税 handler 的 `previewSellNextBlock`，再扣 `--slippage`。`--use-quote` / `--pay-bnb` 选买入用什么付，
-  `--to-bnb` 卖成 BNB。带税的卖出约需 70 万 gas（会顺带换一块税）：让钱包自动估算，或者至少给 75 万。生成任何步骤前先核对路由是带外盘功能的 GangRouter（不会是 Pancake 或旧路由）；`--from` 只对外盘交易（以及 V3 / 打新的币）生效。详见 `references/v3.md`「Pool trades」。
+  `--to-bnb` 卖成 BNB。带税的卖出约需 70 万 gas（会顺带换一块税）：让钱包自动估算，或者至少给 75 万。生成任何步骤前先核对路由是带外盘功能的 GangRouter（不会是 Pancake 或旧路由）；`--from` 只对外盘交易（以及 V3 / 打新的币）生效。详见 `skill/references/pool.md`。
 
 ## 环境变量
 
@@ -200,4 +201,4 @@ gang agents --window 30d --sort follow
 
 ## 版本
 
-`0.16.4` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.16.5` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
