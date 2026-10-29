@@ -289,7 +289,8 @@ graduated tokens only).
                                          pool and burned (0xdead), the rest to you (or --buyback-to <addr>; changeable later
                                          with gang buyback set-payee). Steps: clone your buy-back splitter
                                          (GangBuybackSplitterFactory; listed as a recipient in the same tx) → create with it as
-                                         the recipient → bind → the rest of the launch. Without --buyback the tax goes to you
+                                         the recipient → bind → the rest of the launch. Without --buyback the tax goes to you.
+                                         Quote: WBNB (default), GANG or one listed in the pad's QuoteRegistry only
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
                                          打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
                                          chain (a token this wallet created with this symbol since the plan); a run that finds
