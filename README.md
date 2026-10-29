@@ -41,7 +41,7 @@ npx skills add gangfun/gang-launchpad/skill
 ## Commands
 
 ```bash
-gang version                      # this CLI's version, no wallet needed
+gang version                      # this CLI's version (also -v, --version), no wallet needed
 gang preflight
 gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 24h USD volume
 gang new [--limit 10] [--max-age 2h]

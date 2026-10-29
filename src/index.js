@@ -204,7 +204,7 @@ kind's trade. Results of V3 / 打新 tokens carry kind: "v3" | "fair". --testnet
 only); --calldata prints the raw tx instead of a baw preview; --from <addr> reads / builds for that wallet (V2 / Soft:
 graduated tokens only).
 
-  gang version                           this CLI's version (also --version); no wallet needed
+  gang version                           this CLI's version (also --version, -v); no wallet needed
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list [--kind v3|fair [--status …]]
                                          V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
@@ -861,7 +861,7 @@ function create() {
 }
 
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -899,6 +899,7 @@ async function main() {
       return runBuyback(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'version':
     case '--version':
+    case '-v':
       return out({ success: true, version: VERSION })
     case 'preflight': {
       const issues = []
