@@ -200,19 +200,23 @@ take MCP servers instead of a shell (Claude Desktop / Code, Cursor, …). Each t
 
 | Tool | Runs |
 |---|---|
+| `gang_help` | this CLI's whole help (every command, every flag) and the full rules (0.17.2+): what an agent with no skill installed reads before a create, launch, bond, buyback, mint or withdraw |
 | `gang_preflight`, `gang_hot`, `gang_new`, `gang_near_grad`, `gang_info`, `gang_status`, `gang_notes`, `gang_agents` | the read commands of the same name |
 | `gang_tx` | `gang tx --hash …`: decode a tx, publish its queued note |
 | `gang_watch` | `gang watch` until `maxEvents` (default 1) or `timeout` (default 50s, at most 30m): returns `{ events, meta }`, `timedOut: true` when nothing came; call it again to keep waiting |
-| `gang_buy`, `gang_sell`, `gang_follow` | the trade previews (nothing is sent) |
+| `gang_buy`, `gang_sell`, `gang_follow` | the trade previews (nothing is sent), with all their flags: `useWbnb` / `useQuote` / `payBnb`, `settleFirst`, … |
 | `gang_execute` | `gang execute --request-id …`: only after the user's yes on that preview |
-| `gang_cli` | any other command as an argument list (`create`, `mint`, `withdraw`, `claim`, `bond …`, `buyback …`, `upload-logo`, …) |
+| `gang_cli` | every other command as an argument list: `create` (also `--fair` and a launch in one command), `mint`, `withdraw`, `claim`, `release`, `quote`, `list`, `upload-logo`, `bond …`, `buyback …`, `v3 income`, `version`, and the flags no other tool takes (`--calldata`, `--from`, …) |
 
 ```json
 { "mcpServers": { "gang": { "command": "gang", "args": ["mcp"] } } }
 ```
 
 Claude Code: `claude mcp add gang -- gang mcp`. `baw` must be signed in on the same machine; the server's
-`instructions` carry the hard rules (preview → show → confirm → execute).
+`instructions` carry the hard rules (preview → show → confirm → execute); `gang_help` has them in full.
+
+Local files (`--logo`, `upload-logo --file`) are read by the MCP server, whose working directory is the host's choice
+(Claude Desktop does not start it in your project): pass absolute paths, or an image URL (`--logo-uri`, `upload-logo --url`).
 
 A cancelled call (or a client that closes stdin / stops the server) stops a read at once. A write (`gang_execute`,
 `gang_tx`, the previews, `gang_cli`) always runs to its end, since the wallet may already have sent the tx: after a
@@ -256,4 +260,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.17.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.17.2` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
