@@ -192,6 +192,8 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 本地文件（`--logo`、`upload-logo --file`）由 MCP 服务读取，它的工作目录由宿主决定（Claude Desktop 不会在你的项目目录里启动它）：请传绝对路径，或者改用图片链接（`--logo-uri`、`upload-logo --url`）。
 
+图形界面的宿主启动 MCP 服务时，`PATH` 里可能只有系统目录。服务会把 node 所在目录、npm 全局 bin，以及 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.npm-global/bin` 加进它所运行命令的 `PATH`，所以能找到 `baw`（0.17.3+）。如果宿主连 `gang` 都启动不了，就写完整路径：`{ "command": "<which node 的输出>", "args": ["<which gang 的输出>", "mcp"] }`。
+
 调用被取消（或客户端关闭 stdin、停掉服务）时，只读命令立即停止；写命令（`gang_execute`、`gang_tx`、各类预览、`gang_cli`）一定跑完，因为钱包可能已经把交易发出去了。`gang_execute` 超时后，先用 `gang_status` 或钱包交易记录确认，不要再执行一次。
 
 ## Quote 路径
@@ -227,4 +229,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.17.2` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.3` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

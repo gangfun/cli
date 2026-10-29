@@ -6,6 +6,9 @@ export function baw(args) {
   try {
     out = execFileSync('baw', [...args, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 << 20 })
   } catch (e) {
+    if (e.code === 'ENOENT') {
+      throw new Error('baw (the Binance Agentic Wallet CLI) is not installed or not on PATH: npm i -g @binance/agentic-wallet, then baw auth signin. Under an MCP host, start gang mcp with a PATH that has baw\'s directory (which baw)')
+    }
     const text = (e.stdout || '') + (e.stderr || '')
     try { return JSON.parse(e.stdout) } catch { throw new Error(`baw ${args[0]} failed: ${text.trim() || e.message}`) }
   }

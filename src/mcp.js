@@ -6,6 +6,8 @@
  * still go through the user's Agentic Wallet (baw).
  */
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { VERSION } from './version.js'
@@ -229,10 +231,29 @@ export function invalid(t, a) {
   return null
 }
 
+/**
+ * The CLI children's environment: the host's, with PATH extended by where node, this package's global bin and the usual
+ * install dirs live. A GUI host (Claude Desktop on macOS) may start its servers with the system dirs only, and the CLI
+ * runs `baw` by name: without this every wallet call failed (spawnSync baw ENOENT) while the reads worked. Appended, so
+ * the host's own PATH still wins.
+ */
+export function childEnv(env = process.env, cli = CLI) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH'
+  const extra = [dirname(process.execPath)]
+  // <prefix>/lib/node_modules/@gangfun/cli/src/index.js → <prefix>/bin (npm i -g puts baw there too); Windows: <prefix>
+  const lib = cli.lastIndexOf(`${sep}lib${sep}node_modules${sep}`)
+  if (lib > 0) extra.push(join(cli.slice(0, lib), 'bin'))
+  const win = cli.lastIndexOf(`${sep}node_modules${sep}`)
+  if (process.platform === 'win32' && win > 0) extra.push(cli.slice(0, win))
+  if (process.platform !== 'win32') extra.push('/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local', 'bin'), join(homedir(), '.npm-global', 'bin'))
+  const dirs = [...new Set([...String(env[key] || '').split(delimiter).filter(Boolean), ...extra])]
+  return { ...env, [key]: dirs.join(delimiter) }
+}
+
 /** Run the CLI with args → { code, stdout, stderr }. onChild(child): to kill a read when its request is cancelled. */
 function runCli(args, ms, onChild = () => {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [CLI, ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
     onChild(child)
     let stdout = '', stderr = ''
     child.stdout.on('data', (d) => { stdout += d })
