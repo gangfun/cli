@@ -1,4 +1,4 @@
-/** Discovery for agents: ranked lists + a polling event stream, read from the gang.fun indexer API. */
+/** Discovery for agents: ranked lists + an event stream (Server-Sent Events, or polling), read from the gang.fun indexer API. */
 import { websiteError, twitterError } from './links.js'
 import { UA } from './version.js'
 
@@ -243,6 +243,148 @@ async function freshTrades(t, seen, stop) {
   return { fresh: fresh.reverse(), gap: true }
 }
 
+// --- market mode over Server-Sent Events (GET /stream): the server compares its board snapshots, we only normalize ---
+const MARKET_EVENTS = ['new_token', 'near_grad', 'graduated']
+const STREAM_STALL_MS = 45_000 // the server pings every 15 s: this long without a byte is a dead connection
+const STREAM_BACKOFF = [1, 2, 5, 10, 30] // seconds before reconnect n (the last repeats)
+
+/** Wait s seconds, waking early once shouldStop() flips (e.g. --timeout) instead of overshooting. */
+async function pause(s, shouldStop) {
+  const end = Date.now() + s * 1000
+  while (Date.now() < end && !shouldStop()) await new Promise((r) => setTimeout(r, Math.min(1000, end - Date.now())))
+}
+
+/** SSE messages ({ id, data }) from a fetch body; onBytes() on every chunk (stall watchdog). Comments are skipped. */
+export async function* sseMessages(body, onBytes = () => {}) {
+  const dec = new TextDecoder()
+  let buf = ''
+  for await (const chunk of body) {
+    onBytes()
+    buf += dec.decode(chunk, { stream: true }).replace(/\r/g, '')
+    let i
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, i)
+      buf = buf.slice(i + 2)
+      let id = null
+      const data = []
+      for (const line of block.split('\n')) {
+        if (!line || line.startsWith(':')) continue
+        const k = line.indexOf(':')
+        const field = k < 0 ? line : line.slice(0, k)
+        const value = k < 0 ? '' : line.slice(k + 1).replace(/^ /, '')
+        if (field === 'data') data.push(value)
+        else if (field === 'id') id = value
+      }
+      if (data.length) yield { id, data: data.join('\n') }
+    }
+  }
+}
+
+/**
+ * A stream event's USD per quote: the server's price of the row's quote (GANG, …), else WBNB at its BNB price and the BSC
+ * stables at $1 (a server from before quoteUsd), else unknown.
+ */
+const quoteUsdFrom = ({ quoteUsd, rate }) => (a) => {
+  if (Number(quoteUsd) > 0) return Number(quoteUsd)
+  const x = a?.toLowerCase()
+  if (x === WBNB) return Number(rate) > 0 ? Number(rate) : null
+  return STABLES.includes(x) ? 1 : null
+}
+
+/**
+ * Market mode from GET /stream. Resolves 'done' (stopped: --timeout / --max-events), 'unavailable' (the server
+ * has no stream: the caller polls instead) or 'poll' (it went away mid-run: the caller polls from a fresh snapshot).
+ * Reconnects with Last-Event-ID, so the server replays what a dropped connection missed; events received after the
+ * last snapshot line are not emitted twice.
+ */
+export async function streamMarket({ track = 'all', minPct = 50, events = null, emit, shouldStop, stop }) {
+  if (!TRACKS.includes(track)) throw new Error(`--track must be ${TRACKS.join(', ')} (got ${track})`)
+  const want = (e) => !events || events.has(e)
+  const q = new URLSearchParams({ track, minPct: String(minPct) })
+  const asked = events ? MARKET_EVENTS.filter((e) => events.has(e)) : []
+  if (asked.length) q.set('events', asked.join(','))
+  let lastId = null
+  let started = false
+  let failures = 0
+  let partial = new Set() // events since the last snapshot line: a reconnect replays them
+  let replayed = new Set() // the ones to skip in the replay now coming in
+
+  for (;;) {
+    if (shouldStop()) return 'done'
+    const ctl = new AbortController()
+    const onStop = () => ctl.abort(new Error('stopped'))
+    if (stop?.aborted) onStop()
+    else stop?.addEventListener('abort', onStop, { once: true })
+    let lastByte = Date.now()
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastByte > STREAM_STALL_MS) ctl.abort(new Error(`no data for ${STREAM_STALL_MS / 1000}s`))
+    }, 5000)
+    let reason = null
+    try {
+      const r = await fetch(`${API}/stream?${q}`, {
+        signal: ctl.signal,
+        headers: { accept: 'text/event-stream', 'user-agent': UA, ...(lastId && { 'last-event-id': lastId }) },
+      })
+      const sse = r.ok && /^text\/event-stream/.test(r.headers.get('content-type') || '')
+      if (!sse) {
+        await r.body?.cancel().catch(() => {})
+        // no stream route (an older server, 404) or not for us (400, 429 too many streams, 503 warming): poll instead
+        if (!started) return 'unavailable'
+        if (r.status === 404 || r.status === 400 || r.ok) return 'poll'
+        throw new Error(`gang API ${r.status} on /stream`)
+      }
+      if (started) {
+        replayed = partial
+        partial = new Set()
+      }
+      for await (const { id, data } of sseMessages(r.body, () => { lastByte = Date.now() })) {
+        let m
+        try { m = JSON.parse(data) } catch { continue }
+        if (m.event === 'ready') {
+          failures = 0
+          if (!started) {
+            started = true
+            emit({ event: 'watching', mode: 'market', transport: 'stream', track, tokens: m.tokens, minPct }, { meta: true })
+          }
+          if (id) lastId = id
+          if (!m.resumed) replayed = new Set() // nothing replayed: the next events are all new
+        } else if (m.event === 'snapshot') {
+          lastId = id || String(m.at)
+          partial = new Set()
+          replayed = new Set()
+        } else if (m.event === 'gap') {
+          replayed = new Set()
+          emit({ event: 'error', error: 'stream reconnected too late: changes while it was down were missed' }, { meta: true })
+        } else if (MARKET_EVENTS.includes(m.event) && m.row) {
+          const key = `${m.event}:${String(m.row.address).toLowerCase()}`
+          // still in partial: if this connection drops before its snapshot line too, the next replay has it again
+          partial.add(key)
+          if (replayed.has(key)) continue
+          if (!want(m.event)) continue
+          const t = normalize(m.row, quoteUsdFrom(m))
+          if (m.event === 'new_token') emit({ event: 'new_token', ...withHint(t) })
+          else if (m.event === 'graduated') emit({ event: 'graduated', ...brief(t), pair: t.pair })
+          else emit({ event: 'near_grad', ...brief(t), next: hint(t) })
+        }
+        if (shouldStop()) return 'done'
+      }
+      reason = 'the server closed the stream'
+    } catch (e) {
+      if (shouldStop()) return 'done'
+      // a startup failure: polling reports the API being down in its own words
+      if (!started) return 'unavailable'
+      reason = ctl.signal.reason?.message || e.message
+    } finally {
+      clearInterval(watchdog)
+      stop?.removeEventListener('abort', onStop)
+      ctl.abort()
+    }
+    const wait = STREAM_BACKOFF[Math.min(failures++, STREAM_BACKOFF.length - 1)]
+    emit({ event: 'error', error: `stream: ${reason}; reconnecting in ${wait}s` }, { meta: true })
+    await pause(wait, shouldStop)
+  }
+}
+
 const crossed = (prev, cur, levels) => levels.filter((m) => prev < m && cur >= m)
 const brief = (t) => ({
   token: t.address, symbol: t.symbol, track: t.track, quote: t.quote, progressPct: t.progressPct,
@@ -255,13 +397,9 @@ const brief = (t) => ({
  * The first tick only snapshots state; current matches come from `gang near-grad` / `gang new`.
  * `stop` (AbortSignal) cancels in-flight requests; errors after shouldStop() flips are dropped, not emitted.
  */
-export async function watch({ token, intervalSec = 10, minPct = 50, track = 'all', events = null, emit, shouldStop, stop }) {
+export async function watch({ token, intervalSec = 10, minPct = 50, track = 'all', events = null, poll = false, emit, shouldStop, stop }) {
   const want = (e) => !events || events.has(e)
-  // wakes early once shouldStop() flips (e.g. --timeout) instead of overshooting a full interval
-  const sleep = async (s) => {
-    const end = Date.now() + s * 1000
-    while (Date.now() < end && !shouldStop()) await new Promise((r) => setTimeout(r, Math.min(1000, end - Date.now())))
-  }
+  const sleep = (s) => pause(s, shouldStop)
 
   if (token) {
     // graduation always ends a token watch; when --events filters it out, end with a meta line instead
@@ -304,10 +442,16 @@ export async function watch({ token, intervalSec = 10, minPct = 50, track = 'all
     }
   }
 
+  // market mode: the server's stream when it has one (one connection instead of every list every interval)
+  if (!poll) {
+    const how = await streamMarket({ track, minPct, events, emit, shouldStop, stop })
+    if (how === 'done') return
+    if (how === 'poll') emit({ event: 'error', error: 'stream no longer offered; polling from here (changes in between not replayed)' }, { meta: true })
+  }
   const first = await fetchMarket(track, stop)
   // only grows: a token missing from one poll must not come back as new_token
   const known = new Map(first.tokens.map((t) => [t.address, t]))
-  emit({ event: 'watching', mode: 'market', track, tokens: known.size, minPct, intervalSec }, { meta: true })
+  emit({ event: 'watching', mode: 'market', transport: 'poll', track, tokens: known.size, minPct, intervalSec }, { meta: true })
   let warned = false
   const warnTruncated = (truncated) => {
     if (!truncated || warned) return

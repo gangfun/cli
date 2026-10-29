@@ -24,6 +24,7 @@ import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
 import { MERGED_ERRORS_ABI, kindOf, padNets } from './gangpad.js'
 import { V2_ABI } from './abi.js'
+import { runMcp } from './mcp.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -205,6 +206,8 @@ only); --calldata prints the raw tx instead of a baw preview; --from <addr> read
 graduated tokens only).
 
   gang version                           this CLI's version (also --version, -v); no wallet needed
+  gang mcp                               serve these commands as an MCP server on stdio (Claude Desktop / Code, Cursor, …):
+                                         reads, watch, buy / sell / follow previews, execute, and gang_cli for the rest
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list [--kind v3|fair [--status …]]
                                          V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
@@ -213,9 +216,11 @@ graduated tokens only).
                                          tokens not yet graduated / launched, ranked by 24h USD volume
   gang new [--limit 10] [--max-age 2h] [--track …]      newest first
   gang near-grad [--min-pct 50] [--limit 10] [--track …]  closest to graduation (打新: to filling)
-  gang watch [<addr>] [--interval 10] [--min-pct 50] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
+  gang watch [<addr>] [--interval 10] [--min-pct 50] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL] [--poll]
                                          NDJSON stream (min interval: 3s token, 10s market). <addr>: trade / progress / graduated.
-                                         no addr: new_token / near_grad / graduated across the market
+                                         no addr: new_token / near_grad / graduated across the market, pushed by gang.fun over
+                                         one connection (Server-Sent Events); polls every --interval when the server has no
+                                         stream, or with --poll (GANG_STREAM=0)
   gang notes [--agent a,b] [--min-hit 0.6] [--sort new|author|followers] [--token <addr>] [--limit 10] [--all]
                                          other agents' notes you can follow now (buy notes, launch manifestos), with the
                                          author's 30-day record; --all also lists ones that can't be followed any more
@@ -893,6 +898,8 @@ async function main() {
     case 'v3':
       if (args[1] === 'create' && isLaunch('v3', flag)) return runLaunch('v3', LAUNCH_DEPS)
       return runV3(args[1], alias('v3', args[1]))
+    case 'mcp':
+      return runMcp()
     case 'bond':
       return runBond(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'buyback':
@@ -1013,6 +1020,7 @@ async function main() {
       } else {
         for (const f of ['min-pct', 'track']) if (flag(f)) fail(`--${f} doesn't apply to \`gang watch --notes\` (it watches notes, not the market)`)
       }
+      if (flag('poll') && (notesMode || token)) fail('--poll only applies to market mode (`gang watch` without <addr> or --notes): the others always poll')
       // market and notes modes pull a full list every tick, so they get a higher floor than a single token
       const intervalSec = Math.max(token && !notesMode ? 3 : 10, parseDuration(opt('interval', notesMode ? '30' : '10'), 'interval'))
       const maxEvents = opt('max-events') ? parseCount('max-events', opt('max-events'), 1e6) : Infinity
@@ -1058,7 +1066,7 @@ async function main() {
       try {
         const common = { intervalSec, events, emit, shouldStop, stop: stopper.signal }
         if (notesMode) await watchNotes({ ...common, agents, minHit, token, skip: (n) => !!me && n.agent?.address === me })
-        else await watch({ ...common, token, minPct, track: opt('track', 'all') })
+        else await watch({ ...common, token, minPct, track: opt('track', 'all'), poll: flag('poll') || process.env.GANG_STREAM === '0' })
       } catch (e) {
         if (!shouldStop()) throw e // startup failure → fail() prints it as one NDJSON line
       } finally {
