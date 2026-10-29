@@ -33,7 +33,9 @@ Hard rules (the gang skill has the full list: npx skills add gangfun/gang-launch
 const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'v2', 'soft'], description: 'Launchpad track (default all)' }
 const ADDR = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' }
 const HASH = { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' }
-const AMOUNT = { type: ['string', 'number'] }
+// one plain type: some MCP hosts (Gemini function calling, OpenAI strict mode) reject a schema with a union type. A number
+// sent anyway is turned into a string before the check (coerce)
+const AMOUNT = { type: 'string', pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'A plain decimal, e.g. "0.05"' }
 const TESTNET = { type: 'boolean', description: 'BSC testnet GangLaunchpad (tokens have no value)' }
 const NOTE = {
   note: { type: 'string', description: 'Public, permanent reason for the trade (1-280 chars, no links). Mainnet curve trades only' },
@@ -130,6 +132,14 @@ export const TOOLS = [
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
 const NOT_VIA_CLI = new Set(['execute', 'watch', 'mcp', 'help'])
 
+/** A number where the schema asks for a decimal string (models often send amount: 0.05) → its string. */
+export function coerce(t, a) {
+  if (a == null || typeof a !== 'object' || Array.isArray(a)) return a
+  const out = { ...a }
+  for (const [k, v] of Object.entries(a)) if (t.inputSchema.properties[k] === AMOUNT && typeof v === 'number') out[k] = String(v)
+  return out
+}
+
 /** Check arguments against a tool's schema (the subset these tools use). → error message or null */
 export function invalid(t, a) {
   if (a == null || typeof a !== 'object' || Array.isArray(a)) return 'arguments must be an object'
@@ -143,7 +153,9 @@ export function invalid(t, a) {
     const ok = types.some((ty) => (ty === 'integer' ? Number.isInteger(v) : ty === 'array' ? Array.isArray(v) : typeof v === ty))
     if (!ok) return `${k} must be ${types.join(' or ')}`
     if (s.enum && !s.enum.includes(v)) return `${k} must be one of ${s.enum.join(', ')}`
-    if (s.pattern && !new RegExp(s.pattern).test(v)) return `${k} is not a valid ${s.pattern.includes('64') ? 'tx hash' : 'address'}`
+    if (s.pattern && !new RegExp(s.pattern).test(v)) {
+      return s === AMOUNT ? `${k} must be a plain decimal like 0.05 (got ${v})` : `${k} is not a valid ${s.pattern.includes('64') ? 'tx hash' : 'address'}`
+    }
     if (typeof v === 'number' && ((s.minimum != null && v < s.minimum) || (s.maximum != null && v > s.maximum))) return `${k} is out of range`
     if (Array.isArray(v)) {
       if (s.minItems && v.length < s.minItems) return `${k} needs at least ${s.minItems} item(s)`
@@ -252,7 +264,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, signals
       case 'tools/call': {
         const t = BY_NAME.get(m.params?.name)
         if (!t) return error(m.id, -32602, `unknown tool: ${m.params?.name}`)
-        const a = m.params.arguments ?? {}
+        const a = coerce(t, m.params.arguments ?? {})
         const bad = invalid(t, a)
         if (bad) return reply(m.id, { content: [{ type: 'text', text: JSON.stringify({ success: false, error: bad }) }], isError: true })
         const read = t.annotations.readOnlyHint === true
