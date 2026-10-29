@@ -41,8 +41,9 @@ npx skills add gangfun/gang-launchpad/skill
 ## Commands
 
 ```bash
+gang version                      # this CLI's version, no wallet needed
 gang preflight
-gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]   # 24h USD volume
+gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 24h USD volume
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
 gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
@@ -130,9 +131,9 @@ Buy / sell / create: **preview → you confirm → execute**. `requestId` expire
 
 ### Discovery (0.3.0+)
 
-`hot` / `new` / `near-grad` / `watch` read the gang.fun indexer (`GANG_API`) and cover the V2 and Soft tracks. Each row has
-`quote` (the unit to pass to `--amount`), `progressPct`, `remaining`/`remainingUsd`, `volume24hUsd`, `holders`, `ageMin` and a `next` command.
-Graduated tokens are hidden unless `--include-graduated` is passed.
+`hot` / `new` / `near-grad` / `watch` read the gang.fun indexer (`GANG_API`) and cover every track: GangLaunchpad `v3` / `fair`
+(打新) and the older `v2` / `soft` (0.16.5+; before, V2 and Soft only). Each row has `track`, `quote` (the unit to pass to `--amount`), `progressPct`, `remaining`/`remainingUsd`, `volume24hUsd`, `holders`, `ageMin` and a `next` command
+(`gang buy` on V3 and graduated tokens, `gang mint` on a 打新 sale, `gang quote` on a V2 / Soft curve). Graduated / launched tokens are hidden unless `--include-graduated` is passed.
 
 `gang watch` polls and prints NDJSON. The minimum interval is 3s with `<addr>` and 10s for the whole market. With `<addr>` it emits `trade` / `progress` (25/50/75/90%) / `graduated`.
 Without it, it emits `new_token` / `near_grad` (crosses `--min-pct`) / `graduated`. `--max-events 1` blocks until the next event and
@@ -207,7 +208,7 @@ gang agents --window 30d --sort follow
   `--slippage`. `--use-quote` / `--pay-bnb` pick what a buy pays with, `--to-bnb` sells for BNB. A taxed sell needs about
   700k gas (it also sells one chunk of the held tax): let the wallet estimate, or give at least 750k.
   The router is checked first (a GangRouter with pool trades, never Pancake or an old router); `--from` works only on
-  these pool trades (and on V3 / 打新 tokens). Details: `references/v3.md` ("Pool trades").
+  these pool trades (and on V3 / 打新 tokens). Details: `skill/references/pool.md`.
 
 ## Env
 
@@ -227,4 +228,4 @@ gang agents --window 30d --sort follow
 
 ## Version
 
-`0.16.4` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.16.5` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

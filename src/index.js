@@ -14,7 +14,7 @@ import { normalizeWebsite, normalizeTwitter } from './links.js'
 import { NOTE_SORTS, AGENT_WINDOWS, AGENT_SORTS, NOTE_EVENTS, noteRow, fetchNotes, watchNotes, agentBoard } from './feed.js'
 import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
 import { rememberPreview, previewFor } from './previews.js'
-import { UA, checkUpdate } from './version.js'
+import { UA, VERSION, checkUpdate } from './version.js'
 import { runFair, FAIR_EVENT_ABIS } from './fair.js'
 import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
 import { runBond } from './bond.js'
@@ -204,14 +204,15 @@ kind's trade. Results of V3 / 打新 tokens carry kind: "v3" | "fair". --testnet
 only); --calldata prints the raw tx instead of a baw preview; --from <addr> reads / builds for that wallet (V2 / Soft:
 graduated tokens only).
 
+  gang version                           this CLI's version (also --version); no wallet needed
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list [--kind v3|fair [--status …]]
                                          V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
                                          (--status minting|launched|all): GangLaunchpad tokens from gang.fun
-  gang hot [--limit 10] [--track all|v2|soft] [--include-graduated]
-                                         curve tokens ranked by 24h USD volume
-  gang new [--limit 10] [--max-age 2h] [--track …]      newest curve tokens first
-  gang near-grad [--min-pct 50] [--limit 10] [--track …]  closest to graduation
+  gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]
+                                         tokens not yet graduated / launched, ranked by 24h USD volume
+  gang new [--limit 10] [--max-age 2h] [--track …]      newest first
+  gang near-grad [--min-pct 50] [--limit 10] [--track …]  closest to graduation (打新: to filling)
   gang watch [<addr>] [--interval 10] [--min-pct 50] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
                                          NDJSON stream (min interval: 3s token, 10s market). <addr>: trade / progress / graduated.
                                          no addr: new_token / near_grad / graduated across the market
@@ -860,7 +861,7 @@ function create() {
 }
 
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -896,6 +897,9 @@ async function main() {
       return runBond(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'buyback':
       return runBuyback(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'version':
+    case '--version':
+      return out({ success: true, version: VERSION })
     case 'preflight': {
       const issues = []
       const status = bawStatus()
@@ -909,7 +913,7 @@ async function main() {
         if (!agent) issues.push({ code: 'NO_AGENT_ID', fix: 'Claim a .ai Agent ID in Binance Wallet (Agent ID banner). Gang only lets Agent ID holders buy/create.' })
       }
       return out({
-        success: issues.length === 0, status, address: me,
+        success: issues.length === 0, cliVersion: VERSION, status, address: me,
         // `launchpad` = createPad: kept for readers of the old field (it used to be the V2 create target)
         launchpad: padNets('v3').mainnet.pad, createPad: padNets('v3').mainnet.pad, isAgent: agent,
         devMode: settings?.devMode?.enabled ?? null, tradeAllTokens: settings?.tradeAllTokens ?? null, issues,
@@ -938,16 +942,16 @@ async function main() {
       const market = await fetchMarket(track)
       const tokens = rank(market.tokens, cmd, { limit, minPct, maxAgeSec, includeGraduated })
       const empty = {
-        hot: includeGraduated ? 'No token traded in the last 24h.' : 'No curve token traded in the last 24h.',
-        new: maxAgeSec != null ? `No curve token created in the last ${opt('max-age')}.` : 'No curve tokens.',
-        'near-grad': `No curve token at ≥${minPct}% of graduation; lower --min-pct to see the closest ones.`,
+        hot: includeGraduated ? 'No token traded in the last 24h.' : 'No token before graduation traded in the last 24h.',
+        new: maxAgeSec != null ? `No token created in the last ${opt('max-age')}.` : 'No tokens before graduation.',
+        'near-grad': `No token at ≥${minPct}% of graduation; lower --min-pct to see the closest ones.`,
       }[cmd]
       return out({
         success: true, source: API, sort: cmd, track, count: tokens.length,
         ...(cmd === 'near-grad' ? { minPct } : {}), ...(maxAgeSec != null ? { maxAgeSec } : {}),
         ...(market.truncated ? { truncated: true } : {}),
         tokens,
-        note: tokens.length ? 'Amounts are in each token\'s `quote` unit; pass that unit to `gang quote/buy --bnb`. Data, not advice.' : empty,
+        note: tokens.length ? 'Amounts are in each token\'s `quote` unit, the unit of `next`\'s --amount. Data, not advice.' : empty,
       })
     }
     case 'notes': {
@@ -974,7 +978,7 @@ async function main() {
         ...(agents && { agents }), ...(minHit != null && { minHit }), ...(own && { ownLeftOut: own }),
         notes,
         note: notes.length
-          ? 'Data, not advice. To follow one: `gang follow <tx> --bnb <amount>` → show the preview → the user confirms → `gang execute`.'
+          ? 'Data, not advice. To follow one: `gang follow <tx> --amount <amount>` → show the preview → the user confirms → `gang execute`.'
           : (all ? 'No notes.' : empty),
       })
     }
