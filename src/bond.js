@@ -415,13 +415,20 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
     // not ready: the call only records / waits. If a chunk has become buyable by the time it lands, the max minimum
     // makes it revert (Slippage) instead of buying unchecked: re-run for a priced preview
     const toDead = ready && !m.live
-    const minOut = toDead ? 0n : ready ? (tokensOut * BigInt(Math.round((100 - slippage) * 100))) / BPS : MAX_UINT
+    // the minimum comes from the chunk simulated with no minimum: previewBurn prices the whole quoteIn, so a quote that
+    // taxes transfers into the pair (fewer tokens bought) would fail every minimum taken from it
+    let expect = tokensOut
+    if (ready && !toDead) {
+      const dry = await simulate(ctx, me(), 'burnChunk', [token, 0n])
+      if (dry.result) expect = dry.result[1]
+    }
+    const minOut = toDead ? 0n : ready ? (expect * BigInt(Math.round((100 - slippage) * 100))) / BPS : MAX_UINT
     const sim = await simulate(ctx, me(), 'burnChunk', [token, minOut])
     if (sim.failed) return out({ success: false, step: 'burn', ...sim.failed })
     return out(send('burnChunk', [token, minOut], {
       step: 'burn', burnLeft: view.burnLeft, quote: view.quote,
       ...(toDead ? { quoteToDead: qf(quoteIn), note: 'slashed before the pair and still no pair 30 days after the post: the rest goes to 0xdead as quote' }
-        : ready ? { chunkQuoteIn: qf(quoteIn), expectBurnTokens: tokens(tokensOut), minBurnTokens: tokens(minOut), slippagePct: slippage }
+        : ready ? { chunkQuoteIn: qf(quoteIn), expectBurnTokens: tokens(expect), minBurnTokens: tokens(minOut), slippagePct: slippage }
         : { note: 'no chunk this time: the call records the price observation (first call after a slash) or waits for the 10-minute average / a price no more than 2% above it. It is cheap; the platform keeper also calls it every 5 minutes (one chunk per 4 minutes at most). If a chunk becomes buyable before it lands, it reverts (Slippage) rather than buy without a minimum: re-run then' }),
     }))
   }
