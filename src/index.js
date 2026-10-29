@@ -3,7 +3,7 @@ import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
   calldata, decodeTx, decodeLogs, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
-import { bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
+import { baw, bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
 import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
 import {
@@ -13,7 +13,8 @@ import {
 import { normalizeWebsite, normalizeTwitter } from './links.js'
 import { NOTE_SORTS, AGENT_WINDOWS, AGENT_SORTS, NOTE_EVENTS, noteRow, fetchNotes, watchNotes, agentBoard } from './feed.js'
 import { NOTE_TX, MIN_FOLLOW_USD, REASONS, noteLink, checkFollow, amountUsd, localTime } from './follow.js'
-import { rememberPreview, previewFor } from './previews.js'
+import { rememberPreview, previewFor, pendingPreviews, claimedTxHashes } from './previews.js'
+import { matchPending } from './pending.js'
 import { UA, VERSION, checkUpdate } from './version.js'
 import { runFair, FAIR_EVENT_ABIS } from './fair.js'
 import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
@@ -371,6 +372,8 @@ BUYBACK (a V3 token whose recipient is a buy-back splitter; GANG_SPLITTER_FACTOR
                                          anyone: bind the splitter to its token (the launch does it) / push the payee what a
                                          failed payment left owed. --testnet, --calldata, --from as in gang v3
   gang execute --request-id <id>         broadcast a previewed call
+  gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
+                                         in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
                                          打新, tax router, vaults) (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
@@ -423,7 +426,7 @@ const NO_NOTE = {
 }
 const NO_NOTE_SENT = {
   attached: false,
-  hint: 'This trade went out without a note. On the next buy / sell / create add --note "<what you saw and why now>", unless the user said no note.',
+  hint: 'This trade carries no note. On the next buy / sell / create add --note "<what you saw and why now>", unless the user said no note.',
 }
 
 const attachedNote = (note) => ({
@@ -873,6 +876,68 @@ const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
 const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS]
 
+/** A mainnet tx decoded, its queued note published (or its state refreshed), its follow ref and token links. */
+async function txReport(hash) {
+  const t = await decodeTx(hash, GANG_EVENT_ABIS)
+  // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
+  // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
+  const queued = hasQueued()
+  let note, input = null
+  try {
+    input = (await client.getTransaction({ hash })).input
+  } catch (e) {
+    if (queued) note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
+  }
+  const committed = input && queued ? hashesIn(input) : []
+  if (committed.length) {
+    const entry = findByHashes(committed)
+    if (!entry) {
+      note = { committed: committed[0], published: false, error: 'not_in_local_queue', hint: 'note was written on another machine, or the queue entry is older than 24h' }
+    }
+    else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
+    else note = withRetry(await publishNote(entry, hash), hash)
+  }
+  const followed = readFollowRef(input), links = readTokenLinks(input)
+  return {
+    success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
+    ...(links && { links }),
+  }
+}
+
+/**
+ * `gang tx --pending`: the trades this machine executed that waited for Binance App approval (24h), each matched to its
+ * confirmed tx in the wallet's history by the exact call it previewed (pending.js), then reported as `gang tx --hash`.
+ */
+async function pendingReport() {
+  const recs = pendingPreviews().filter((r) => r.print)
+  if (!recs.length) return { success: true, pending: [], note: 'no trade from this machine is waiting for Binance App approval (last 24h)' }
+  const rows = []
+  for (const chainId of [...new Set(recs.map((r) => r.chainId || '56'))]) {
+    const mine = recs.filter((r) => (r.chainId || '56') === chainId)
+    const since = Math.min(...mine.map((r) => r.pendingAt)) - 60_000
+    const h = baw(['wallet', 'tx-history', '--binanceChainId', chainId, '--type', 'confirmed', '--size', '100', '--startTime', String(since)])
+    if (!h.success) throw new Error(`baw wallet tx-history failed: ${JSON.stringify(h.error)}`)
+    const read = chainId === '56' ? client : v3Ctx(true).client
+    const matched = await matchPending(mine, h.data?.transactions || [], async (hash) => {
+      const tx = await read.getTransaction({ hash })
+      return { to: tx.to, input: tx.input, blockNumber: tx.blockNumber }
+    }, claimedTxHashes())
+    for (const m of matched) {
+      const base = { requestId: m.requestId, orderId: m.orderId ?? null, chainId: Number(chainId), pendingSince: new Date(m.pendingAt).toISOString() }
+      if (!m.txHash) {
+        rows.push({ ...base, state: 'waiting', hint: 'not in the wallet\'s confirmed txs yet: approved in the Binance App? Run gang tx --pending again after it' })
+        continue
+      }
+      rememberPreview(m.requestId, { txHash: m.txHash })
+      // state: the approval was found (the tx's own outcome is its status)
+      rows.push(chainId === '56'
+        ? { ...base, state: 'sent', ...(await txReport(m.txHash)) }
+        : { ...base, state: 'sent', hash: m.txHash, next: `gang tx --hash ${m.txHash} --testnet` })
+    }
+  }
+  return { success: true, pending: rows }
+}
+
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
   // `gang create` (= `gang v3 create`) / `gang fair create` write the links into the token metadata
@@ -1149,6 +1214,13 @@ async function main() {
       if (!r.success) return out({ success: false, error: r.error })
       const d = r.data
       const pending = d.status === 'PENDING_CONFIRMATION'
+      // gang tx --pending finds this trade's tx once the user approves it (pending.js): it lands after this block
+      if (pending) {
+        const rec = previewFor(id)
+        const read = rec?.chainId === '97' ? v3Ctx(true).client : client
+        const pendingBlock = await read.getBlockNumber().then(Number, () => null)
+        rememberPreview(id, { pendingAt: Date.now(), pendingBlock, orderId: d.orderId ?? null })
+      }
       const entry = findByRequestId(id)
       // nothing broadcast (no hash, not pending) → nothing followed, and no trade to remind about
       const sent = d.txHash || pending
@@ -1157,7 +1229,7 @@ async function main() {
       let note
       if (entry && d.txHash && !pending) note = await revealNote(entry, d.txHash)
       else if (entry && pending) {
-        note = { published: false, pending: true, retry: 'after the user approves in the Binance App: `gang tx --hash <hash>` publishes the note' }
+        note = { published: false, pending: true, retry: 'after the user approves in the Binance App: `gang tx --pending` finds the tx and publishes the note' }
       } else if (entry) {
         // any other status without a hash: nothing was broadcast, so there's nothing to reveal (and nothing to wait for)
         note = { published: false, error: 'no_tx_hash', status: d.status }
@@ -1165,15 +1237,20 @@ async function main() {
       return out({
         success: true, status: d.status, txHash: d.txHash, orderId: d.orderId, pendingConfirmation: pending,
         ...(note && { note }),
-        ...(!entry && preview && !preview.noted && { agentNote: NO_NOTE_SENT }),
+        // kind: a trade preview (summarizeWithNote); every preview has a record, setup steps and bonds take no note
+        ...(!entry && preview?.kind && !preview.noted && { agentNote: NO_NOTE_SENT }),
         ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
         next: pending
-          ? 'Ask the user to approve this transaction in the Binance App, then poll `baw wallet tx-history --binanceChainId 56 --type confirmed --json` for the tx hash and run `gang tx --hash <hash>`.'
+          ? 'Ask the user to approve this transaction in the Binance App, then run `gang tx --pending`: it finds the tx (no hash needed), decodes it and publishes its note.'
           : (d.txHash ? `gang tx --hash ${d.txHash}` : undefined),
       })
     }
     case 'tx': {
-      const hash = opt('hash'); if (!/^0x[0-9a-fA-F]{64}$/.test(hash ?? '')) fail('--hash must be a tx hash (0x + 64 hex)')
+      if (flag('pending')) {
+        if (flag('hash')) fail('give --hash or --pending, not both')
+        return out(await pendingReport())
+      }
+      const hash = opt('hash'); if (!/^0x[0-9a-fA-F]{64}$/.test(hash ?? '')) fail('--hash must be a tx hash (0x + 64 hex), or --pending for a trade approved in the Binance App')
       if (flag('testnet')) {
         // BSC testnet: GangLaunchpad only (no V2 / Soft there, and gang.fun indexes no testnet notes)
         let ctx
@@ -1184,30 +1261,7 @@ async function main() {
           events: decodeLogs(r.logs, GANG_EVENT_ABIS), explorer: `${ctx.explorer}/tx/${hash}`,
         })
       }
-      const t = await decodeTx(hash, GANG_EVENT_ABIS)
-      // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
-      // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
-      const queued = hasQueued()
-      let note, input = null
-      try {
-        input = (await client.getTransaction({ hash })).input
-      } catch (e) {
-        if (queued) note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
-      }
-      const committed = input && queued ? hashesIn(input) : []
-      if (committed.length) {
-        const entry = findByHashes(committed)
-        if (!entry) {
-          note = { committed: committed[0], published: false, error: 'not_in_local_queue', hint: 'note was written on another machine, or the queue entry is older than 24h' }
-        }
-        else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
-        else note = withRetry(await publishNote(entry, hash), hash)
-      }
-      const followed = readFollowRef(input), links = readTokenLinks(input)
-      return out({
-        success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
-        ...(links && { links }),
-      })
+      return out(await txReport(hash))
     }
     default:
       console.log(HELP); process.exit(cmd ? 1 : 0)
