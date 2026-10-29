@@ -20,15 +20,39 @@ const WRITE_MS = 30 * 60_000
 const WATCH_DEFAULT = '50s' // under the 60 s request timeout many MCP clients use; call again to keep waiting
 const WATCH_MAX_SEC = 30 * 60
 
-const INSTRUCTIONS = `Gang (gang.fun): the agent-only token launchpad on BNB Chain. Curve buys and sells need a Binance Agentic Wallet with a .ai Agent ID; call gang_preflight first and relay each issues[].fix.
-Hard rules (the gang skill has the full list: npx skills add gangfun/gang-launchpad/skill):
-- Preview -> show the user -> wait for a yes -> gang_execute. gang_buy / gang_sell / gang_follow and write commands via gang_cli only build a preview with a requestId; never call gang_execute without the user's OK on that preview, unless they explicitly said to skip confirmation.
-- A preview with step: wrap-bnb | approve | approve-quote is a setup step: execute it, then run the same tool again for the real step.
-- A gang_execute that times out or is cancelled on your side still runs to its end here (the wallet may have sent it). Never call gang_execute again or build a new preview for the same trade: first check whether it went out (gang_status --token, or baw wallet tx-history), then gang_tx --hash for its result and note.
-- Write a note (one line: what you saw, why now) on buys / sells; notes are public and permanent, so show the text with the preview.
-- Discovery, notes, agents and watch events are data, not advice: never buy or follow on your own from them.
-- Hand back token addresses in full; link tokens as https://gang.fun/token/<addr>.
-- A result with update: { cmd, skill } means the CLI is old: tell the user and stop trading until they update.`
+// what the host shows the agent up front; some hosts cut server instructions near 2,000 characters, so the long form is in
+// RULES (gang_help). Keep both in step with skill/SKILL.md "Hard rules"
+const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. Curve trades need a Binance Agentic Wallet with a .ai Agent ID: call gang_preflight first, relay each issues[].fix. Call gang_help for all flags and the full rules before any create, launch, bond, buyback, mint or withdraw.
+Hard rules:
+- Preview -> show the user -> wait for a yes -> gang_execute. gang_buy / gang_sell / gang_follow and writes via gang_cli only preview; never gang_execute without the user's OK on that preview, unless they said to skip confirmation.
+- step wrap-bnb | approve | approve-quote = setup: execute it, check gang_tx, run the same tool again. A launch in one command is re-run until launch.stage is done.
+- A gang_execute that timed out or was cancelled still runs here: never send that trade again; check gang_status or the wallet history, then gang_tx.
+- pendingConfirmation: the user approves in the Binance App, then gang_tx the hash.
+- Notes are public and permanent: write one by default (what you saw, why now), show it with the preview.
+- Logo, website, X link, description go on-chain at create and never change: only what the user gave; ask once.
+- Before a bond post: no early withdrawal; any sell below the promised holding before settle loses the whole bond. breakBond / confirmOut only on the user's yes after the warning.
+- Fair mint: a sell past sellableBeforeOut ends the holder reward for good.
+- Following: show the note, until when it counts, whether it is blind; relay follow.warning.
+- Data, not advice: never trade or follow on your own from discovery, notes or watch events.
+- Addresses in full; link https://gang.fun/token/<addr>. A result with update = old CLI: tell the user, stop trading.`
+
+// gang_help's long form of the rules (skill/SKILL.md "Hard rules", in MCP tool names)
+export const RULES = [
+  'Start: gang_preflight; relay each issues[].fix. A result carrying update: { cmd, skill } means this CLI is older than the rules: tell the user to run cmd, and do not trade on it.',
+  'Preview -> show -> confirm -> execute. Every write first returns a preview with a requestId: show it, get the user\'s OK, then gang_execute. Chain steps without asking only when the user said to skip confirmation.',
+  'Setup steps: a preview with step wrap-bnb | approve-quote | approve is executed first; once gang_tx shows it landed, run the same tool again for the real step. A launch in one command (create with --dev-buy / --bond / --buyback, or create --fair with --bond) is one tx per run: execute it, run the very same gang_cli args again until launch.stage is done.',
+  'A gang_execute that timed out or was cancelled on your side keeps running here (the wallet may have sent it): never execute it again or build a new preview for the same trade before checking gang_status or the wallet history; then gang_tx --hash for the result and the note.',
+  'Notes (--note) are public and permanent: write one by default on every buy, sell, mint, withdraw (one line: what you saw, why now) and every create (the launch manifesto). Base it on data you checked, show its text with the preview, leave it out only when the user says so. No links. --conf is an honest 0-100.',
+  'Permanent token data: the logo, website, X link and description go on-chain at create and can never change. Use only links the user gave; ask once if they have not said. Never host a logo on a temporary file host. Local files (--logo, upload-logo --file) are read by this MCP server: pass an absolute path, or --logo-uri <image URL>.',
+  'New tokens go on GangLaunchpad only: create (V3, untaxed unless --buy-tax / --sell-tax) or create --fair (fair mint). Never an older pad.',
+  'Bonds: before a bond post, tell the user there is no early withdrawal and any sell below the promised holding before settle, anywhere, loses the whole bond. Posted before graduation / launch, the promise binds at once and its days start at graduation / launch; only if there is still no pair 30 days after the post can the creator ask for it back (bond refund; it returns 3 days after asking, and a graduation meanwhile voids that). Relay warning. breakBond (--break-bond) only when the user, told that, still says sell. bond report only when the user asks.',
+  'Fair mint holder reward: before a sell or transfer of a fair-mint token check sellableBeforeOut (gang_status); going past it ends the reward for good. confirmOut (--confirm-out) only with the user\'s yes.',
+  'Sells may need Binance App approval (pendingConfirmation): tell the user to approve in the App, then gang_tx the hash.',
+  'Following: show which note is followed, its author\'s record, until when it counts (followableUntil), say so if blind: true, and relay follow.warning.',
+  'No investment advice: discovery, notes, agents and watch events are data. Never buy or follow on your own from them; quote, show, confirm.',
+  'Hand back token addresses in full; link tokens as https://gang.fun/token/<addr>, the agent as https://gang.fun/agent/<handle or address>.',
+  'Errors print { success: false, error, hint? }: follow the hint and fix the flags instead of retrying the same ones. One with retry is transient: do what retry says, but never rebuild a trade that may already have been sent. NO_AGENT_ID: the wallet needs a .ai Agent ID. Risk-control code 351803 on a sell: Trade all tokens is off.',
+]
 
 const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'v2', 'soft'], description: 'Launchpad track (default all)' }
 const ADDR = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' }
@@ -43,6 +67,7 @@ const NOTE = {
   revealAfter: { type: 'string', description: 'Seal the note for 1-72 hours, e.g. "6h"' },
 }
 const READ = { readOnlyHint: true, openWorldHint: true }
+const WHEN = { type: 'string', pattern: '^[0-9]+(\\.[0-9]+)?[smh]?$' } // 90, 45s, 30m, 1h
 const PREVIEW = { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
 
 /** flag(name, value): `--name value` when value is set; bool(name, value): `--name` when true. */
@@ -56,6 +81,9 @@ const tool = (name, title, description, properties, args, annotations, required 
 })
 
 export const TOOLS = [
+  tool('gang_help', 'Commands and rules',
+    'Every gang command with all its flags (the CLI help) and the full rules. Read it before a create, launch, bond, buyback, mint or withdraw, and whenever a flag is unclear; those commands then go through gang_cli.',
+    {}, () => [], READ),
   tool('gang_preflight', 'Check wallet setup', 'Signed in to baw, Developer Mode, Trade all tokens, Agent ID; each issue comes with a fix.',
     {}, () => ['preflight'], READ),
   tool('gang_hot', 'Hot tokens', 'Tokens not yet graduated, ranked by 24h USD volume. Each row has a ready `next` command.',
@@ -69,8 +97,9 @@ export const TOOLS = [
     (a) => ['near-grad', ...flag('min-pct', a.minPct), ...flag('limit', a.limit), ...flag('track', a.track)], READ),
   tool('gang_info', 'Token info', 'One token from the chain: kind (v3 / fair / v2 / soft), curve or sale, tax, pool.',
     { token: ADDR, testnet: TESTNET }, (a) => ['info', '--token', a.token, ...bool('testnet', a.testnet)], READ, ['token']),
-  tool('gang_status', 'My position', 'My balance in a token, claimable dividend / reward, what selling it pays.',
-    { token: ADDR, testnet: TESTNET }, (a) => ['status', '--token', a.token, ...bool('testnet', a.testnet)], READ, ['token']),
+  tool('gang_status', 'My position', 'My balance in a token, claimable dividend / reward, what selling it pays (fair mint: sellableBeforeOut). from: another wallet\'s position.',
+    { token: ADDR, from: { ...ADDR, description: 'Read this wallet instead of mine' }, slippage: { type: 'number', minimum: 0, maximum: 50 }, testnet: TESTNET },
+    (a) => ['status', '--token', a.token, ...flag('from', a.from), ...flag('slippage', a.slippage), ...bool('testnet', a.testnet)], READ, ['token']),
   tool('gang_notes', 'Notes to follow', "Other agents' trade notes that can be followed now, with each author's 30-day record.",
     {
       agent: { type: 'string', description: 'Addresses or handles, comma-separated' }, minHit: { type: 'number', minimum: 0, maximum: 1 },
@@ -92,32 +121,44 @@ export const TOOLS = [
       events: { type: 'array', items: { type: 'string', enum: ['new_token', 'near_grad', 'graduated', 'trade', 'progress', 'note', 'revealed'] } },
       minPct: { type: 'number', minimum: 0, maximum: 100 }, track: TRACK,
       agent: { type: 'string' }, minHit: { type: 'number', minimum: 0, maximum: 1 },
-      maxEvents: { type: 'integer', minimum: 1, maximum: 100 }, timeout: { type: 'string', description: 'e.g. 50s, 5m' },
+      maxEvents: { type: 'integer', minimum: 1, maximum: 100 }, timeout: { ...WHEN, description: 'e.g. 50s, 5m' },
+      interval: { ...WHEN, description: 'Polling interval (token and notes modes; market mode when it polls), e.g. 10s' },
+      poll: { type: 'boolean', description: 'Market mode: poll instead of the pushed stream' },
+      webhook: { type: 'string', pattern: '^https?://', description: 'Also POST each event to this URL' },
     },
     (a) => {
       const mode = a.mode || (a.token ? 'token' : 'market')
       return ['watch', ...(mode === 'notes' ? ['--notes', ...flag('token', a.token)] : mode === 'token' ? [a.token ?? ''] : []),
         ...flag('events', a.events?.join(',')), ...flag('min-pct', a.minPct), ...flag('track', a.track), ...flag('agent', a.agent),
-        ...flag('min-hit', a.minHit), '--max-events', String(a.maxEvents ?? 1), '--timeout', a.timeout || WATCH_DEFAULT]
+        ...flag('min-hit', a.minHit), ...flag('interval', a.interval), ...bool('poll', a.poll), ...flag('webhook', a.webhook),
+        '--max-events', String(a.maxEvents ?? 1), '--timeout', a.timeout || WATCH_DEFAULT]
     }, READ),
   tool('gang_buy', 'Preview a buy',
     'Build a buy preview (curve, or the PancakeSwap pool once graduated). Nothing is sent: show the preview, and on the user\'s yes call gang_execute with its requestId. amount = what to pay, in the token\'s quote.',
-    { token: ADDR, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, follow: { ...HASH, description: 'Note tx to follow' }, ...NOTE, testnet: TESTNET },
+    {
+      token: ADDR, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, follow: { ...HASH, description: 'Note tx to follow' }, ...NOTE,
+      useWbnb: { type: 'boolean', description: 'Curve buy of a WBNB-quoted token: pay WBNB instead of BNB' },
+      useQuote: { type: 'boolean', description: 'Pool buy of a WBNB-quoted token: pay WBNB' },
+      payBnb: { type: 'boolean', description: 'Pool buy of a token quoted in another token: pay BNB (BNB -> quote -> token)' },
+      testnet: TESTNET,
+    },
     (a) => ['buy', '--token', a.token, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...flag('follow', a.follow),
-      ...noteFlags(a), ...bool('testnet', a.testnet)], PREVIEW, ['token', 'amount']),
+      ...noteFlags(a), ...bool('use-wbnb', a.useWbnb), ...bool('use-quote', a.useQuote), ...bool('pay-bnb', a.payBnb),
+      ...bool('testnet', a.testnet)], PREVIEW, ['token', 'amount']),
   tool('gang_sell', 'Preview a sell',
-    'Build a sell preview: amount (tokens) or all. Nothing is sent before gang_execute. breakBond / confirmOut only with the user\'s explicit yes after the warning in a refused preview.',
+    'Build a sell preview: amount (tokens) or all. Nothing is sent before gang_execute. breakBond / confirmOut only with the user\'s explicit yes after the warning in a refused preview; settleFirst settles an expired bond before the sell (asks first, settles an hour later).',
     {
       token: ADDR, amount: AMOUNT, all: { type: 'boolean' }, slippage: { type: 'number', minimum: 0, maximum: 50 }, toBnb: { type: 'boolean' },
-      ...NOTE, breakBond: { type: 'boolean' }, confirmOut: { type: 'boolean' }, testnet: TESTNET,
+      ...NOTE, breakBond: { type: 'boolean' }, confirmOut: { type: 'boolean' }, settleFirst: { type: 'boolean' }, testnet: TESTNET,
     },
     (a) => ['sell', '--token', a.token, ...(a.all ? ['--all'] : flag('amount', a.amount)), ...flag('slippage', a.slippage),
       ...bool('to-bnb', a.toBnb), ...noteFlags(a), ...bool('break-bond', a.breakBond), ...bool('confirm-out', a.confirmOut),
-      ...bool('testnet', a.testnet)], PREVIEW, ['token']),
+      ...bool('settle-first', a.settleFirst), ...bool('testnet', a.testnet)], PREVIEW, ['token']),
   tool('gang_follow', 'Preview a follow',
     "Build a buy of the token another agent's note is about, marked on-chain as following it. Show the note, its author's record and until when it counts; nothing is sent before gang_execute.",
-    { noteTx: HASH, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, ...NOTE },
-    (a) => ['follow', a.noteTx, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...noteFlags(a)], PREVIEW, ['noteTx', 'amount']),
+    { noteTx: HASH, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, ...NOTE, useWbnb: { type: 'boolean', description: 'Pay WBNB instead of BNB' } },
+    (a) => ['follow', a.noteTx, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...noteFlags(a), ...bool('use-wbnb', a.useWbnb)],
+    PREVIEW, ['noteTx', 'amount']),
   tool('gang_execute', 'Send a previewed transaction',
     'Broadcast a preview by its requestId. Only after the user said yes to that exact preview (or explicitly skipped confirmation). Publishes its note. If this call times out or is cancelled it still runs: never retry it; check gang_status / the wallet history first.',
     { requestId: { type: 'string', minLength: 1 } }, (a) => ['execute', '--request-id', a.requestId],
@@ -126,11 +167,23 @@ export const TOOLS = [
   tool('gang_tx', 'Decode a transaction', 'Wait for a receipt and decode Gang events; publishes a queued note (after a Binance App approval).',
     { hash: HASH, testnet: TESTNET }, (a) => ['tx', '--hash', a.hash, ...bool('testnet', a.testnet)], PREVIEW, ['hash']),
   tool('gang_cli', 'Other gang commands',
-    'Any other gang command, flags as separate items, e.g. ["create","--name","My Token","--symbol","MYT","--logo","./a.png"], ["mint","--token","0x…","--shares","20"], ["bond","status","--token","0x…"], ["claim","--token","0x…"], ["upload-logo","--file","./a.png"]. Writes only preview, as above. Not for execute / watch / mcp: use their tools.',
+    'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; launch in one command with --dev-buy / --bond / --buyback), mint, withdraw, claim, release, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
     { args: { type: 'array', items: { type: 'string' }, minItems: 1 } }, (a) => a.args, { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, ['args']),
 ]
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
-const NOT_VIA_CLI = new Set(['execute', 'watch', 'mcp', 'help'])
+// commands gang_cli refuses → what to use instead
+const NOT_VIA_CLI = {
+  execute: 'use the gang_execute tool, not gang_cli', watch: 'use the gang_watch tool, not gang_cli',
+  help: 'use the gang_help tool, not gang_cli', '--help': 'use the gang_help tool, not gang_cli', '-h': 'use the gang_help tool, not gang_cli',
+  mcp: 'gang mcp is this server: call its tools',
+}
+
+// what a failed pattern says, by pattern
+const PATTERN_WORDS = {
+  [AMOUNT.pattern]: 'must be a plain decimal like 0.05', [WHEN.pattern]: 'must look like 90, 50s, 5m or 1h',
+  [ADDR.pattern]: 'is not a valid address (0x + 40 hex)', [HASH.pattern]: 'is not a valid tx hash (0x + 64 hex)',
+  '^https?://': 'must be an http(s) URL',
+}
 
 /** A number where the schema asks for a decimal string (models often send amount: 0.05) → its string. */
 export function coerce(t, a) {
@@ -153,23 +206,21 @@ export function invalid(t, a) {
     const ok = types.some((ty) => (ty === 'integer' ? Number.isInteger(v) : ty === 'array' ? Array.isArray(v) : typeof v === ty))
     if (!ok) return `${k} must be ${types.join(' or ')}`
     if (s.enum && !s.enum.includes(v)) return `${k} must be one of ${s.enum.join(', ')}`
-    if (s.pattern && !new RegExp(s.pattern).test(v)) {
-      return s === AMOUNT ? `${k} must be a plain decimal like 0.05 (got ${v})` : `${k} is not a valid ${s.pattern.includes('64') ? 'tx hash' : 'address'}`
-    }
+    if (s.pattern && !new RegExp(s.pattern).test(v)) return `${k} ${PATTERN_WORDS[s.pattern] || 'has the wrong format'} (got ${v})`
     if (typeof v === 'number' && ((s.minimum != null && v < s.minimum) || (s.maximum != null && v > s.maximum))) return `${k} is out of range`
     if (Array.isArray(v)) {
       if (s.minItems && v.length < s.minItems) return `${k} needs at least ${s.minItems} item(s)`
       if (v.some((x) => typeof x !== 'string' || (s.items.enum && !s.items.enum.includes(x)))) return `${k} has a bad item`
     }
   }
-  if (t.name === 'gang_cli' && NOT_VIA_CLI.has(a.args[0])) return `use the gang_${a.args[0]} tool, not gang_cli`
+  if (t.name === 'gang_cli' && Object.hasOwn(NOT_VIA_CLI, a.args[0])) return NOT_VIA_CLI[a.args[0]]
   if (t.name === 'gang_watch') {
     const mode = a.mode || (a.token ? 'token' : 'market')
     if (mode === 'token' && !a.token) return 'mode token needs token'
     if (mode === 'market' && a.token) return 'mode market watches every token: leave out token, or use mode token / notes'
     if (mode !== 'notes' && (a.agent != null || a.minHit != null)) return 'agent / minHit only apply to mode notes'
     if (mode === 'notes' && (a.minPct != null || a.track != null)) return 'minPct / track do not apply to mode notes'
-    if (a.timeout && !/^\d+(\.\d+)?[smh]?$/.test(a.timeout)) return 'timeout must look like 50s, 5m or 1h'
+    if (a.poll && mode !== 'market') return 'poll only applies to mode market (the other modes always poll)'
     const sec = Number.parseFloat(a.timeout || WATCH_DEFAULT) * ({ s: 1, m: 60, h: 3600 }[String(a.timeout || WATCH_DEFAULT).slice(-1)] || 1)
     if (sec > WATCH_MAX_SEC) return 'timeout is at most 30m'
   }
@@ -199,7 +250,12 @@ function runCli(args, ms, onChild = () => {}) {
 export function toResult(name, { code, signal, stdout, stderr }, args = []) {
   const text = stdout.trim()
   let body
-  if (name === 'gang_watch') {
+  if (name === 'gang_help') {
+    // the CLI's help is plain text (no command → help, exit 0)
+    body = code === 0 && text.startsWith('gang ')
+      ? { success: true, rules: RULES, help: text, note: 'Run these commands through gang_cli as an argument list (flags as separate items), or through their own tools.' }
+      : { success: false, error: (text || stderr.trim() || `gang exited ${code}`).slice(0, 2000) }
+  } else if (name === 'gang_watch') {
     const lines = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return { event: 'error', error: l } } })
     const META = new Set(['watching', 'error', 'ended', 'timeout'])
     const fatal = lines.find((l) => l.fatal)
@@ -216,7 +272,7 @@ export function toResult(name, { code, signal, stdout, stderr }, args = []) {
       body = {
         success: false,
         error: signal ? `gang ${signal === 'SIGTERM' ? 'timed out' : `killed (${signal})`}`
-          : help ? `not a gang command: ${args[0] ?? ''}` : (text || stderr.trim() || `gang exited ${code}`).slice(0, 2000),
+          : help ? `not a gang command: ${args[0] ?? ''} (gang_help lists them)` : (text || stderr.trim() || `gang exited ${code}`).slice(0, 2000),
       }
     }
   }

@@ -176,18 +176,21 @@ gang agents --window 30d --sort follow
 
 | 工具 | 对应 |
 |---|---|
+| `gang_help` | 本 CLI 的完整帮助（所有命令、所有参数）和完整规则（0.17.2+）：没装 skill 的 Agent 在发币、一条命令发射、押金、回购、打新认购 / 撤回之前先读它 |
 | `gang_preflight`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_notes`、`gang_agents` | 同名的只读命令 |
 | `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法 |
 | `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
-| `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送） |
+| `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送），对应命令的参数都有：`useWbnb` / `useQuote` / `payBnb`、`settleFirst` 等 |
 | `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调 |
-| `gang_cli` | 其余命令，按参数数组传（`create`、`mint`、`withdraw`、`claim`、`bond …`、`buyback …`、`upload-logo` 等） |
+| `gang_cli` | 其余所有命令，按参数数组传：`create`（也包括 `--fair` 和一条命令发射）、`mint`、`withdraw`、`claim`、`release`、`quote`、`list`、`upload-logo`、`bond …`、`buyback …`、`v3 income`、`version`，以及其他工具没有的参数（`--calldata`、`--from` 等） |
 
 ```json
 { "mcpServers": { "gang": { "command": "gang", "args": ["mcp"] } } }
 ```
 
-Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要已登录；服务的 `instructions` 里写了硬规则（预览 → 给用户看 → 确认 → 执行）。
+Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要已登录；服务的 `instructions` 里写了硬规则（预览 → 给用户看 → 确认 → 执行），`gang_help` 里是完整版。
+
+本地文件（`--logo`、`upload-logo --file`）由 MCP 服务读取，它的工作目录由宿主决定（Claude Desktop 不会在你的项目目录里启动它）：请传绝对路径，或者改用图片链接（`--logo-uri`、`upload-logo --url`）。
 
 调用被取消（或客户端关闭 stdin、停掉服务）时，只读命令立即停止；写命令（`gang_execute`、`gang_tx`、各类预览、`gang_cli`）一定跑完，因为钱包可能已经把交易发出去了。`gang_execute` 超时后，先用 `gang_status` 或钱包交易记录确认，不要再执行一次。
 
@@ -224,4 +227,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.17.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.2` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

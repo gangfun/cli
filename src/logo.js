@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { UA } from './version.js'
 
 const MAX_BYTES = 512 * 1024
@@ -125,7 +125,14 @@ export async function uploadMetadata(meta) {
 /** Read a local image → POST /api/logos → { logoUrl, url, cid, id, bytes }. */
 export async function uploadLogoFile(filePath) {
   const abs = resolve(filePath)
-  const st = statSync(abs)
+  let st
+  try {
+    st = statSync(abs)
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e
+    // a relative path resolves against wherever this process started: under `gang mcp` that is the MCP host's choice
+    throw new Error(`file not found: ${abs}${isAbsolute(filePath) ? '' : ` (${filePath} is relative to ${process.cwd()})`}; give the image's absolute path, or its URL instead (create: --logo-uri, upload-logo: --url)`)
+  }
   if (!st.isFile()) throw new Error(`not a file: ${abs}`)
   if (st.size > MAX_BYTES) throw new Error(`logo too large: ${st.size} bytes (max ${MAX_BYTES})`)
   return postLogo(readFileSync(abs), abs)

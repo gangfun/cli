@@ -207,7 +207,8 @@ graduated tokens only).
 
   gang version                           this CLI's version (also --version, -v); no wallet needed
   gang mcp                               serve these commands as an MCP server on stdio (Claude Desktop / Code, Cursor, …):
-                                         reads, watch, buy / sell / follow previews, execute, and gang_cli for the rest
+                                         gang_help (this text + the rules), reads, watch, buy / sell / follow previews,
+                                         execute, and gang_cli for every other command
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
   gang list [--kind v3|fair [--status …]]
                                          V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
