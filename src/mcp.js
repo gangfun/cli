@@ -28,8 +28,8 @@ const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. 
 Hard rules:
 - Preview -> show the user -> wait for a yes -> gang_execute. gang_buy / gang_sell / gang_follow and writes via gang_cli only preview; never gang_execute without the user's OK on that preview, unless they said to skip confirmation.
 - step wrap-bnb | approve | approve-quote = setup: execute it, check gang_tx, run the same tool again. A launch in one command is re-run until launch.stage is done.
-- A gang_execute that timed out or was cancelled still runs here: never send that trade again; check gang_status or the wallet history, then gang_tx.
-- pendingConfirmation: the user approves in the Binance App, then gang_tx the hash.
+- A gang_execute that timed out or was cancelled still runs here: never send that trade again; check gang_status, or gang_tx pending: true.
+- pendingConfirmation: the user approves in the Binance App, then gang_tx with pending: true (finds the tx, publishes its note).
 - Notes are public and permanent: write one by default (what you saw, why now), show it with the preview.
 - Logo, website, X link, description go on-chain at create and never change: only what the user gave; ask once.
 - Before a bond post: no early withdrawal; any sell below the promised holding before settle loses the whole bond. breakBond / confirmOut only on the user's yes after the warning.
@@ -43,13 +43,13 @@ export const RULES = [
   'Start: gang_preflight; relay each issues[].fix. A result carrying update: { cmd, skill } means this CLI is older than the rules: tell the user to run cmd, and do not trade on it.',
   'Preview -> show -> confirm -> execute. Every write first returns a preview with a requestId: show it, get the user\'s OK, then gang_execute. Chain steps without asking only when the user said to skip confirmation.',
   'Setup steps: a preview with step wrap-bnb | approve-quote | approve is executed first; once gang_tx shows it landed, run the same tool again for the real step. A launch in one command (create with --dev-buy / --bond / --buyback, or create --fair with --bond) is one tx per run: execute it, run the very same gang_cli args again until launch.stage is done.',
-  'A gang_execute that timed out or was cancelled on your side keeps running here (the wallet may have sent it): never execute it again or build a new preview for the same trade before checking gang_status or the wallet history; then gang_tx --hash for the result and the note.',
+  'A gang_execute that timed out or was cancelled on your side keeps running here (the wallet may have sent it): never execute it again or build a new preview for the same trade before checking gang_status or gang_tx with pending: true; then gang_tx (hash, or pending: true) for the result and the note.',
   'Notes (--note) are public and permanent: write one by default on every buy, sell, mint, withdraw (one line: what you saw, why now) and every create (the launch manifesto). Base it on data you checked, show its text with the preview, leave it out only when the user says so. No links. --conf is an honest 0-100.',
   'Permanent token data: the logo, website, X link and description go on-chain at create and can never change. Use only links the user gave; ask once if they have not said. Never host a logo on a temporary file host. Local files (--logo, upload-logo --file) are read by this MCP server: pass an absolute path, or --logo-uri <image URL>.',
   'New tokens go on GangLaunchpad only: create (V3, untaxed unless --buy-tax / --sell-tax) or create --fair (fair mint). Never an older pad.',
   'Bonds: before a bond post, tell the user there is no early withdrawal and any sell below the promised holding before settle, anywhere, loses the whole bond. Posted before graduation / launch, the promise binds at once and its days start at graduation / launch; only if there is still no pair 30 days after the post can the creator ask for it back (bond refund; it returns 3 days after asking, and a graduation meanwhile voids that). Relay warning. breakBond (--break-bond) only when the user, told that, still says sell. bond report only when the user asks.',
   'Fair mint holder reward: before a sell or transfer of a fair-mint token check sellableBeforeOut (gang_status); going past it ends the reward for good. confirmOut (--confirm-out) only with the user\'s yes.',
-  'Sells may need Binance App approval (pendingConfirmation): tell the user to approve in the App, then gang_tx the hash.',
+  'Sells may need Binance App approval (pendingConfirmation): tell the user to approve in the App, then call gang_tx with pending: true; it finds the approved tx in the wallet\'s history by the exact call (no hash needed), decodes it and publishes its note. state waiting = not approved yet: ask again later.',
   'Following: show which note is followed, its author\'s record, until when it counts (followableUntil), say so if blind: true, and relay follow.warning.',
   'No investment advice: discovery, notes, agents and watch events are data. Never buy or follow on your own from them; quote, show, confirm.',
   'Hand back token addresses in full; link tokens as https://gang.fun/token/<addr>, the agent as https://gang.fun/agent/<handle or address>.',
@@ -166,8 +166,10 @@ export const TOOLS = [
     { requestId: { type: 'string', minLength: 1 } }, (a) => ['execute', '--request-id', a.requestId],
     { readOnlyHint: false, destructiveHint: true, openWorldHint: true }, ['requestId']),
   // not a read: it publishes the tx's queued note to gang.fun, so a cancel lets it finish like the writes
-  tool('gang_tx', 'Decode a transaction', 'Wait for a receipt and decode Gang events; publishes a queued note (after a Binance App approval).',
-    { hash: HASH, testnet: TESTNET }, (a) => ['tx', '--hash', a.hash, ...bool('testnet', a.testnet)], PREVIEW, ['hash']),
+  tool('gang_tx', 'Decode a transaction',
+    'Wait for a receipt and decode Gang events; publishes the tx\'s queued note. pending: true instead of a hash = the trades that waited for Binance App approval (gang_execute pendingConfirmation): finds each one\'s tx once the user approved it.',
+    { hash: HASH, pending: { type: 'boolean', description: 'Find the txs of trades approved in the Binance App (no hash needed)' }, testnet: TESTNET },
+    (a) => (a.pending ? ['tx', '--pending'] : ['tx', '--hash', a.hash, ...bool('testnet', a.testnet)]), PREVIEW),
   tool('gang_cli', 'Other gang commands',
     'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; launch in one command with --dev-buy / --bond / --buyback), mint, withdraw, claim, release, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
     { args: { type: 'array', items: { type: 'string' }, minItems: 1 } }, (a) => a.args, { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, ['args']),
@@ -226,6 +228,8 @@ export function invalid(t, a) {
     const sec = Number.parseFloat(a.timeout || WATCH_DEFAULT) * ({ s: 1, m: 60, h: 3600 }[String(a.timeout || WATCH_DEFAULT).slice(-1)] || 1)
     if (sec > WATCH_MAX_SEC) return 'timeout is at most 30m'
   }
+  if (t.name === 'gang_tx' && !a.pending && !a.hash) return 'hash or pending: true is required'
+  if (t.name === 'gang_tx' && a.pending && (a.hash || a.testnet)) return 'pending finds the tx itself: leave out hash and testnet'
   if (t.name === 'gang_sell' && !a.all && a.amount == null) return 'amount or all is required'
   if (t.name === 'gang_sell' && a.all && a.amount != null) return 'amount or all, not both'
   return null
