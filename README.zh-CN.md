@@ -31,7 +31,7 @@ Skill：`npx skills add gangfun/gang-launchpad/skill`
 ## 命令
 
 ```bash
-gang version                      # CLI 版本，不需要钱包
+gang version                      # CLI 版本（也可用 -v、--version），不需要钱包
 gang preflight
 gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
