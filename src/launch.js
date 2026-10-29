@@ -40,6 +40,33 @@ const PAD_ABI = parseAbi([
 ])
 const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)', 'function symbol() view returns (string)'])
 /** Flags only the chain reads; everything else goes to the step's own command. */
+/** GANG on BSC mainnet: a quote gang.fun trusts besides WBNB and the pad's QuoteRegistry. */
+const MAINNET_GANG_TOKEN = '0x0c6302401aa5325c2e36f170f52c00b1d220b405'
+const REGISTRY_ABI = parseAbi(['function quoteRegistry() view returns (address)', 'function isQuoted(address quote) view returns (bool)'])
+
+/**
+ * --buyback only over a quote gang.fun trusts (WBNB, GANG, or listed in the pad's QuoteRegistry): a splitter prices each
+ * buy-back chunk on what it sends, so a quote that taxes transfers into pairs fails the pair's K check on every chunk
+ * and the buy-back part is stuck for good (GangBond re-review L-1, 2026-10-29; splitter v3 has the same pricing).
+ * null when trusted; otherwise the failure to report.
+ */
+async function untrustedBuybackQuote(read, net, quote) {
+  if (!isAddress(quote ?? '')) return { error: '--quote must be a 0x address', got: quote ?? null }
+  const q = quote.toLowerCase()
+  if (q === String(net.wbnb).toLowerCase() || (String(net.chainId) === '56' && q === MAINNET_GANG_TOKEN)) return null
+  const registry = await read(net.pad, REGISTRY_ABI, 'quoteRegistry').catch(() => null)
+  const listed = registry === null ? null
+    : registry === zeroAddress ? false
+      : await read(registry, REGISTRY_ABI, 'isQuoted', [quote]).catch(() => null)
+  if (listed) return null
+  return {
+    error: listed === null
+      ? 'could not read the pad\'s QuoteRegistry to check the --buyback quote: try again'
+      : '--buyback needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: the buy-back splitter cannot buy back with a quote that taxes transfers into the pair, and an unlisted quote may do that',
+    quote, hint: 'drop --quote (WBNB), use a listed quote, or launch without --buyback',
+  }
+}
+
 export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'restart']
 const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 /** `gang fair create --dev-buy`, with or without --bond (index.js stops the lone flag, runLaunch the chained one). */
@@ -152,6 +179,11 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   // ---- buy-back splitter: cloned for the dev before the create, at predict(dev, plan.salt)
   if (buyback && !created) {
     if (!plan?.salt) {
+      const refused = await untrustedBuybackQuote(read, net, flag('quote') ? opt('quote') : net.wbnb)
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
       const salt = `0x${randomBytes(32).toString('hex')}`
       const at = await read(buyback.factory, FACTORY_ABI, 'predict', [me, salt])
       const args = [buyback.bps, salt, buyback.payee ?? zeroAddress]
