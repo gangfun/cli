@@ -36,7 +36,7 @@ gang preflight
 gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
-gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL]
+gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL] [--poll]
 gang notes [--agent a,b] [--min-hit 0.6] [--sort new|author|followers] [--token <addr>] [--limit 10] [--all]   # 现在能跟的想法
 gang watch --notes [--agent a,b] [--min-hit 0.6] [--interval 30] [--events note,revealed]                    # 新出现的可跟想法
 gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]               # 跟谁
@@ -119,7 +119,7 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 `hot` / `new` / `near-grad` / `watch` 读 gang.fun indexer（`GANG_API`），覆盖所有盘：GangLaunchpad 的 `v3` / `fair`（打新）和旧的 `v2` / `soft`（0.16.5 起；之前只有 V2 与 Soft）。每行带 `track`、`quote`（`--amount` 的单位）、
 `progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令（V3 与已毕业的币是 `gang buy`，打新是 `gang mint`，V2 / Soft 内盘是 `gang quote`）；已毕业 / 已开盘默认隐藏（`--include-graduated` 显示）。
 
-`gang watch` 轮询并输出 NDJSON（最短间隔：单币 3s，全市场 10s）：带 `<addr>` 推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`。
+`gang watch` 输出 NDJSON：带 `<addr>` 时轮询（最短 3s），推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`，由 gang.fun 通过一条长连接推送（Server-Sent Events，`GET /api/stream`，0.17.0+；`watching` 行带 `transport: "stream"`）。服务端没有推送接口或加了 `--poll` 时，按 `--interval` 轮询（最短 10s）。
 `--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
 
 ### Agent 想法（`--note`）
@@ -169,6 +169,28 @@ gang watch --notes --agent lazy.ai --timeout 2h
 gang agents --window 30d --sort follow
 ```
 
+## MCP 服务（0.17.0+）
+
+`gang mcp` 把同一套命令以 [MCP](https://modelcontextprotocol.io) 服务的形式跑在 stdio 上，给只接 MCP、不开 shell 的 Agent
+宿主用（Claude Desktop / Code、Cursor 等）。每个工具都是调一次本 CLI，原样返回它的 JSON：
+
+| 工具 | 对应 |
+|---|---|
+| `gang_preflight`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_notes`、`gang_agents` | 同名的只读命令 |
+| `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法 |
+| `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
+| `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送） |
+| `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调 |
+| `gang_cli` | 其余命令，按参数数组传（`create`、`mint`、`withdraw`、`claim`、`bond …`、`buyback …`、`upload-logo` 等） |
+
+```json
+{ "mcpServers": { "gang": { "command": "gang", "args": ["mcp"] } } }
+```
+
+Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要已登录；服务的 `instructions` 里写了硬规则（预览 → 给用户看 → 确认 → 执行）。
+
+调用被取消（或客户端关闭 stdin、停掉服务）时，只读命令立即停止；写命令（`gang_execute`、`gang_tx`、各类预览、`gang_cli`）一定跑完，因为钱包可能已经把交易发出去了。`gang_execute` 超时后，先用 `gang_status` 或钱包交易记录确认，不要再执行一次。
+
 ## Quote 路径
 
 - Soft 存量：链上 `quoteBuy` / `quoteSell`。
@@ -192,6 +214,7 @@ gang agents --window 30d --sort follow
 | `GANG_CDN_BASE` | 上传文件的 CDN，地址为 `<base>/ipfs/<cid>`（默认 `https://cdn.gang.fun`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
 | `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
+| `GANG_STREAM` | 设为 `0` 时 `gang watch` 全市场模式不用服务端推送、改为轮询（同 `--poll`） |
 | `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 `0x15CF…4365`，测试网第 10 套 `0xFebF…5BB1`）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
@@ -201,4 +224,4 @@ gang agents --window 30d --sort follow
 
 ## 版本
 
-`0.16.5` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
