@@ -1,5 +1,5 @@
 /**
- * `gang portfolio`: one wallet's holdings on every gang.fun track (V3, 打新, 持续打新, V2 / Soft / U / S) in one answer, plus its
+ * `gang portfolio`: one wallet's holdings on every gang.fun track (V3, 打新, 铸币飞轮, V2 / Soft / U / S) in one answer, plus its
  * trading record and the bonds on the tokens it launched.
  *
  * Which tokens: gang.fun's index of the wallet's curve and sale trades (/agents/<addr>/positions), which also gives the
@@ -64,7 +64,7 @@ function holdingOf(p, kind, s) {
       }
     }
   } else if (kind === 'fly') {
-    // 持续打新: the minted tokens are in the wallet from the first mint (locked until launch)
+    // 铸币飞轮: the minted tokens are in the wallet from the first mint (locked until launch)
     const pos = s.position || {}
     graduated = !!s.sale?.launched
     shares = num(pos.preShares)
@@ -110,7 +110,7 @@ function holdingOf(p, kind, s) {
   const cost = num(p.costQuote)
   const unrealized = costComparable && value != null && cost != null ? value - cost : null
   const next = []
-  // a filled 持续打新 sale takes no sell-back: it launches next (anyone may), then its tokens sell in the pool
+  // a filled 铸币飞轮 sale takes no sell-back: it launches next (anyone may), then its tokens sell in the pool
   const filled = kind === 'fly' && minting && s.sale?.sellBackOpen === false
   if (held > 0) {
     next.push(filled ? `gang fly launch --token ${p.address}` : minting ? `gang withdraw --token ${p.address} --all` : `gang sell --token ${p.address} --all`)

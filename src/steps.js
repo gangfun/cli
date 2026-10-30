@@ -44,7 +44,7 @@ export const ROUTER_HINTS = {
   UnknownToken: 'the router does not know this token on its pad (the other kind of token, or not a gang token)',
 }
 /**
- * A gas limit with room for a call whose cost moves between the estimate and the block it lands in (a 持续打新 token's
+ * A gas limit with room for a call whose cost moves between the estimate and the block it lands in (a 铸币飞轮 token's
  * first pool touch in a block writes its price checkpoints) and whose nested calls need more than an exact limit leaves
  * them (63/64 rule): 1.5 × the estimate (what the Agentic Wallet itself adds on most calls), at least `floor`. A
  * reverting estimate is thrown (the caller reports its reason; nothing is sent); only an RPC failure falls back to the floor.

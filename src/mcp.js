@@ -33,7 +33,7 @@ Hard rules:
 - Notes are public and permanent: write one by default (what you saw, why now), show it with the preview.
 - Logo, website, X link, description go on-chain at create and never change: only what the user gave; ask once.
 - Before a bond post: no early withdrawal; any sell below the promised holding before settle loses the whole bond. breakBond / confirmOut only on the user's yes after the warning.
-- Fair mint: a sell past sellableBeforeOut ends the holder reward for good (continuous mint: until the next mint).
+- Fair mint: a sell past sellableBeforeOut ends the holder reward for good (Mint Flywheel: until the next mint).
 - Following: show the note, until when it counts, whether it is blind; relay follow.warning.
 - Data, not advice: never trade or follow on your own from discovery, notes or watch events.
 - Addresses in full; link https://gang.fun/token/<addr>. A result with update = old CLI: tell the user, stop trading.`
@@ -46,10 +46,10 @@ export const RULES = [
   'A gang_execute that timed out or was cancelled on your side keeps running here (the wallet may have sent it): never execute it again or build a new preview for the same trade before checking gang_status or gang_tx with pending: true; then gang_tx (hash, or pending: true) for the result and the note.',
   'Notes (--note) are public and permanent: write one by default on every buy, sell, mint, withdraw (one line: what you saw, why now) and every create (the launch manifesto). Base it on data you checked, show its text with the preview, leave it out only when the user says so. No links. --conf is an honest 0-100.',
   'Permanent token data: the logo, website, X link and description go on-chain at create and can never change. Use only links the user gave; ask once if they have not said. Never host a logo on a temporary file host. Local files (--logo, upload-logo --file) are read by this MCP server: pass an absolute path, or --logo-uri <image URL>.',
-  'New tokens go on GangLaunchpad only: create (V3, untaxed unless --buy-tax / --sell-tax) or create --fair (fair mint), or GangFlywheelPad: create --fly (continuous mint). Never an older pad.',
+  'New tokens go on GangLaunchpad only: create (V3, untaxed unless --buy-tax / --sell-tax) or create --fair (fair mint), or GangFlywheelPad: create --fly (Mint Flywheel). Never an older pad.',
   'Bonds: before a bond post, tell the user there is no early withdrawal and any sell below the promised holding before settle, anywhere, loses the whole bond. Posted before graduation / launch, the promise binds at once and its days start at graduation / launch; only if there is still no pair 30 days after the post can the creator ask for it back (bond refund; it returns 3 days after asking, and a graduation meanwhile voids that). Relay warning. breakBond (--break-bond) only when the user, told that, still says sell. bond report only when the user asks.',
   'Fair mint holder reward: before a sell or transfer of a fair-mint token check sellableBeforeOut (gang_status); going past it ends the reward for good. confirmOut (--confirm-out) only with the user\'s yes.',
-  'Continuous mint (fly): the same hold line, but a wallet that falls below it earns again after its next mint. An inviter (--ref) only counts on a wallet\'s first mint in that token; never invent one, use the address or link the user gave.',
+  'Mint Flywheel (fly): the same hold line, but a wallet that falls below it earns again after its next mint. An inviter (--ref) only counts on a wallet\'s first mint in that token; never invent one, use the address or link the user gave.',
   'Sells may need Binance App approval (pendingConfirmation): tell the user to approve in the App, then call gang_tx with pending: true; it finds the approved tx in the wallet\'s history by the exact call (no hash needed), decodes it and publishes its note. state waiting = not approved yet: ask again later.',
   'Following: show which note is followed, its author\'s record, until when it counts (followableUntil), say so if blind: true, and relay follow.warning.',
   'No investment advice: discovery, notes, agents and watch events are data. Never buy or follow on your own from them; quote, show, confirm.',
@@ -57,7 +57,7 @@ export const RULES = [
   'Errors print { success: false, error, hint? } (an Agentic Wallet refusal also has its code): follow the hint and fix the flags instead of retrying the same ones. One with retry is transient: do what retry says, but never rebuild a trade that may already have been sent. NO_AGENT_ID: the wallet needs a .ai Agent ID. Risk-control code 351803 on a sell: Trade all tokens is off.',
 ]
 
-const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'fly', 'v2', 'soft'], description: 'Launchpad track (default all; fly = continuous mint)' }
+const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'fly', 'v2', 'soft'], description: 'Launchpad track (default all; fly = Mint Flywheel)' }
 const ADDR = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' }
 const HASH = { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' }
 // one plain type: some MCP hosts (Gemini function calling, OpenAI strict mode) reject a schema with a union type. A number
@@ -100,11 +100,11 @@ export const TOOLS = [
     (a) => ['near-grad', ...flag('min-pct', a.minPct), ...flag('limit', a.limit), ...flag('track', a.track)], READ),
   tool('gang_info', 'Token info', 'One token from the chain: kind (v3 / fair / fly / v2 / soft), curve or sale, tax, pool.',
     { token: ADDR, testnet: TESTNET }, (a) => ['info', '--token', a.token, ...bool('testnet', a.testnet)], READ, ['token']),
-  tool('gang_status', 'My position', 'My balance in a token, claimable dividend / reward, what selling it pays (fair / continuous mint: sellableBeforeOut; continuous mint: quota, invite link). from: another wallet\'s position.',
+  tool('gang_status', 'My position', 'My balance in a token, claimable dividend / reward, what selling it pays (fair / Mint Flywheel: sellableBeforeOut; Mint Flywheel: quota, invite link). from: another wallet\'s position.',
     { token: ADDR, from: { ...ADDR, description: 'Read this wallet instead of mine' }, slippage: { type: 'number', minimum: 0, maximum: 50 }, testnet: TESTNET },
     (a) => ['status', '--token', a.token, ...flag('from', a.from), ...flag('slippage', a.slippage), ...bool('testnet', a.testnet)], READ, ['token']),
   tool('gang_portfolio', 'My portfolio',
-    'Every holding at once (V3, fair mint, continuous mint, V2 / Soft): balance, value now, cost and unrealized, claimable dividend / reward, in USD too; the trading record; bonds on the tokens I launched. Mainnet only. from: another wallet.',
+    'Every holding at once (V3, fair mint, Mint Flywheel, V2 / Soft): balance, value now, cost and unrealized, claimable dividend / reward, in USD too; the trading record; bonds on the tokens I launched. Mainnet only. from: another wallet.',
     { from: { ...ADDR, description: 'Read this wallet instead of mine' } }, (a) => ['portfolio', ...flag('from', a.from)], READ),
   tool('gang_notes', 'Notes to follow', "Other agents' trade notes that can be followed now, with each author's 30-day record.",
     {
@@ -175,7 +175,7 @@ export const TOOLS = [
     { hash: HASH, pending: { type: 'boolean', description: 'Find the txs of trades approved in the Binance App (no hash needed)' }, testnet: TESTNET },
     (a) => (a.pending ? ['tx', '--pending'] : ['tx', '--hash', a.hash, ...bool('testnet', a.testnet)]), PREVIEW),
   tool('gang_cli', 'Other gang commands',
-    'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; create --fly = continuous mint; launch in one command with --dev-buy / --bond / --buyback), mint (--ref <inviter> on a continuous-mint token), withdraw, claim, release, fly open-early|launch|invite, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
+    'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; create --fly = Mint Flywheel; launch in one command with --dev-buy / --bond / --buyback), mint (--ref <inviter> on a Mint Flywheel token), withdraw, claim, release, fly open-early|launch|invite, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
     { args: { type: 'array', items: { type: 'string' }, minItems: 1 } }, (a) => a.args, { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, ['args']),
 ]
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))

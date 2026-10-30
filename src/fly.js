@@ -6,7 +6,7 @@ import { MERGED_ERRORS_ABI, MERGED_HINTS, padNets, rpcTransport } from './gangpa
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
- * `gang fly …` — 持续打新 (continuous mint, track `fly`): GangFlywheelPad, its own pad (kind 3) beside GangLaunchpad.
+ * `gang fly …` — 铸币飞轮 (Mint Flywheel, track `fly`): GangFlywheelPad, its own pad (kind 3) beside GangLaunchpad.
  * Before launch: 10,000 shares at one price (sale.basePrice), a quota per wallet (baseQuota + invite bonus), sell-back
  * at the mint price less an exit fee. The sale fills (or the creator opens it early at ≥ 30%), then anyone launches it
  * `launchDelay` later: a PancakeSwap pool at the mint price, with a protection window (Agent ID + a per-wallet buy cap).
@@ -114,7 +114,7 @@ const PAIR_ABI = parseAbi(['function getReserves() view returns (uint112, uint11
 const DEX_ABI = parseAbi(['function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)'])
 const GANG_ROUTER_VIEW = parseAbi(['function pancakeRouter() view returns (address)'])
 
-/** What `gang tx` decodes a 持续打新 tx's logs with (the pad, the tax handler, the holder-reward vault). */
+/** What `gang tx` decodes a 铸币飞轮 tx's logs with (the pad, the tax handler, the holder-reward vault). */
 export const FLY_EVENT_ABIS = [FLY_PAD_ABI, FLY_HANDLER_ABI, VAULT_ABI]
 
 // platform constants (FlywheelLogic): the pad's own numbers, fixed in the contract
@@ -135,7 +135,7 @@ const GAS_NOTE = 'gas limit set with room: a hot token\'s first trade in a block
 
 const HINTS = {
   BadConfig: 'a setting is out of bounds: see reason',
-  NotAgent: 'this wallet holds no Agent ID; 持续打新 is Agent-only',
+  NotAgent: 'this wallet holds no Agent ID; 铸币飞轮 is Agent-only',
   NotMinting: 'the sale no longer takes pre-launch mints / sell-backs (filled, opened early or launched): gang info shows its state',
   NotLaunched: 'the token has not launched yet',
   NotFilled: 'the sale has not filled (or been opened early) yet: nothing to launch',
@@ -147,7 +147,7 @@ const HINTS = {
   PriceAbovePool: 'the mint price is more than 10% above the pool price right now (the pool just dropped): try again shortly',
   PaceExceeded: 'this wallet minted too much too fast: recent post-launch mints (decaying over 30 minutes) plus this one may be at most 2% of the pool\'s quote side; mint fewer shares or wait',
   PostMintOff: 'this sale has no post-launch minting: trade the token in the pool (gang buy / gang sell)',
-  MigratorNotSet: 'the 持续打新 pad is not open on this network yet',
+  MigratorNotSet: 'the 铸币飞轮 pad is not open on this network yet',
   BnbShort: 'the BNB sent does not cover the mint (the tier price moved up): re-run to re-quote',
   BnbNotQuote: 'this sale is not WBNB-quoted: pay in its quote (leave out BNB payment)',
   TooFewShares: 'fewer than 3,000 shares are still held 7 days after the fill: the sale can no longer launch, only refund (gang withdraw)',
@@ -176,7 +176,7 @@ export function flyCtx(testnet) {
   }
 }
 
-/** true when `token` is a 持续打新 token on this pad; null on an RPC error. */
+/** true when `token` is a 铸币飞轮 token on this pad; null on an RPC error. */
 export async function isFlyToken(ctx, token) {
   try {
     return Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'kindOf', [token])) === 3
@@ -189,7 +189,7 @@ export async function isFlyToken(ctx, token) {
 export async function padOpen(ctx) {
   return (await ctx.read(ctx.pad, FLY_PAD_ABI, 'migrator')) !== zeroAddress
 }
-const CLOSED = 'the 持续打新 (continuous mint) pad on BSC mainnet takes no creates right now (no migrator set): use --testnet to try it there'
+const CLOSED = 'the 铸币飞轮 (Mint Flywheel) pad on BSC mainnet takes no creates right now (no migrator set): use --testnet to try it there'
 
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, TOKEN_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100
@@ -417,16 +417,16 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
   const ctx = flyCtx(testnet)
   const chainId = Number(ctx.chainId)
   const write = (tx, extra) => step(ctx, tx, { chainId, ...extra }, rawOnly, summarize)
-  if (flag('note')) fail('--note is not matched to 持续打新 trades yet: leave it out')
+  if (flag('note')) fail('--note is not matched to 铸币飞轮 trades yet: leave it out')
 
   const tokenArg = () => {
     const t = opt('token')
-    if (!isAddress(t ?? '')) fail('--token must be the 持续打新 token\'s address (0x…)', { got: t ?? null })
+    if (!isAddress(t ?? '')) fail('--token must be the 铸币飞轮 token\'s address (0x…)', { got: t ?? null })
     return t
   }
   const loadSale = async (token) => {
     const sale = await saleOf(ctx, token)
-    if (!sale) fail(`not a 持续打新 (continuous-mint) token on this pad${testnet ? ' (BSC testnet)' : ''}`, { token, chainId, pad: ctx.pad })
+    if (!sale) fail(`not a 铸币飞轮 (Mint Flywheel) token on this pad${testnet ? ' (BSC testnet)' : ''}`, { token, chainId, pad: ctx.pad })
     return sale
   }
   const handlerOf = () => ctx.read(ctx.pad, FLY_PAD_ABI, 'taxHandler')
@@ -583,7 +583,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const name = opt('name'), symbol = opt('symbol')
     if (!name || !symbol) fail('--name and --symbol are required')
     checkMeta()
-    if (!(await padOpen(ctx))) fail(testnet ? 'the 持续打新 pad on BSC testnet has no migrator set: it takes no creates right now' : CLOSED, { pad: ctx.pad })
+    if (!(await padOpen(ctx))) fail(testnet ? 'the 铸币飞轮 pad on BSC testnet has no migrator set: it takes no creates right now' : CLOSED, { pad: ctx.pad })
     const presetName = opt('preset', 'j')
     const preset = FLY_PRESETS[presetName]
     if (!preset) fail(`--preset must be ${Object.keys(FLY_PRESETS).join(' or ')}`, { got: presetName })
@@ -661,7 +661,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const sale = await loadSale(token)
     const who = me()
     const acct = await accountOf(ctx, token, sale, who)
-    if (sale.gate && !(await hasAgent(ctx, sale.gate, who))) fail('this wallet holds no Agent ID; 持续打新 minting is Agent-only', { wallet: who })
+    if (sale.gate && !(await hasAgent(ctx, sale.gate, who))) fail('this wallet holds no Agent ID; 铸币飞轮 minting is Agent-only', { wallet: who })
     const referrer = await checkReferrer(ctx, token, sale, who, acct.raw, opt('ref'), fail)
     const quota = { quota: acct.view.quota, quotaLeft: acct.view.quotaLeft, maxPerTx: sale.rules.maxPerTx }
     if (!acct.view.quotaLeft) fail('this wallet\'s quota in this sale is used up', { ...quota, hint: `invites add ${sale.rules.inviteBonus} share(s) each: gang fly invite --token ${token}${net}` })
@@ -833,7 +833,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
         hint: sub === 'buy' ? `before launch, mint shares: gang mint --token ${token} --shares <n>${net}` : `before launch, sell shares back: gang withdraw --token ${token} (--shares <n> | --all)${net}`,
       })
     }
-    for (const f of ['bond', 'break-bond', 'settle-first']) if (flag(f)) fail(`--${f}: 持续打新 tokens take no GangBond`)
+    for (const f of ['bond', 'break-bond', 'settle-first']) if (flag(f)) fail(`--${f}: 铸币飞轮 tokens take no GangBond`)
     const slippage = parseNum(fail, 'slippage', opt('slippage', '1'), 0, 50)
     if (sub === 'sell' && flag('all') === !!opt('amount')) fail('pass exactly one of --amount <tokens> or --all')
     if (sub === 'buy' && !flag('amount')) fail('--amount <quote (or BNB) to spend> required')
