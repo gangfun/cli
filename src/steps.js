@@ -1,5 +1,5 @@
 import { parseAbi, encodeFunctionData, decodeErrorResult, formatUnits, parseEther } from 'viem'
-import { bawPreview } from './baw.js'
+import { bawError, bawPreview } from './baw.js'
 
 /**
  * Shared by `gang fair` and `gang v3` (each on its own chain via `ctx`: { chainId, client, read, wbnb }): revert decoding,
@@ -96,7 +96,7 @@ export function step(ctx, { from, to, data, value = 0n }, extra, rawOnly, summar
   if (!p.success && new RegExp(`binanceChainId|unsupported chain|chain not supported|chain(?:\\s*id)?\\W{0,3}${ctx.chainId}\\b`, 'i')
     .test(JSON.stringify(p.error || ''))) {
     return {
-      success: false, ...extra, error: p.error,
+      success: false, ...extra, ...bawError(p.error),
       hint: `the Agentic Wallet may not sign on chain ${ctx.chainId}: re-run with --calldata to get the raw tx`,
     }
   }

@@ -53,7 +53,7 @@ export const RULES = [
   'Following: show which note is followed, its author\'s record, until when it counts (followableUntil), say so if blind: true, and relay follow.warning.',
   'No investment advice: discovery, notes, agents and watch events are data. Never buy or follow on your own from them; quote, show, confirm.',
   'Hand back token addresses in full; link tokens as https://gang.fun/token/<addr>, the agent as https://gang.fun/agent/<handle or address>.',
-  'Errors print { success: false, error, hint? }: follow the hint and fix the flags instead of retrying the same ones. One with retry is transient: do what retry says, but never rebuild a trade that may already have been sent. NO_AGENT_ID: the wallet needs a .ai Agent ID. Risk-control code 351803 on a sell: Trade all tokens is off.',
+  'Errors print { success: false, error, hint? } (an Agentic Wallet refusal also has its code): follow the hint and fix the flags instead of retrying the same ones. One with retry is transient: do what retry says, but never rebuild a trade that may already have been sent. NO_AGENT_ID: the wallet needs a .ai Agent ID. Risk-control code 351803 on a sell: Trade all tokens is off.',
 ]
 
 const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'v2', 'soft'], description: 'Launchpad track (default all)' }
