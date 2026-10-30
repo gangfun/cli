@@ -1,5 +1,5 @@
 /**
- * `gang portfolio`: one wallet's holdings on every gang.fun track (V3, 打新, V2 / Soft / U / S) in one answer, plus its
+ * `gang portfolio`: one wallet's holdings on every gang.fun track (V3, 打新, 持续打新, V2 / Soft / U / S) in one answer, plus its
  * trading record and the bonds on the tokens it launched.
  *
  * Which tokens: gang.fun's index of the wallet's curve and sale trades (/agents/<addr>/positions), which also gives the
@@ -19,7 +19,7 @@ const usd = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 100
 const sameAmount = (a, b) => a != null && b != null && Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * 1e-9
 
 
-const KIND = { v3: 'v3', fair: 'fair', main: 'legacy', stocks: 'legacy' }
+const KIND = { v3: 'v3', fair: 'fair', fly: 'fly', main: 'legacy', stocks: 'legacy' }
 
 /**
  * One indexed position + its on-chain status → a holding, or null when nothing is left (no balance, no shares, nothing
@@ -63,6 +63,27 @@ function holdingOf(p, kind, s) {
         ...(pos.note && { note: pos.note }),
       }
     }
+  } else if (kind === 'fly') {
+    // 持续打新: the minted tokens are in the wallet from the first mint (locked until launch)
+    const pos = s.position || {}
+    graduated = !!s.sale?.launched
+    shares = num(pos.preShares)
+    balance = num(pos.balance)
+    if (!graduated) {
+      // filled and waiting for its launch: no sell-back (it reopens only if the launch does not come within 7 days)
+      value = num(pos.sellBackAll) ?? (shares ? null : 0)
+      valueBasis = pos.sellBackAll != null ? 'selling every pre-launch share back now (gang withdraw --all)' : 'sell-back is closed until the launch'
+      extra = { saleStatus: s.sale?.status ?? null, ...(s.sale?.sellBackOpen === false && { sellBackOpen: false }) }
+    } else {
+      value = num(pos.poolSellAll?.expectOut) ?? (balance === 0 ? 0 : null)
+      valueBasis = pos.poolSellAll ? 'selling it all into the pool now, tax included' : null
+      claimable = num(pos.pendingReward)
+      extra = {
+        reward: pos.reward ?? null, quotaLeft: pos.quotaLeft ?? null,
+        ...(pos.sellableBeforeOut != null && { sellableBeforeOut: pos.sellableBeforeOut }),
+        ...(pos.note && { note: pos.note }),
+      }
+    }
   } else {
     graduated = !!s.graduated
     // myBalance is formatted with thousands separators: the raw wei is the number
@@ -79,7 +100,7 @@ function holdingOf(p, kind, s) {
 
   // what is held: shares while a 打新 sale is minting (the tokens sit in the pad), tokens otherwise (after launch the
   // shares only record what was minted)
-  const minting = kind === 'fair' && !graduated
+  const minting = (kind === 'fair' || kind === 'fly') && !graduated
   const held = minting ? shares : balance
   if (!(held > 0) && !(claimable > 0)) return null
 
@@ -89,11 +110,15 @@ function holdingOf(p, kind, s) {
   const cost = num(p.costQuote)
   const unrealized = costComparable && value != null && cost != null ? value - cost : null
   const next = []
-  if (held > 0) next.push(minting ? `gang withdraw --token ${p.address} --all` : `gang sell --token ${p.address} --all`)
+  // a filled 持续打新 sale takes no sell-back: it launches next (anyone may), then its tokens sell in the pool
+  const filled = kind === 'fly' && minting && s.sale?.sellBackOpen === false
+  if (held > 0) {
+    next.push(filled ? `gang fly launch --token ${p.address}` : minting ? `gang withdraw --token ${p.address} --all` : `gang sell --token ${p.address} --all`)
+  }
   if (claimable > 0) next.push(`gang claim --token ${p.address}`)
   return {
     ...base,
-    status: minting ? 'minting' : graduated ? (kind === 'fair' ? 'launched' : 'graduated') : 'curve',
+    status: kind === 'fly' && minting ? (s.sale?.status ?? 'minting') : minting ? 'minting' : graduated ? (kind === 'fair' || kind === 'fly' ? 'launched' : 'graduated') : 'curve',
     balance, ...(shares != null && { shares }),
     value: round(value), valueUsd: quoteUsd != null && value != null ? usd(value * quoteUsd) : null, valueBasis,
     cost: round(cost), avgPrice: num(p.avgPrice),

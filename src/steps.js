@@ -43,6 +43,23 @@ export const ROUTER_HINTS = {
   NotEnoughValue: 'the BNB sent does not cover the amount',
   UnknownToken: 'the router does not know this token on its pad (the other kind of token, or not a gang token)',
 }
+/**
+ * A gas limit with room for a call whose cost moves between the estimate and the block it lands in (a 持续打新 token's
+ * first pool touch in a block writes its price checkpoints) and whose nested calls need more than an exact limit leaves
+ * them (63/64 rule): 1.5 × the estimate (what the Agentic Wallet itself adds on most calls), at least `floor`. A
+ * reverting estimate is thrown (the caller reports its reason; nothing is sent); only an RPC failure falls back to the floor.
+ */
+export async function roomyGas(ctx, { from, to, data, value = 0n }, floor) {
+  let est = 0n
+  try {
+    est = await ctx.client.estimateGas({ account: from, to, data, value })
+  } catch (e) {
+    if (e?.walk?.((x) => x?.code === 3 || /revert/i.test(x?.details || x?.shortMessage || ''))) throw e
+  }
+  const room = (est * 3n) / 2n
+  return room > floor ? room : floor
+}
+
 /** Router deadline: half an hour, for a preview that is executed a few minutes later. */
 export const routerDeadline = () => BigInt(Math.floor(Date.now() / 1000) + 1800)
 /** Native BNB kept back for gas on a router call, as `gang buy` keeps for wrap + approve + buy. */
@@ -87,11 +104,11 @@ export function revertOf(e, abis, hints = {}) {
  * A write step: either the raw tx (--calldata: no baw call; e.g. to sign elsewhere) or a baw preview.
  * Returns the object the command prints.
  */
-export function step(ctx, { from, to, data, value = 0n }, extra, rawOnly, summarize) {
+export function step(ctx, { from, to, data, value = 0n, gas = null }, extra, rawOnly, summarize) {
   if (rawOnly) {
-    return { success: true, ...extra, tx: { chainId: Number(ctx.chainId), from, to, data, value: value.toString() } }
+    return { success: true, ...extra, tx: { chainId: Number(ctx.chainId), from, to, data, value: value.toString(), ...(gas && { gas: gas.toString() }) } }
   }
-  const p = bawPreview({ from, to, value, data, chainId: ctx.chainId })
+  const p = bawPreview({ from, to, value, data, chainId: ctx.chainId, gasLimit: gas })
   // only an error about the chain itself: a generic network failure is not a reason to fall back to --calldata
   if (!p.success && new RegExp(`binanceChainId|unsupported chain|chain not supported|chain(?:\\s*id)?\\W{0,3}${ctx.chainId}\\b`, 'i')
     .test(JSON.stringify(p.error || ''))) {

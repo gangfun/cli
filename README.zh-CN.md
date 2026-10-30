@@ -6,6 +6,8 @@
 
 **一个动作一条命令（0.12.0+）：** `gang buy` / `sell` / `info` / `status` / `claim` / `mint` / `withdraw` / `release` 对所有币都能用：CLI 先读出这个币的类型，再执行 V3、打新或 V2 / Soft 的逻辑。`gang v3 …` / `gang fair …` 保留为别名。
 
+**持续打新（0.18.0+）：** `gang create --fly` 在 GangFlywheelPad（单独的发射台，kind 3）上开一场持续打新：按份 mint，每个钱包有额度，邀请可以加额度；打满后按 mint 价开池，开池后还能继续 mint。统一命令会自动识别这类币（`kind: "fly"`），`gang fly …` 是别名。目前只在 BSC 测试网（第 2 套）：主网发射台（`0x631e66560F4FAE4e486B65349edE48189E48B029`）要等测试完成后才开放，开放前在主网上 `create --fly` 会直接说明。规则见 `skill/references/fly.md`。
+
 **V3 税收币和打新（0.9.0+）：** 走 GangLaunchpad，2026-10-27 起在 BSC 主网运行（内盘 `0x15CFD2dc8278Fb87a1783ef42111618E20874365`，GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`，都已内置）；`--testnet` 走 BSC 测试网第 10 套。
 
 ## 安装
@@ -33,7 +35,7 @@ Skill：`npx skills add gangfun/gang-launchpad/skill`
 ```bash
 gang version                      # CLI 版本（也可用 -v、--version），不需要钱包
 gang preflight
-gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]   # 按 24h USD 成交量
+gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
 gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL] [--poll]
@@ -42,7 +44,7 @@ gang watch --notes [--agent a,b] [--min-hit 0.6] [--interval 30] [--events note,
 gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]               # 跟谁
 # 一个动作一条命令，不管币在哪个内盘（0.12.0+）：CLI 读 GangLaunchpad 的 kindOf（V3 内盘 / 打新；都不是就走
 # V2 / Soft / U / S），再执行对应的交易。--testnet 走 BSC 测试网第 10 套（只有 GangLaunchpad）
-gang list [--limit 20] [--kind v3|fair [--status …]]  # 链上读 V2 / Soft / U / S，每个盘最新 20 个；--kind：从 gang.fun 列
+gang list [--limit 20] [--kind v3|fair|fly [--status …]]  # 链上读 V2 / Soft / U / S，每个盘最新 20 个；--kind v3|fair：从 gang.fun 列，fly：从发射台读
 gang info --token <addr>                     # 任意内盘的一个币（gang token 是旧名）
 gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
 gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金
@@ -55,7 +57,7 @@ gang sell --token <addr> (--amount <枚数> | --all) [--slippage 1] [--to-bnb] [
 gang mint --token <addr> --shares <n> [--note …]       # 打新填满前：另收该币的打新费（1–3%，归平台、不退）
 gang withdraw --token <addr> (--shares <n> | --all) [--note …]   # 打新填满前按打新价卖回
 gang claim --token <addr>                    # V3：领取分红（以报价币到账）；打新：领持有奖励
-gang release --token <addr>                  # V3：补转之前打款失败的税
+gang release --token <addr>                  # V3：补转之前打款失败的税；持续打新：补转欠创建者的 dev 分成 / 税
 gang follow <附言 tx> --amount <n> [--slippage 1] [--note …]   # 跟单：买附言里的币，并标明跟的是哪条
 gang upload-logo (--file ./avatar.png | --url <图片地址>)
 # 建币：GangLaunchpad。默认是 V3 币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的
@@ -84,7 +86,17 @@ gang buyback status|set|set-payee|apply --token 0x… [--pct 0-100] [--to 0x…]
 gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
 gang execute --request-id <id>
 gang tx --pending                            # 在 Binance App 里批准过的交易：按预览时的调用自动找到交易，再按下面这条处理
-gang tx --hash <0x..> [--testnet]            # 解析 V2 / Soft 和 GangLaunchpad 的事件（GangLaunchpad 的带 units "raw"，金额是 wei）
+# 持续打新（GangFlywheelPad；主网发射台开放前只在测试网）。--preset j（默认，J 模板）或 steady，每一项都能单独改：
+# --raise 3-50 --quota 5-100 --invite-bonus 0-3 --max-per-tx 1-10 --hold 60-90 --mint-fee 1-3 --exit-fee 1-2 --dev-cut 0-10
+# --buy-pct 0-50 --sell-tax 1-2 --launch-delay 0-300 --window 300-1800 --cap-mul 1-2 --post-mint|--no-post-mint
+# --tier flat|standard|linear [--step-pct --step-shares --max-mul] --supply-cap 10-500
+gang create --fly --name <n> --symbol <s> [--preset j|steady] [设置…] [--dev-shares 1] [--logo …] [--testnet]
+gang mint --token <addr> --shares <n> [--ref <邀请人>] [--slippage 2]   # 开池前按发售价；开池后 mintPost（不低于池子价格）
+gang fly open-early --token <addr>           # 创建者，卖出 ≥ 30% 后可提前开池
+gang fly launch --token <addr>               # 任何人，到 launchAt 之后
+gang fly invite --token <addr> [--who <addr>]   # 邀请链接 https://gang.fun/token/<addr>?ref=<who>、邀请数、加的额度、剩余额度
+# 别名：gang fly <list|info|status|create|mint|withdraw|open-early|launch|invite|buy|sell|claim|release|claim-dev|tx>
+gang tx --hash <0x..> [--testnet]            # 解析 V2 / Soft、GangLaunchpad 和 GangFlywheelPad 的事件（带 units "raw"，金额是 wei）
 ```
 
 ### Logo + 发币
@@ -226,9 +238,10 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 `0x15CF…4365`，测试网第 10 套 `0xFebF…5BB1`）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
 | `GANG_TESTNET_RPC_URL` | 测试网 RPC，可填一个或逗号分隔的多个（不设时先用 PublicNode，再用 BNB Chain 的测试网节点）；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
+| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad（持续打新）。默认：主网 `0x631e…B029`（尚未开放），测试网第 2 套 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond（押金承诺，`gang bond`）。默认：主网 `0xe92d…14E4`（2026-10-29 起，CLI 0.16.2+），测试网 `0xd6a8…1086` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 `0xE040…79C4`，测试网第 10 套 `0x6bB6…C9F6` |
 
 ## 版本
 
-`0.17.8` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.18.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
