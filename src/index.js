@@ -5,7 +5,7 @@ import {
 } from './chain.js'
 import { baw, bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
-import { API, fetchMarket, rank, watch, parseDuration } from './discover.js'
+import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
   readTokenLinks,
@@ -26,6 +26,7 @@ import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as wr
 import { MERGED_ERRORS_ABI, kindOf, padNets } from './gangpad.js'
 import { V2_ABI } from './abi.js'
 import { runMcp } from './mcp.js'
+import { portfolio } from './portfolio.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -234,6 +235,10 @@ graduated tokens only).
   gang info --token <addr>               one token (gang token is the older name). V3: curve, tax setting (taxNote: pool
                                          only), recipient, what the router still owes it; graduated: swapBack (tax not sold
                                          yet, the per-block chunk budget, the next chunk). 打新: the sale. V2 / Soft: the curve
+  gang portfolio [--from <addr>]         every holding in one answer (V3, 打新, V2 / Soft): balance, value now (curve price,
+                                         or what selling it all into the pool pays), cost and unrealized, claimable
+                                         dividend / reward, USD; the wallet's trading record; bonds on the tokens it launched.
+                                         Tokens from gang.fun's index of its curve / sale trades, read on chain (mainnet)
   gang status --token <addr> [--slippage 1]
                                          my position. V3: balance and dividend (claimable now + tax credited, not sold yet,
                                          estimate). 打新: my shares; after launch reward on / out, how much I can sell and stay
@@ -794,6 +799,35 @@ const spendArg = () => {
 const amountIo = (io) => (flag('bnb') && !flag('amount')
   ? { ...io, opt: (n, d) => (n === 'amount' ? opt('bnb') : opt(n, d)), flag: (n) => (n === 'amount' || flag(n)) }
   : io)
+/**
+ * gang portfolio's reads: the `gang status` / `gang bond status` of one token for one wallet, run in-process. The result
+ * comes back instead of being printed, and a refusal throws instead of exiting, so one bad token does not end the run.
+ */
+const capturedIo = (token, wallet) => ({
+  ...PAD_IO,
+  opt: (n, d) => (n === 'token' ? token : n === 'from' ? wallet : d),
+  flag: (n) => n === 'token' || n === 'from',
+  out: (o) => o,
+  fail: (msg) => { throw new Error(msg) },
+})
+const captured = (r) => {
+  if (r?.success === false) throw new Error(r.error || 'failed')
+  return r
+}
+async function portfolioStatus(kind, token, wallet, indexed) {
+  if (kind === 'legacy') {
+    // an old token none of today's V2 / Soft / U / S reads know (GANG itself, launched on an early Soft pad): the
+    // balance alone, from the token
+    return tokenInfo(token, wallet).catch(async (e) => {
+      if (!/not a Gang token/.test(e.message)) throw e
+      return { graduated: indexed.status === 'graduated', myBalanceRaw: (await balanceOf(token, wallet)).toString() }
+    })
+  }
+  const io = { ...capturedIo(token, wallet), notes: padNotes(kind, 'status') }
+  return captured(await (kind === 'v3' ? runV3('status', io) : runFair('status', io)))
+}
+const portfolioBond = async (token) => captured(await runBond('status', capturedIo(token, null)))
+
 // every result of a routed V3 / 打新 command says which kind ran (V2 / Soft results carry their own kind already)
 const tagKind = (kind) => (o) => out(o && typeof o === 'object' && !('kind' in o) ? { kind, ...o } : o)
 
@@ -870,7 +904,7 @@ function create() {
 }
 
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -1145,6 +1179,12 @@ async function main() {
     case 'info':
     case 'token': // the older name of gang info
       return routed('info')
+    case 'portfolio': {
+      if (flag('testnet')) fail('gang portfolio is mainnet only: gang.fun indexes no testnet trades (gang status --testnet reads one token)')
+      const me = fromArg() || bawAddress()
+      return out(await portfolio({ wallet: me, get: (path) => apiGet(path, undefined, null), statusOf: portfolioStatus, bondOf: portfolioBond })
+        .catch((e) => fail(e.message, retryHint(e))))
+    }
     case 'status':
     case 'claim':
     case 'mint':

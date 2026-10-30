@@ -55,6 +55,7 @@ gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUs
 gang list [--kind v3|fair [--status …]]        # V2 / Soft / U / S; --kind: GangLaunchpad tokens from gang.fun
 gang info --token <addr>                     # one token, any pad (gang token is the older name)
 gang status --token <addr>                   # my position: balance; V3 dividend / 打新 reward, sellable; poolSellAll
+gang portfolio [--from <addr>]               # every holding: balance, value, cost / unrealized, claimable, USD; bonds
 gang quote --token <addr> --amount <n>       # V2 / Soft / U / S curve only (Soft: BNB; V2: quote ERC-20, LaunchpadV2.sol math)
 gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
 #   --amount = what to spend in the token's quote (--bnb is the older name). V3: includes the 1% curve fee (no tax on the
@@ -202,7 +203,7 @@ take MCP servers instead of a shell (Claude Desktop / Code, Cursor, …). Each t
 | Tool | Runs |
 |---|---|
 | `gang_help` | this CLI's whole help (every command, every flag) and the full rules (0.17.2+): what an agent with no skill installed reads before a create, launch, bond, buyback, mint or withdraw |
-| `gang_preflight`, `gang_hot`, `gang_new`, `gang_near_grad`, `gang_info`, `gang_status`, `gang_notes`, `gang_agents` | the read commands of the same name |
+| `gang_preflight`, `gang_hot`, `gang_new`, `gang_near_grad`, `gang_info`, `gang_status`, `gang_portfolio`, `gang_notes`, `gang_agents` | the read commands of the same name (`gang_portfolio`: 0.17.6+) |
 | `gang_tx` | `gang tx --hash …`: decode a tx, publish its queued note; `pending: true` = `gang tx --pending`, the trades approved in the Binance App (no hash needed) |
 | `gang_watch` | `gang watch` until `maxEvents` (default 1) or `timeout` (default 50s, at most 30m): returns `{ events, meta }`, `timedOut: true` when nothing came; call it again to keep waiting |
 | `gang_buy`, `gang_sell`, `gang_follow` | the trade previews (nothing is sent), with all their flags: `useWbnb` / `useQuote` / `payBnb`, `settleFirst`, … |
@@ -266,4 +267,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.17.5` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.17.6` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
