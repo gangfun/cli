@@ -7,6 +7,7 @@ import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, 
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
 import { splitterOf } from './buyback.js'
+import { splitOf } from './split.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -278,7 +279,15 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       : `untaxed; curve trades pay the ${fees.curveFeePct}% fee`
     // a recipient that is the dev's buy-back splitter: its ratio and what waits to be bought back
     const buyback = c.recipient && !c.recipientIsCreator ? await splitterOf(ctx.read, c.recipient) : null
-    return out({ success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }) })
+    // or the dev's split module (split-v1): its fixed payees and shares, what waits to be split
+    const split = c.recipient && !c.recipientIsCreator && !buyback
+      ? await splitOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, extraAssets: [c.quote], ref: `--token ${token}${net}` }) : null
+    const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
+      ? { warning: `this token pays its tax to the split module, but the module is bound to another token (${split.token}): the keeper never splits this token's tax (${c.quote}); it is split only by hand (gang split distribute --token ${token}${net} --asset ${c.quote})` } : null
+    return out({
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      ...(split && { split: { ...split, ...splitWarn } }),
+    })
   }
 
   if (sub === 'status') {
