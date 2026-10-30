@@ -12,6 +12,8 @@
 
 **多人分账收款（0.19.0+）：** `gang create … --buy-tax … --sell-tax … --split self:60,0x…:30,0x…:10` 把 V3 币的税收接收地址设成 dev 自己的分账模块（GangSplitModule，`split-v1`）：接收地址那份税按固定比例分给 1–10 个地址，名单和比例永久不能改（dev 和平台都改不了；每个收款人只能把自己那一份换到别的地址）。`self` 表示发币钱包（也可以写 `me`）；收款人序号和合约一致，从 0 开始（`--index`）。报价币只能是 keeper 会分账的：WBNB（默认）、GANG 或发射台 QuoteRegistry 里的报价币（其他的在克隆前就拒绝，和 `--buyback` 一样）；转进模块的其他资产仍可用 `gang split distribute` 手动分。`gang split …` 查看和操作。已在 BSC 主网（工厂 `0x27e08271E52B2D129c824CD245e69471a8d3067c`，2026-10-30 平台多签已放行，已内置）和测试网第 10 套可用。
 
+**自动加池子收款（0.20.0+）：** `gang create … --buy-tax … --sell-tax … --lp 70 [--lp-to 0x…]` 把 V3 币的税收接收地址设成 dev 自己的加池合约（GangLiquiditySplitter，`lp-burn-v1`，和回购合约同一套规则）：接收地址那份税的 `--lp`% 加进这个币的 PancakeSwap 池子做流动性，LP 打进 0xdead 永久锁定，其余给 dev（或 `--lp-to` 指定的地址）。毕业后由 keeper 分块加池（一半买币，买到的币全部连同对应的报价币放回池子；每 4 分钟最多一块）。比例和收款地址的改法同 `--buyback`（提高立即生效，下调 3 天公告后生效；收款地址立即生效）。报价币要求同 `--buyback` / `--split`。`gang lp …` 查看和操作。已在 BSC 主网（工厂 `0xE0436867dAFcf42Ee1418083251a9B8B61F0C248`，2026-10-31 平台多签已放行，已内置）和测试网第 10 套（工厂 `0xA729C60FCa0Bd0D28a55E22126D3fE412AA41591`）可用。
+
 ## 安装
 
 Node ≥ 18。另需 `baw`：
@@ -87,6 +89,8 @@ gang create … --buy-tax 3 --sell-tax 3 --buyback 50 [--buyback-to 0x…] [--de
 gang buyback status|set|set-payee|apply --token 0x… [--pct 0-100] [--to 0x…]  # 回购合约：比例（提高立即生效，下调 3 天后）、收款地址（立即生效）、待回购金额
 gang create … --buy-tax 3 --sell-tax 3 --split self:60,0x…:30,0x…:10 [--dev-buy …]  # V3：接收地址那份税按固定比例分给 1–10 个地址（百分比合计 100；self = 你自己）
 gang split status|distribute|release|set-payee|bind --token 0x… [--asset 0x…] [--index <i>] [--to 0x…]  # 分账模块：名单（--index 从 0 开始）、待分和欠款；手动分账；收款人换自己的地址
+gang create … --buy-tax 3 --sell-tax 3 --lp 70 [--lp-to 0x…] [--dev-buy …]  # V3：接收地址那份税 70% 加进池子做流动性（LP 打进 0xdead），其余给你（或 --lp-to 指定的地址）
+gang lp status|set|set-payee|apply|bind|release|add --token 0x… [--pct 0-100] [--to 0x…] [--slippage 1]  # 加池合约：比例、收款地址、待加池金额、下一块；add = 现在手动加一块（任何人）
 gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
 gang execute --request-id <id>
 gang tx --pending                            # 在 Binance App 里批准过的交易：按预览时的调用自动找到交易，再按下面这条处理
@@ -194,13 +198,13 @@ gang agents --window 30d --sort follow
 
 | 工具 | 对应 |
 |---|---|
-| `gang_help` | 本 CLI 的完整帮助（所有命令、所有参数）和完整规则（0.17.2+）：没装 skill 的 Agent 在发币、一条命令发射、押金、回购、分账、打新认购 / 撤回之前先读它 |
+| `gang_help` | 本 CLI 的完整帮助（所有命令、所有参数）和完整规则（0.17.2+）：没装 skill 的 Agent 在发币、一条命令发射、押金、回购、分账、自动加池子、打新认购 / 撤回之前先读它 |
 | `gang_preflight`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_portfolio`、`gang_notes`、`gang_agents` | 同名的只读命令（`gang_portfolio`：0.17.6+） |
 | `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法；`pending: true` 即 `gang tx --pending`，找出在 Binance App 里批准过的交易（不用哈希） |
 | `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
 | `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送），对应命令的参数都有：`useWbnb` / `useQuote` / `payBnb`、`settleFirst` 等 |
 | `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调 |
-| `gang_cli` | 其余所有命令，按参数数组传：`create`（也包括 `--fair` 和一条命令发射）、`mint`、`withdraw`、`claim`、`release`、`quote`、`list`、`upload-logo`、`bond …`、`buyback …`、`split …`、`v3 income`、`version`，以及其他工具没有的参数（`--calldata`、`--from` 等） |
+| `gang_cli` | 其余所有命令，按参数数组传：`create`（也包括 `--fair` 和一条命令发射）、`mint`、`withdraw`、`claim`、`release`、`quote`、`list`、`upload-logo`、`bond …`、`buyback …`、`split …`、`lp …`、`v3 income`、`version`，以及其他工具没有的参数（`--calldata`、`--from` 等） |
 
 ```json
 { "mcpServers": { "gang": { "command": "gang", "args": ["mcp"] } } }
@@ -245,8 +249,9 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad（铸币飞轮）。默认：主网 `0x631e…B029`（2026-10-30 起开放），测试网第 2 套 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond（押金承诺，`gang bond`）。默认：主网 `0xe92d…14E4`（2026-10-29 起，CLI 0.16.2+），测试网 `0xd6a8…1086` |
 | `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | GangSplitModuleFactory（`--split`）。默认：主网 `0x27e0…067c`（2026-10-30 起，CLI 0.19.0+），测试网第 10 套 `0x5F7d…567E` |
+| `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | GangLiquiditySplitterFactory（`--lp`）。默认（CLI 0.20.0+）：主网 `0xE043…C248`（2026-10-31 起），测试网第 10 套 `0xA729…1591` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 `0xE040…79C4`，测试网第 10 套 `0x6bB6…C9F6` |
 
 ## 版本
 
-`0.19.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.20.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

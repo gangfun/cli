@@ -21,6 +21,7 @@ import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
 import { runBond } from './bond.js'
 import { runBuyback } from './buyback.js'
 import { runSplit, SPLIT_EVENT_ABIS } from './split.js'
+import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch } from './launch.js'
 import { poolPayBnb, poolTrade } from './pool.js'
@@ -317,7 +318,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          600, cap ×1, standard tier, supply ×100; steady = no post-launch mint, quota 100, no
                                          invites, dev cut 0, sell tax 1. Flags override the preset; checkConfig runs first.
                                          --dev-shares (default 1, up to quota and max-per-tx) are minted in the create. No
-                                         --bond / --buyback / --dev-buy (phase 1)
+                                         --bond / --buyback / --split / --lp / --dev-buy (phase 1)
   FLY (铸币飞轮; also gang fly <sub>): gang mint --token <a> --shares <n> [--ref <inviter>] [--min-shares <n>] [--slippage 2]
                                          [--use-wbnb]: before launch the sale price (+ mint fee; WBNB sales pay BNB in one tx,
                                          --use-wbnb from WBNB); after launch mintPost: minTokensOut = the preview less
@@ -350,9 +351,18 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          nobody (not you, not the platform) can change the payees or shares later; a payee can
                                          only move its own slot (gang split set-payee). Steps: clone your split module
                                          (GangSplitModuleFactory; listed as a recipient in the same tx) → create with it as the
-                                         recipient → bind → the rest of the launch. --split, --buyback and --recipient are
-                                         exclusive. Quote: WBNB (default), GANG or one listed in the pad's QuoteRegistry only
-                                         (the quotes the keeper splits; others are refused before the clone)
+                                         recipient → bind → the rest of the launch. --split, --buyback, --lp and --recipient
+                                         are exclusive. Quote: WBNB (default), GANG or one listed in the pad's QuoteRegistry
+                                         only (the quotes the keeper splits; others are refused before the clone)
+  gang create … --buy-tax <1-5> --sell-tax <1-5> --lp <0-100> [--lp-to <addr>] [--dev-buy … [--bond …]]
+                                         V3, taxed, auto-liquidity: --lp % of the recipient's part of the tax is added to the
+                                         token's PancakeSwap pair as liquidity whose LP goes to 0xdead (locked for good), the
+                                         rest to you (or --lp-to <addr>; changeable later with gang lp set-payee). After
+                                         graduation the keeper adds it in chunks (half buys the token, all of it goes back in
+                                         with the matching quote). Steps: clone your LP splitter (GangLiquiditySplitterFactory;
+                                         listed as a recipient in the same tx) → create with it as the recipient → bind → the
+                                         rest of the launch. Not with --buyback, --split or --recipient. Quote: WBNB
+                                         (default), GANG or one listed in the pad's QuoteRegistry only
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
                                          打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
                                          chain (a token this wallet created with this symbol since the plan); a run that finds
@@ -446,11 +456,30 @@ SPLIT (a V3 token whose recipient is a split module, split-v1; GANG_SPLIT_FACTOR
                                          Gas: the CLI never sets a gas limit on these; let the wallet estimate it. Each payee's
                                          push needs ~365k gas left before it, so the limit is far above the gas used; a lower
                                          limit reverts PushStarved. --testnet, --calldata, --from as in gang v3
+LP (a V3 token whose recipient is an LP splitter, lp-burn-v1; GANG_LP_FACTORY / GANG_TESTNET_LP_FACTORY):
+  gang lp status --token <addr>          ratio (lpPct), a cut asked for (applies from / lapses after), quote set aside for the
+                                         pool (lpLeft) and not split yet (unsplit), the payee and what is owed to it, the next
+                                         chunk (previewAdd) or what it waits for, the last chunk (lastAddAt)
+  gang lp set --token <addr> --pct <0-100>
+                                         dev only: a higher share applies at once; a lower one after a 3-day notice
+  gang lp set-payee --token <addr> --to <addr>
+                                         dev only: the part not added to the pool goes to --to from now on (at once)
+  gang lp apply --token <addr>           anyone: apply a cut whose notice ran (within 7 days, or it lapses)
+  gang lp bind --token <addr> | gang lp release --token <addr>
+                                         anyone: bind the splitter to its token (the launch does it) / push the payee what a
+                                         failed payment left owed
+  gang lp add --token <addr> [--slippage 1]
+                                         anyone: one chunk now, as the keeper does (graduated tokens; one per 4 minutes; ≤ 0.5%
+                                         of the pair's quote reserve; waits for a 10-minute average and skips when the price is
+                                         > 2% above it): minimum tokens = previewAdd less --slippage. Not ready: a call that
+                                         only records the price. Gas: a chunk takes ~0.53–0.75M; the CLI never sets a gas
+                                         limit, let the wallet estimate it. --testnet, --calldata, --from as in gang v3
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
                                          in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
-                                         打新, tax router, vaults), GangFlywheelPad (铸币飞轮 pad and tax handler) (publishes a queued --note; mainnet). GangLaunchpad events
+                                         打新, tax router, vaults), GangFlywheelPad (铸币飞轮 pad and tax handler), split modules
+                                         and LP splitters (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
@@ -984,7 +1013,7 @@ const V3_CREATE_FLAGS = ['buy-tax', 'sell-tax', 'dividend', 'recipient']
 const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee', 'shares']
 // 铸币飞轮 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
 const FLY_ONLY_FLAGS = FLY_CREATE_FLAGS.filter((f) => !['raise', 'hold', 'mint-fee', 'exit-fee', 'sell-tax'].includes(f))
-const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
+const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
 /** The flags a 铸币飞轮 create refuses (gang create --fly and gang fly create alike). */
 function checkFlyCreate() {
   if (flag('fair')) fail('give --fly (铸币飞轮) or --fair (打新), not both')
@@ -1018,11 +1047,11 @@ function create() {
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'fly'])
+  'buyback', 'split', 'lp', 'fly'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS]
 
-/** gang bond / gang buyback / gang split on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
+/** gang bond / gang buyback / gang split / gang lp on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
   const token = opt('token')
   if (!isAddress(token ?? '')) return
@@ -1113,7 +1142,7 @@ async function main() {
     // a 打新 dev buys with --shares in the create itself: say so here, not "add --bond" (which would only lead to that)
     if (launchKind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
     const lone = LAUNCH_FLAGS.find((f) => flag(f))
-    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,…)'}`)
+    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,… / --lp <pct>)'}`)
   }
   switch (cmd) {
     case 'fair':
@@ -1136,6 +1165,9 @@ async function main() {
     case 'split':
       await refuseFly('a split module')
       return runSplit(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'lp':
+      await refuseFly('an LP splitter')
+      return runLp(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'version':
     case '--version':
     case '-v':
