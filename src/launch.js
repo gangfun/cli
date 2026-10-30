@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createPublicClient, http, parseAbi, formatUnits, encodeFunctionData, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, parseAbi, formatUnits, encodeFunctionData, isAddress, zeroAddress } from 'viem'
 import { DIR } from './notes.js'
-import { padNets, NOT_ON_MAINNET } from './gangpad.js'
+import { padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { bondAddress, BOND_ABI } from './bond.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseIntIn, step } from './steps.js'
@@ -154,7 +154,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     buyback = { bps: buybackBpsOf(fail, opt('buyback')), factory, payee }
   }
 
-  const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
+  const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
   const me = walletFor({ chainId: net.chainId }, opt('from'))
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')

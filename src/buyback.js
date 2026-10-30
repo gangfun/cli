@@ -1,5 +1,5 @@
-import { createPublicClient, http, parseAbi, encodeFunctionData, formatUnits, hexToString, isAddress, zeroAddress } from 'viem'
-import { padNets, NOT_ON_MAINNET } from './gangpad.js'
+import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, hexToString, isAddress, zeroAddress } from 'viem'
+import { padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseNum, revertOf as revertIn, step } from './steps.js'
 
@@ -122,7 +122,7 @@ export async function splitterOf(read, addr) {
 function buybackCtx(testnet) {
   const net = padNets('v3')[testnet ? 'testnet' : 'mainnet']
   if (!net.pad) throw new Error(NOT_ON_MAINNET)
-  const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
+  const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return { ...net, client, read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }) }
 }
 

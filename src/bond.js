@@ -1,6 +1,6 @@
-import { createPublicClient, http, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
 import { decimalsOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, revertOf as revertIn, step, units, GAS_RESERVE } from './steps.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
 import { bawAddress } from './baw.js'
 
 /**
@@ -115,7 +115,7 @@ function bondCtx(testnet) {
   if (!net.pad) throw new Error(NOT_ON_MAINNET)
   const bond = bondAddress(testnet)
   if (!bond) throw new Error(`GangBond is not deployed on ${testnet ? 'the BSC testnet' : 'BSC mainnet'} in this CLI version: set ${testnet ? 'GANG_TESTNET_BOND' : 'GANG_BOND'} to its address`)
-  const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
+  const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return { ...net, bond, client, read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }) }
 }
 

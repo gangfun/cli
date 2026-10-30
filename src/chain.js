@@ -1,7 +1,7 @@
-import { createPublicClient, http, formatEther, parseEther, encodeFunctionData, decodeEventLog, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, formatEther, parseEther, encodeFunctionData, decodeEventLog, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
 import { SOFT_ABI, V2_ABI, S_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
-import { kindOf, padNets } from './gangpad.js'
+import { kindOf, padNets, rpcTransport } from './gangpad.js'
 
 export const ADDR = {
   v2: '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E',
@@ -12,11 +12,11 @@ export const ADDR = {
 }
 
 export const CONFIG = {
-  rpc: process.env.GANG_RPC_URL || 'https://bsc-dataseed.binance.org',
   chainId: '56',
 }
 
-export const client = createPublicClient({ chain: bsc, transport: http(CONFIG.rpc) })
+// GANG_RPC_URL or the public nodes (gangpad.js), shared with the GangLaunchpad clients
+export const client = createPublicClient({ chain: bsc, transport: rpcTransport(padNets('v3').mainnet.rpcs) })
 export const fmt = (wei) => formatEther(wei)
 export const fmtTok = (units) => Number(formatEther(units)).toLocaleString('en-US', { maximumFractionDigits: 2 })
 export { parseEther, encodeFunctionData, isAddress, zeroAddress }

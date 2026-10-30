@@ -1,4 +1,4 @@
-import { parseAbi } from 'viem'
+import { createTransport, http, parseAbi } from 'viem'
 import { bsc, bscTestnet } from 'viem/chains'
 
 /**
@@ -12,6 +12,7 @@ import { bsc, bscTestnet } from 'viem/chains'
  *   testnet: GANG_TESTNET_PAD (aliases GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD),
  *            GANG_TESTNET_ROUTER (alias GANG_ROUTER_TESTNET),
  *            GANG_TESTNET_RPC_URL (aliases GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL)
+ * An RPC variable takes one URL or a comma-separated list; set, it replaces the public nodes below.
  */
 
 // the current testnet set (set 10, 2026-10-27: §23 aggregator entries); the name is kept from set 8
@@ -29,6 +30,64 @@ const TESTNET_SET7 = {
   router: '0x9dBb3D25Ff5c8107814fBD96A88D6eD015dfA279',
 }
 
+// Public BSC nodes, tried in this order (2026-10-30: each answered eth_call with revert data, tx and receipt reads).
+// Several operators, so one node's rate limit or outage does not stop a preview.
+export const MAINNET_RPCS = [
+  'https://bsc-dataseed.binance.org', 'https://bsc-dataseed.bnbchain.org', 'https://bsc-dataseed1.defibit.io',
+  'https://bsc-dataseed1.ninicoin.io', 'https://bsc-rpc.publicnode.com',
+]
+// publicnode first: the data-seed nodes keep little state and answer `missing trie node` sooner
+export const TESTNET_RPCS = [
+  'https://bsc-testnet-rpc.publicnode.com', 'https://bsc-testnet.bnbchain.org',
+  'https://data-seed-prebsc-1-s1.bnbchain.org:8545', 'https://data-seed-prebsc-2-s1.bnbchain.org:8545',
+]
+
+/** An RPC variable's value → its URLs (one, or a comma-separated list), or null when unset / empty. */
+export const rpcList = (v) => {
+  const urls = (v ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  return urls.length ? urls : null
+}
+
+// what every node would answer alike: the contract's revert, gas or funds the call lacks. Thrown at once, not retried
+const SAME_ON_EVERY_NODE = /execution reverted|gas required exceeds allowance|insufficient funds/i
+const sameOnEveryNode = (e) => e?.code === 3 || SAME_ON_EVERY_NODE.test(e?.details ?? '')
+// list → the index of the node that answered last; the next call (of any client on that list) starts there
+const lastGood = new Map()
+
+/**
+ * viem transport over a list of nodes. A call goes to the node that answered last and moves down the list when it
+ * fails (rate limit, timeout, the node's own error), so a dead node costs one timeout, not one per call. A revert is the
+ * contract's answer and is thrown as it is. One URL: plain http with viem's retries, as before. (viem's fallback()
+ * starts every call at the first node, and its ranking keeps a timer that holds the process open.)
+ */
+export function rpcTransport(urls) {
+  if (urls.length === 1) return http(urls[0])
+  const key = urls.join(',')
+  const nodes = urls.map((u) => http(u, { retryCount: 0, timeout: 8_000 }))
+  return ({ chain }) => {
+    const live = nodes.map((n) => n({ chain }))
+    return createTransport({
+      key: 'gang', name: 'Gang RPC', type: 'gang', retryCount: 1,
+      async request({ method, params }) {
+        const first = lastGood.get(key) ?? 0
+        let error
+        for (let k = 0; k < live.length; k++) {
+          const i = (first + k) % live.length
+          try {
+            const r = await live[i].request({ method, params })
+            lastGood.set(key, i)
+            return r
+          } catch (e) {
+            if (sameOnEveryNode(e)) throw e
+            error = e
+          }
+        }
+        throw error
+      },
+    })
+  }
+}
+
 const env = (...names) => {
   for (const n of names) if (process.env[n]) return process.env[n]
   return null
@@ -43,7 +102,7 @@ export function padNets(kind) {
     mainnet: {
       chainId: '56', chain: bsc,
       pad: env('GANG_PAD', `GANG_${alias}_PAD`) || MAINNET_GANG.pad || null,
-      rpc: env('GANG_RPC_URL') || 'https://bsc-dataseed.binance.org',
+      rpcs: rpcList(env('GANG_RPC_URL')) || MAINNET_RPCS,
       wbnb: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', explorer: 'https://bscscan.com',
       router: env('GANG_ROUTER') || MAINNET_GANG.router || null,
     },
@@ -51,7 +110,7 @@ export function padNets(kind) {
       chainId: '97', chain: bscTestnet,
       pad: env('GANG_TESTNET_PAD', `GANG_${alias}_TESTNET_PAD`) || set.pad,
       router: env('GANG_TESTNET_ROUTER', 'GANG_ROUTER_TESTNET') || set.router || null,
-      rpc: env('GANG_TESTNET_RPC_URL', `GANG_${alias}_TESTNET_RPC_URL`) || 'https://bsc-testnet-rpc.publicnode.com',
+      rpcs: rpcList(env('GANG_TESTNET_RPC_URL', `GANG_${alias}_TESTNET_RPC_URL`)) || TESTNET_RPCS,
       wbnb: '0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd', explorer: 'https://testnet.bscscan.com',
     },
   }
