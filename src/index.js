@@ -203,8 +203,8 @@ const followSkipped = (follow) =>
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
 One command per action, whatever pad the token is on: buy / sell / info / status / claim / mint / withdraw / release
-read the token's kind (GangLaunchpad kindOf: V3 curve or 打新 sale; GangFlywheelPad: 持续打新; otherwise the V2 / Soft /
-U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tokens carry kind: "v3" | "fair" | "fly". --testnet
+read the token's kind (GangLaunchpad kindOf: V3 curve or 打新 sale; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
+U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tokens carry kind: "v3" | "fair" | "fly". --testnet
 = BSC testnet (GangLaunchpad and GangFlywheelPad only); --calldata prints the raw tx instead of a baw preview; --from
 <addr> reads / builds for that wallet (V2 / Soft: graduated tokens only).
 
@@ -217,7 +217,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tok
                                          V2 / Soft / U / S tokens read on chain (works without gang.fun), the newest --limit
                                          per pad; --kind v3 (--status curve|graduated|all) / --kind fair
                                          (--status minting|launched|all): GangLaunchpad tokens from gang.fun; --kind fly
-                                         (--status minting|filled|launched|all): 持续打新 tokens read from the pad, newest first
+                                         (--status minting|filled|launched|all): 铸币飞轮 tokens read from the pad, newest first
   gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]
                                          tokens not yet graduated / launched, ranked by 24h USD volume
   gang new [--limit 10] [--max-age 2h] [--track …]      newest first
@@ -265,9 +265,9 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tok
                                          sales pay native BNB through GangRouter in one tx (--use-wbnb: from WBNB)
   gang withdraw --token <addr> (--shares <n> | --all)
                                          打新: sell shares back before it fills: mint price − exit fee (none once stale)
-  gang claim --token <addr>              V3: my dividend (the quote token); 打新 / 持续打新: the holder reward
+  gang claim --token <addr>              V3: my dividend (the quote token); 打新 / 铸币飞轮: the holder reward
   gang release --token <addr>            V3: push a tax payment that failed earlier (anyone may; the recipient gets it).
-                                         持续打新: push the creator's dev cut / tax share that a transfer could not deliver
+                                         铸币飞轮: push the creator's dev cut / tax share that a transfer could not deliver
   gang follow <note tx> --amount <n> [--slippage 1] [--note …]
                                          buy the token that note is about, marked on-chain as following it (= gang buy
                                          --follow; curve buys only)
@@ -302,7 +302,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tok
               [--sell-tax 1-2] [--launch-delay 0-300] [--window 300-1800] [--cap-mul 1-2] [--post-mint | --no-post-mint]
               [--tier flat|standard|linear [--step-pct 0-10 --step-shares 100-100000 --max-mul 1-10]] [--supply-cap 10-500]
               [--dev-shares <n>] [--quote 0x… --ref-pool 0x…] [--logo …] [--website URL] [--twitter @handle] [--description …]
-                                         a 持续打新 (continuous mint, GangFlywheelPad) sale (mainnet; --testnet = BSC testnet
+                                         a 铸币飞轮 (Mint Flywheel, GangFlywheelPad) sale (mainnet; --testnet = BSC testnet
                                          set 2). 10,000 shares at raise / 10,000 each; a quota per wallet
                                          (--quota + --invite-bonus per wallet it invites), --max-per-tx per mint, Agent ID
                                          only. Fills (or the creator opens early at ≥ 30%), launches --launch-delay s later
@@ -317,7 +317,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tok
                                          invites, dev cut 0, sell tax 1. Flags override the preset; checkConfig runs first.
                                          --dev-shares (default 1, up to quota and max-per-tx) are minted in the create. No
                                          --bond / --buyback / --dev-buy (phase 1)
-  FLY (持续打新; also gang fly <sub>): gang mint --token <a> --shares <n> [--ref <inviter>] [--min-shares <n>] [--slippage 2]
+  FLY (铸币飞轮; also gang fly <sub>): gang mint --token <a> --shares <n> [--ref <inviter>] [--min-shares <n>] [--slippage 2]
                                          [--use-wbnb]: before launch the sale price (+ mint fee; WBNB sales pay BNB in one tx,
                                          --use-wbnb from WBNB); after launch mintPost: minTokensOut = the preview less
                                          --slippage (default 2%), maxSpent = paid + fee; shows the mint price per token vs
@@ -418,7 +418,7 @@ BUYBACK (a V3 token whose recipient is a buy-back splitter; GANG_SPLITTER_FACTOR
   gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
                                          in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
-                                         打新, tax router, vaults), GangFlywheelPad (持续打新 pad and tax handler) (publishes a queued --note; mainnet). GangLaunchpad events
+                                         打新, tax router, vaults), GangFlywheelPad (铸币飞轮 pad and tax handler) (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
@@ -799,7 +799,7 @@ const V3_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'release'])
 const FAIR_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'mint', 'withdraw'])
 const FLY_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'mint', 'withdraw', 'release'])
 const KIND_NAMES = {
-  v3: 'a V3 (bonding-curve) token', fair: 'a 打新 (fair-mint) token', fly: 'a 持续打新 (continuous-mint) token', legacy: 'a V2 / Soft / U / S token',
+  v3: 'a V3 (bonding-curve) token', fair: 'a 打新 (fair-mint) token', fly: 'a 铸币飞轮 (Mint Flywheel) token', legacy: 'a V2 / Soft / U / S token',
 }
 // what the V2 / Soft / U / S code runs: it looks the token up on those pads itself, so it can also take a token whose kindOf
 // could not be read (a GangLaunchpad token then gets a pointer from resolvePad instead of a wrong answer)
@@ -830,7 +830,7 @@ async function padKind(token, verb) {
   try { ctx = v3Ctx(testnet) } catch (e) { fail(e.message) }
   const kind = await kindOf(ctx, token)
   if (kind === 'v3' || kind === 'fair') return kind
-  // not GangLaunchpad's: the 持续打新 pad (GangFlywheelPad, kind 3) is asked next
+  // not GangLaunchpad's: the 铸币飞轮 pad (GangFlywheelPad, kind 3) is asked next
   const fly = await isFlyToken(flyCtx(testnet), token)
   if (fly) return 'fly'
   if (fly === null && (testnet || !LEGACY_VERBS.has(verb))) {
@@ -902,11 +902,11 @@ async function routed(verb) {
   parseNote()
   parseFollow()
   const kind = await padKind(token, verb)
-  if (flag('ref') && !(kind === 'fly' && verb === 'mint')) fail(`--ref (an inviter) only applies to gang mint on a 持续打新 token; this is ${KIND_NAMES[kind]}`, { token })
+  if (flag('ref') && !(kind === 'fly' && verb === 'mint')) fail(`--ref (an inviter) only applies to gang mint on a 铸币飞轮 token; this is ${KIND_NAMES[kind]}`, { token })
   const io = { ...PAD_IO, out: tagKind(kind) }
   if (kind === 'v3' && V3_VERBS.has(verb)) return runV3(verb, { ...io, notes: padNotes('v3', verb) })
   if (kind === 'fly' && FLY_VERBS.has(verb)) {
-    if (flag('follow')) fail('--follow only counts on curve buys (V3 / V2 tokens): a 持续打新 token has no curve', { token })
+    if (flag('follow')) fail('--follow only counts on curve buys (V3 / V2 tokens): a 铸币飞轮 token has no curve', { token })
     return runFly(verb, amountIo(io))
   }
   if (kind === 'fair' && FAIR_VERBS.has(verb)) {
@@ -950,18 +950,18 @@ function alias(kind, sub) {
 // gang create: V3 by default, a 打新 sale with --fair; a setting of the other kind is refused, not ignored
 const V3_CREATE_FLAGS = ['buy-tax', 'sell-tax', 'dividend', 'recipient']
 const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee', 'shares']
-// 持续打新 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
+// 铸币飞轮 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
 const FLY_ONLY_FLAGS = FLY_CREATE_FLAGS.filter((f) => !['raise', 'hold', 'mint-fee', 'exit-fee', 'sell-tax'].includes(f))
-const FLY_NO_BOND = '持续打新 tokens take no GangBond, buy-back splitter or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
-/** The flags a 持续打新 create refuses (gang create --fly and gang fly create alike). */
+const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
+/** The flags a 铸币飞轮 create refuses (gang create --fly and gang fly create alike). */
 function checkFlyCreate() {
-  if (flag('fair')) fail('give --fly (持续打新) or --fair (打新), not both')
+  if (flag('fair')) fail('give --fly (铸币飞轮) or --fair (打新), not both')
   const wrong = ['buy-tax', 'dividend', 'recipient', 'cap', 'shares'].find(flag)
     if (wrong) {
-      fail(wrong === 'buy-tax' ? '--buy-tax: a 持续打新 token\'s buy tax is fixed at 1% (--sell-tax 1-2 sets the sell tax)'
-        : wrong === 'shares' ? '--shares is 打新\'s: a 持续打新 creator mints with --dev-shares <n>'
-          : wrong === 'cap' ? '--cap is 打新\'s: a 持续打新 sale has a quota per wallet, --quota <5-100> (+ --invite-bonus)'
-            : `--${wrong} is a V3 tax setting; a 持续打新 token's tax goes to holders, the platform and the creator in fixed parts`)
+      fail(wrong === 'buy-tax' ? '--buy-tax: a 铸币飞轮 token\'s buy tax is fixed at 1% (--sell-tax 1-2 sets the sell tax)'
+        : wrong === 'shares' ? '--shares is 打新\'s: a 铸币飞轮 creator mints with --dev-shares <n>'
+          : wrong === 'cap' ? '--cap is 打新\'s: a 铸币飞轮 sale has a quota per wallet, --quota <5-100> (+ --invite-bonus)'
+            : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
 function create() {
@@ -970,7 +970,7 @@ function create() {
     return runFly('create', { ...PAD_IO })
   }
   const flyOnly = FLY_ONLY_FLAGS.find(flag)
-  if (flyOnly) fail(`--${flyOnly} is a 持续打新 (continuous-mint) setting: add --fly to create one (gang create --fly …)`)
+  if (flyOnly) fail(`--${flyOnly} is a 铸币飞轮 (Mint Flywheel) setting: add --fly to create one (gang create --fly …)`)
   if (flag('fair')) {
     const wrong = V3_CREATE_FLAGS.find(flag)
     if (wrong) fail(`--${wrong} is a V3 tax setting; a 打新 sale's pool tax is fixed (1%): leave it out, or drop --fair for a V3 token`)
@@ -990,11 +990,11 @@ const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
 const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS]
 
-/** gang bond / gang buyback on a 持续打新 token: both contracts refuse it, so say why before any step. */
+/** gang bond / gang buyback on a 铸币飞轮 token: both contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
   const token = opt('token')
   if (!isAddress(token ?? '')) return
-  if (await isFlyToken(flyCtx(flag('testnet')), token)) fail(`持续打新 (continuous-mint) tokens take no ${what} (phase 1)`, { token, kind: 'fly' })
+  if (await isFlyToken(flyCtx(flag('testnet')), token)) fail(`铸币飞轮 (Mint Flywheel) tokens take no ${what} (phase 1)`, { token, kind: 'fly' })
 }
 
 /** A mainnet tx decoded, its queued note published (or its state refreshed), its follow ref and token links. */
@@ -1328,7 +1328,7 @@ async function main() {
       // a GangLaunchpad token: the V3 curve buy (--amount / --bnb = the quote to spend)
       const onPad = await kindOf(v2PoolCtx(), token)
       if (onPad === 'fair') fail('this note is on a 打新 (fair-mint) token: only curve buys can follow a note', { noteTx, token })
-      if (onPad !== 'v3' && (await isFlyToken(flyCtx(false), token))) fail('this note is on a 持续打新 (continuous-mint) token: only curve buys can follow a note', { noteTx, token })
+      if (onPad !== 'v3' && (await isFlyToken(flyCtx(false), token))) fail('this note is on a 铸币飞轮 (Mint Flywheel) token: only curve buys can follow a note', { noteTx, token })
       if (onPad === 'v3') {
         return runV3('buy', { ...PAD_IO, opt: (n, d) => (n === 'token' ? token : opt(n, d)), notes: padNotes('v3', 'buy', { note, checked: follow }) })
       }

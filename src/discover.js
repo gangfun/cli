@@ -66,12 +66,12 @@ const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', fair: 
 
 /**
  * GangLaunchpad rows: `v3` = V3 curves (/v3/tokens), `fair` = 打新 sales (/fair/sales; `graduated` = launched); GangFlywheelPad
- * rows: `fly` = 持续打新 sales (/fly/tokens, shaped like the 打新 rows; launched ones may still mint).
+ * rows: `fly` = 铸币飞轮 sales (/fly/tokens, shaped like the 打新 rows; launched ones may still mint).
  * List rows carry raw wei and no USD; details (/…/<addr>) carry human amounts and USD like the V2 rows.
  * `quoteUsdOf(quoteAddress)` prices a list row's quote (from the V2 / Soft rows), null when unknown.
  */
 function gangRow(r, quoteUsdOf) {
-  // a 持续打新 row reads like a 打新 one (sharePrice = basePrice, raiseQuote, sold of 10,000)
+  // a 铸币飞轮 row reads like a 打新 one (sharePrice = basePrice, raiseQuote, sold of 10,000)
   const fair = r.track === 'fair' || r.track === 'fly'
   const dec = r.quoteDecimals ?? 18
   const w = (v) => num(v) / 10 ** dec
@@ -94,9 +94,7 @@ function gangRow(r, quoteUsdOf) {
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),
     holders: r.holders != null ? num(r.holders) : fair ? num(r.participants) : null,
     ...(fair && { sharePrice: w(r.sharePrice), sharesLeft: num(r.sharesLeft), minWalletsLeft: num(r.minWalletsLeft) }),
-    ...(r.track === 'fly' && {
-      status: r.status ?? null, postMint: !!r.postMint, mintPaused: !!r.mintPaused, baseQuota: num(r.baseQuota), inviteBonus: num(r.inviteBonus),
-    }),
+    ...(r.track === 'fly' && { status: r.status ?? null, postMint: !!r.postMint, baseQuota: num(r.baseQuota), inviteBonus: num(r.inviteBonus) }),
     createdAt: r.createdAt, ageMin: r.createdAt ? Math.floor((now() - r.createdAt) / 60) : null,
     lastTradeAt: r.lastTradeAt || r.lastActivityAt || null, creatorHandle: r.creatorHandle || null, logoUrl: r.logoUrl || null,
     website: r.website && !websiteError(r.website) ? r.website : null,
@@ -158,7 +156,7 @@ export async function fetchMarket(track = 'all', stop) {
   const [v3, fair, fly, v2, soft] = await Promise.all([
     want('v3') ? pages('/v3/tokens?status=all', stop) : none,
     want('fair') ? pages('/fair/sales?status=all', stop) : none,
-    // 持续打新 (2026-10-30): a server without the route yet lists none, unless --track fly asked for it alone
+    // 铸币飞轮 (2026-10-30): a server without the route yet lists none, unless --track fly asked for it alone
     want('fly') ? pages('/fly/tokens?status=all', stop).catch((e) => (track === 'fly' ? Promise.reject(e) : none)) : none,
     want('v2') ? pages('/stocks/tokens', stop) : priced ? prices('/stocks/tokens') : none,
     want('soft') ? pages('/tokens?sort=new', stop) : priced ? prices('/tokens?sort=new') : none,
@@ -181,12 +179,12 @@ export async function fetchMarket(track = 'all', stop) {
 /** The command that acts on a token next: quote / preview a buy (no tx is sent before `gang execute`). */
 const hint = (t) => {
   const amount = `--amount <amount in ${t.quote}>`
-  // 持续打新: minting before launch, and after it while the server's postMint flag is on (gang mint picks the post-launch
+  // 铸币飞轮: minting before launch, and after it while the server's postMint flag is on (gang mint picks the post-launch
   // mint); a filled sale waits for its launch, a refund-only one only sells back
   if (t.track === 'fly' && t.status === 'filled') return `gang info --token ${t.address}`
   if (t.track === 'fly' && t.status === 'refund') return `gang withdraw --token ${t.address} --all`
-  // launched with post-launch minting paused (the pool too far below its references): the pool, not a mint
-  if (t.track === 'fly' && (!t.graduated || (t.postMint && !t.mintPaused))) return `gang mint --token ${t.address} --shares <n>`
+  // (list rows do not say whether post-launch minting is paused: gang mint checks that on chain and says so)
+  if (t.track === 'fly' && (!t.graduated || t.postMint)) return `gang mint --token ${t.address} --shares <n>`
   if (t.graduated) return `gang buy --token ${t.address} ${amount}` // the PancakeSwap pool, through GangRouter
   if (t.track === 'fair') return `gang mint --token ${t.address} --shares <n>`
   if (t.track === 'v3') return `gang buy --token ${t.address} ${amount}`
