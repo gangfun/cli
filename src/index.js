@@ -212,8 +212,9 @@ graduated tokens only).
                                          gang_help (this text + the rules), reads, watch, buy / sell / follow previews,
                                          execute, and gang_cli for every other command
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
-  gang list [--kind v3|fair [--status …]]
-                                         V2 / Soft / U / S tokens; --kind v3 (--status curve|graduated|all) / --kind fair
+  gang list [--limit 20] [--kind v3|fair [--status …]]
+                                         V2 / Soft / U / S tokens read on chain (works without gang.fun), the newest --limit
+                                         per pad; --kind v3 (--status curve|graduated|all) / --kind fair
                                          (--status minting|launched|all): GangLaunchpad tokens from gang.fun
   gang hot [--limit 10] [--track all|v3|fair|v2|soft] [--include-graduated]
                                          tokens not yet graduated / launched, ranked by 24h USD volume
@@ -1037,7 +1038,12 @@ async function main() {
         fail('--kind must be v3 or fair (leave it out for the V2 / Soft / U / S tokens)', { got: kind ?? null })
       }
       const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
-      return out({ success: true, createPad: padNets('v3').mainnet.pad, tokens: await listTokens(me) })
+      const perPad = parseCount('limit', opt('limit', '20'), 1000)
+      const { tokens, pads } = await listTokens(me, perPad)
+      return out({
+        success: true, createPad: padNets('v3').mainnet.pad, perPad, pads, tokens,
+        ...(pads.some((p) => p.total > p.listed) && { note: `newest ${perPad} per pad; --limit <n> (up to 1000) lists more` }),
+      })
     }
     case 'hot':
     case 'new':

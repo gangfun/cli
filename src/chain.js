@@ -2,6 +2,7 @@ import { createPublicClient, formatEther, parseEther, encodeFunctionData, decode
 import { bsc } from 'viem/chains'
 import { SOFT_ABI, V2_ABI, S_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
 import { kindOf, padNets, rpcTransport } from './gangpad.js'
+import { mapLimit } from './limit.js'
 
 export const ADDR = {
   v2: '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E',
@@ -124,18 +125,26 @@ export async function tokenInfo(token, me) {
   return info
 }
 
-export async function listTokens(me) {
-  const out = []
+/**
+ * `gang list` without --kind: the newest `perPad` tokens of each V2 / Soft / U / S pad, read on chain (the fallback when
+ * gang.fun's API is down). Reading every token of every pad took minutes (LaunchpadV2 alone has hundreds), so the
+ * newest first, a few reads at a time. → { tokens, pads: [{ pad, total, listed }] }
+ */
+export async function listTokens(me, perPad = 20) {
+  const tokens = []
+  const pads = []
   for (const pad of PADS) {
     try {
-      const n = await read(pad.address, pad.abi, 'tokenCount')
-      const addrs = await Promise.all(Array.from({ length: Number(n) }, (_, i) => read(pad.address, pad.abi, 'allTokens', [BigInt(i)])))
-      for (const a of addrs) {
-        try { out.push(await tokenInfo(a, me)) } catch { /* skip */ }
-      }
-    } catch { /* pad down */ }
+      const n = Number(await read(pad.address, pad.abi, 'tokenCount'))
+      const idx = Array.from({ length: Math.min(n, perPad) }, (_, i) => BigInt(n - 1 - i))
+      const addrs = await mapLimit(idx, 8, (i) => read(pad.address, pad.abi, 'allTokens', [i]))
+      const infos = await mapLimit(addrs, 8, (a) => tokenInfo(a, me).catch(() => null))
+      const listed = infos.filter(Boolean)
+      tokens.push(...listed)
+      pads.push({ pad: pad.id, total: n, listed: listed.length })
+    } catch { pads.push({ pad: pad.id, total: null, listed: 0, error: 'pad unreadable' }) }
   }
-  return out
+  return { tokens, pads }
 }
 
 /** LaunchpadV2 curve constants (LaunchpadV2.sol) — unique off-chain path = on-chain math. */
