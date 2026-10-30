@@ -8,6 +8,7 @@ import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
 import { splitterOf } from './buyback.js'
 import { splitOf } from './split.js'
+import { lpOf } from './lp.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -282,11 +283,15 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     // or the dev's split module (split-v1): its fixed payees and shares, what waits to be split
     const split = c.recipient && !c.recipientIsCreator && !buyback
       ? await splitOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, extraAssets: [c.quote], ref: `--token ${token}${net}` }) : null
+    // or the dev's LP splitter (lp-burn-v1): its ratio, what is set aside for the pool, the next chunk
+    const lp = c.recipient && !c.recipientIsCreator && !buyback && !split ? await lpOf(ctx.read, c.recipient, { pad: ctx.pad }) : null
+    const lpWarn = lp && lp.token && lp.token.toLowerCase() !== token.toLowerCase()
+      ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the split module, but the module is bound to another token (${split.token}): the keeper never splits this token's tax (${c.quote}); it is split only by hand (gang split distribute --token ${token}${net} --asset ${c.quote})` } : null
     return out({
       success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
-      ...(split && { split: { ...split, ...splitWarn } }),
+      ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
     })
   }
 

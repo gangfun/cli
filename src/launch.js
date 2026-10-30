@@ -9,6 +9,7 @@ import { walletFor } from './fair.js'
 import { parseAmount, parseIntIn, step } from './steps.js'
 import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, splitterFactoryAddress, splitterOf } from './buyback.js'
 import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFactoryAddress, splitLine, splitNotDeployed, splitOf } from './split.js'
+import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf, simulateLp } from './lp.js'
 
 /**
  * One command for a launch: `gang create … [--buyback <pct>] [--dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>]
@@ -31,7 +32,11 @@ import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFacto
  * --split <addr>:<pct>[,…] (V3, taxed): the same three steps with GangSplitModuleFactory — the dev's split module (fixed
  * payees and shares, split-v1) is cloned at predict(dev, salt), named as the recipient, then bound. The plan keeps which
  * module it cloned (`module: 'split'`; a plan without it is a --buyback one), and a re-run with other payees or shares is
- * refused rather than starting over. --buyback, --split and --recipient are exclusive (each sets the recipient).
+ * refused rather than starting over.
+ * --lp <pct> [--lp-to <addr>] (V3, taxed): the same three steps with GangLiquiditySplitterFactory — the dev's LP splitter
+ * (lp-burn-v1: --lp % of the recipient's part added to the pair as liquidity, the LP to 0xdead) is cloned at
+ * predict(dev, salt), named as the recipient, then bound (`module: 'lp'` in the plan). A launch keeps the ratio and payee
+ * it began with. --buyback, --split, --lp and --recipient are exclusive (each sets the recipient).
  */
 
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
@@ -55,6 +60,8 @@ const REGISTRY_ABI = parseAbi(['function quoteRegistry() view returns (address)'
  * and the buy-back part is stuck for good (GangBond re-review L-1, 2026-10-29; splitter v3 has the same pricing).
  * --split takes the same quotes: a quote that calls the receiver back on transfer would let one payee make every split
  * run out of gas, and the keeper splits only these quotes anyway (split spec §2.4).
+ * --lp takes the same quotes: the keeper adds liquidity only over these, and an unlisted quote may tax or block the
+ * transfers into the pair every chunk makes.
  * null when trusted; otherwise the failure to report.
  */
 const UNTRUSTED = {
@@ -65,6 +72,10 @@ const UNTRUSTED = {
   split: {
     why: '--split needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: the keeper splits only those quotes, and an unlisted quote may call the receiver back on transfer, letting one payee make every split run out of gas',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --split',
+  },
+  lp: {
+    why: '--lp needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: the keeper adds liquidity only over those quotes, and an unlisted quote may tax or block the transfers into the pair every chunk makes',
+    hint: 'drop --quote (WBNB), use a listed quote, or launch without --lp',
   },
 }
 export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') {
@@ -84,13 +95,15 @@ export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') 
   }
 }
 
-export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'restart']
+export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'lp', 'lp-to', 'restart']
 const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 /** `gang fair create --dev-buy`, with or without --bond (index.js stops the lone flag, runLaunch the chained one). */
 export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: use --shares <n> (not --dev-buy)'
 
 /** The run asks for a chained launch (`kind` 'v3' | 'fair'). */
-export const isLaunch = (kind, flag) => flag('bond') || flag('buyback') || flag('split') || (kind === 'v3' && flag('dev-buy'))
+export const isLaunch = (kind, flag) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && flag('dev-buy'))
+/** The recipient modules a launch can clone (their flags), at most one per launch. */
+const MODULE_FLAGS = ['buyback', 'split', 'lp']
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -135,7 +148,10 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (kind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
   if (kind === 'fair' && flag('buyback')) fail('--buyback is for V3 tokens: it makes the tax recipient a buy-back splitter, and a 打新 token has no recipient')
   if (kind === 'fair' && flag('split')) fail('--split is for V3 tokens: it makes the tax recipient a split module, and a 打新 token has no recipient')
+  if (kind === 'fair' && flag('lp')) fail('--lp is for V3 tokens: it makes the tax recipient an LP splitter, and a 打新 token has no recipient')
   if (flag('split') && flag('buyback')) fail('give --split or --buyback, not both: each makes the tax recipient its own module (a split with a buy-back is not supported)')
+  const mods = MODULE_FLAGS.filter((f) => flag(f))
+  if (mods.length > 1) fail(`give one of --${mods.join(' / --')}, not several: each makes the tax recipient its own module`)
 
   // everything checked before the create, so a launch never stops half way on a bad flag
   const devBuy = kind === 'v3' && flag('dev-buy') ? parseAmount(fail, 'dev-buy', opt('dev-buy')) : null
@@ -193,12 +209,32 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     split = { ...spec, factory }
   }
-  const mod = buyback ? 'buyback' : split ? 'split' : null
+
+  // --lp: a taxed V3 token whose recipient is the dev's LP splitter (auto-liquidity, the LP to 0xdead)
+  let lp = null
+  if (flag('lp-to') && !flag('lp')) fail('--lp-to <addr> goes with --lp <pct>: it names where the part not added to the pool goes')
+  if (flag('lp')) {
+    const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
+    if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
+      fail('--lp needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the liquidity is paid from the tax')
+    }
+    if (flag('recipient')) fail('--lp makes the recipient your LP splitter: leave --recipient out')
+    if (/^0*100(\.0+)?$/.test(opt('dividend', '0'))) fail('--dividend 100 leaves nothing for the recipient, so nothing to add to the pool: lower it or drop --lp')
+    const factory = lpFactoryAddress(testnet)
+    if (!factory) fail(lpNotDeployed(testnet))
+    let payee = null
+    if (flag('lp-to')) {
+      payee = opt('lp-to')
+      if (!isAddress(payee ?? '') || payee === zeroAddress) fail('--lp-to must be a 0x address, checksummed or all lowercase (where the part not added to the pool goes; leave it out for your own wallet)', { got: payee ?? null })
+    }
+    lp = { bps: lpBpsOf(fail, opt('lp')), factory, payee }
+  }
+  const mod = buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : null
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
-  const cloneStep = buyback ? 'buyback-splitter' : 'split-module'
+  const cloneStep = buyback ? 'buyback-splitter' : split ? 'split-module' : 'lp-splitter'
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
     ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
   const rerun = 're-run this same command after executing it'
@@ -210,13 +246,14 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
   const created = plan?.startCount !== undefined
-  // the module this plan cloned: 'split' when it says so, else a --buyback splitter (plans from before --split)
-  const planMod = plan?.salt ? (plan.module === 'split' ? 'split' : 'buyback') : null
+  // the module this plan cloned: 'split' / 'lp' when it says so, else a --buyback splitter (plans from before --split)
+  const planMod = plan?.salt ? (plan.module === 'split' || plan.module === 'lp' ? plan.module : 'buyback') : null
+  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter' }
   if (mod && created && !plan.splitter) {
     return fail(`this launch was created without --${mod} (its recipient is fixed): run it again without --${mod}, or add --restart for a new token`)
   }
   if (planMod && mod !== planMod && (!created || mod)) {
-    return fail(`this launch began with --${planMod} (its ${planMod === 'split' ? 'split module' : 'splitter'} is cloned or on the way): run it again with --${planMod}${mod ? ` instead of --${mod}` : ''}, or add --restart${mod ? '' : ` without it`}`)
+    return fail(`this launch began with --${planMod} (its ${modNoun[planMod]} is cloned or on the way): run it again with --${planMod}${mod ? ` instead of --${mod}` : ''}, or add --restart${mod ? '' : ` without it`}`)
   }
 
   // ---- buy-back splitter: cloned for the dev before the create, at predict(dev, plan.salt)
@@ -304,6 +341,54 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // ---- LP splitter: cloned for the dev before the create, at predict(dev, plan.salt)
+  if (lp && !created) {
+    if (!plan?.salt) {
+      const refused = await untrustedBuybackQuote(read, net, flag('quote') ? opt('quote') : net.wbnb, 'lp')
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
+      if ((await client.getCode({ address: lp.factory }) ?? '0x') === '0x') {
+        return fail(`GangLiquiditySplitterFactory has no code at ${lp.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'} yet: launch without --lp for now${process.env[testnet ? 'GANG_TESTNET_LP_FACTORY' : 'GANG_LP_FACTORY'] ? ` (or fix ${testnet ? 'GANG_TESTNET_LP_FACTORY' : 'GANG_LP_FACTORY'})` : ''}`, { factory: lp.factory })
+      }
+      const salt = `0x${randomBytes(32).toString('hex')}`
+      const at = await read(lp.factory, LP_FACTORY_ABI, 'predict', [me, salt])
+      if (lp.payee && lp.payee.toLowerCase() === at.toLowerCase()) return fail('--lp-to: the payee cannot be the LP splitter itself', { splitter: at })
+      const args = [lp.bps, salt, lp.payee ?? zeroAddress]
+      const sim = await simulateLp(client, me, lp.factory, LP_FACTORY_ABI, 'create', args)
+      if (sim.failed) return out({ success: false, step: 'lp-splitter', factory: lp.factory, ...tag('lp-splitter'), ...sim.failed })
+      writePlan(key, { ...base, salt, splitter: at, factory: lp.factory, module: 'lp' })
+      const data = encodeFunctionData({ abi: LP_FACTORY_ABI, functionName: 'create', args })
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: lp.factory, data }, {
+          step: 'lp-splitter', chainId: Number(net.chainId), factory: lp.factory, lpPct: lp.bps / 100,
+          splitter: at, payee: lp.payee ?? me,
+          note: `clones your LP splitter (listed as a tax recipient in the same tx): ${lp.bps / 100}% of the recipient's part is added to the token's PancakeSwap pair as liquidity, the LP sent to 0xdead (locked for good), the rest goes to ${lp.payee ? `${lp.payee} (--lp-to)` : 'you'}. After graduation the keeper adds it in chunks. Later a raise applies at once, a cut only after a 3-day notice; the payee can be changed at once (gang lp set-payee)`,
+        }, flag('calldata'), io.summarize),
+        ...tag('lp-splitter', { splitter: at, next: `${rerun}: it then builds the create with the LP splitter as the recipient` }),
+      })
+    }
+    if ((await client.getCode({ address: plan.splitter }) ?? '0x') === '0x') {
+      return out({
+        success: false, ...tag('lp-splitter', { splitter: plan.splitter }), error: 'the LP splitter is not on chain yet',
+        hint: `if the clone was executed, wait for it to land and ${rerun.replace(' after executing it', '')}; if it was not, add --restart to build it again`,
+      })
+    }
+    const s = await lpOf(read, plan.splitter)
+    if (!s || s.dev.toLowerCase() !== me.toLowerCase() || s.token) {
+      return fail('the LP splitter at this launch\'s address is not an unbound LP splitter of this wallet: add --restart', { splitter: plan.splitter })
+    }
+    if (s.lpBps !== lp.bps) {
+      return fail(`this launch's LP splitter adds ${s.lpPct}% to the pool, not ${lp.bps / 100}%: run it again with --lp ${s.lpPct}, or add --restart for a new splitter (gang lp set changes it after the create)`, { splitter: plan.splitter })
+    }
+    const wantPayee = (lp.payee ?? me).toLowerCase()
+    if (s.payee.toLowerCase() !== wantPayee) {
+      const was = s.payee.toLowerCase() === me.toLowerCase() ? 'leave --lp-to out' : `--lp-to ${s.payee}`
+      return fail(`this launch's LP splitter pays ${s.payee}, not ${lp.payee ?? me}: run it again with ${was}, or add --restart for a new splitter (gang lp set-payee changes it after the create)`, { splitter: plan.splitter })
+    }
+  }
+
   // ---- create
   if (!created) {
     const startCount = (await read(net.pad, PAD_ABI, 'tokenCount')).toString()
@@ -353,7 +438,9 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   const stepIo = (over) => ({ ...io, ...argsWith(io, { ...over, token }, [...LAUNCH_FLAGS, ...NOTE_FLAGS, 'name', 'symbol']) })
   const bal = await read(token, ERC20_ABI, 'balanceOf', [me])
   const isSplit = plan.module === 'split'
-  const buybackState = () => (plan.splitter && !isSplit ? splitterOf(read, plan.splitter) : null)
+  const isLp = plan.module === 'lp'
+  const buybackState = () => (plan.splitter && !isSplit && !isLp ? splitterOf(read, plan.splitter) : null)
+  const lpState = () => (plan.splitter && isLp ? lpOf(read, plan.splitter, { pad: net.pad }) : null)
   const splitState = () => (plan.splitter && isSplit ? splitOf(read, plan.splitter, { wbnb: net.wbnb, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
 
   // ---- done: the report only, whatever happened to the balance or the bond since
@@ -366,17 +453,19 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (bb) done.buyback = bb
     const sp = await splitState()
     if (sp) done.split = sp
+    const lps = await lpState()
+    if (lps) done.lp = lps
     if (!bond) return out({ ...done, note: `launched: gang ${kind} info --token ${token}${testnet ? ' --testnet' : ''}` })
     return runBond('status', { ...stepIo({}), out: (o) => out({ ...done, bondStatus: o, note: `launched and bonded: gang bond status --token ${token}${testnet ? ' --testnet' : ''}` }) })
   }
   if (plan.done) return report()
 
-  // ---- bind the splitter / split module to the token (anyone may; the launch does it right after the create)
+  // ---- bind the splitter / split module / LP splitter to the token (anyone may; the launch does it right after the create)
   if (plan.splitter) {
-    const abi = isSplit ? SPLIT_ABI : SPLITTER_ABI
+    const abi = isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
     const bound = await read(plan.splitter, abi, 'token')
     if (bound === zeroAddress) {
-      const sim = await (isSplit ? simulateSplit : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
+      const sim = await (isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
       if (sim.failed) return out({ success: false, step: 'bind', ...tag('bind', { token }), ...sim.failed })
       const data = encodeFunctionData({ abi, functionName: 'bind', args: [token] })
       return out({
@@ -384,13 +473,15 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
           step: 'bind', chainId: Number(net.chainId), token, ...(isSplit ? { module: plan.splitter } : { splitter: plan.splitter }),
           note: isSplit
             ? 'ties the split module to this token for good: the keeper then splits its quote among the payees'
-            : 'ties the splitter to this token for good (what it buys back and burns)',
+            : isLp
+              ? 'ties the LP splitter to this token for good: its pair is where the liquidity goes (from graduation on)'
+              : 'ties the splitter to this token for good (what it buys back and burns)',
         }, flag('calldata'), io.summarize),
         ...tag('bind', { token, next: `${rerun}${devBuy ? ': it continues with the dev buy' : bond ? ': it continues with the bond' : ': the launch is then done'}` }),
       })
     }
     if (bound.toLowerCase() !== token.toLowerCase()) {
-      return out({ success: false, ...tag('bind', { token }), error: `the ${isSplit ? 'split module' : 'splitter'} is bound to another token`, [isSplit ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
+      return out({ success: false, ...tag('bind', { token }), error: `the ${isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
     }
   }
 
