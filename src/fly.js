@@ -82,6 +82,8 @@ export const FLY_HANDLER_ABI = parseAbi([
   'function eligibleShare(address token, address user) view returns (uint256)',
   'function owedOf(address token) view returns (uint256)',
   'function release(address token) returns (uint256 amount)',
+  'function blockRefOf(address token) view returns (uint32 blockNumber, uint224 price)',
+  'function prevBlockStartOf(address token) view returns (uint256)',
   'error ProtectionNotAgent()', 'error ProtectionCapExceeded()', 'error PriceBelowReference()', 'error NothingOwed()',
   'error SellDuringFlashSwap()', 'error OutOfGas()',
   'event Launched(address indexed token, uint256 protectedUntil, address gate, uint256 cap, uint256 launchPrice)',
@@ -275,8 +277,48 @@ async function poolSide(ctx, token, sale, handler) {
     },
     tax: { buyPct: BUY_TAX_PCT, sellPct: pct(sellTaxBps), split: 'the first 1%: holders 50% / platform 25% / creator 25%; sell tax above 1%: holders' },
     supply: { total: formatUnits(supply, 18), max: formatUnits(maxSupply, 18), mintRoom: formatUnits(room, 18) },
-    raw: { spot, until: Number(until), gate, cap, sellTaxBps: Number(sellTaxBps), room },
+    raw: { spot, blockStart, high, average, until: Number(until), gate, cap, sellTaxBps: Number(sellTaxBps), room },
   }
+}
+
+// FlywheelPostLogic: a post-launch mint is refused while the pool is more than 10% below its 30-minute average or its
+// recent high, or when its buyer price is more than 10% above the pool; FlywheelOracle: the previous block start counts
+// for 20 blocks
+const MAX_DROP_BPS = 1_000n, HIGH_GAP_BPS = 1_000n, TWAP_FLOOR_BPS = 100n, PREV_START_BLOCKS = 20n
+const PAUSE_WHY = {
+  below_average: 'the pool price is more than 10% below its 30-minute average',
+  below_recent_high: 'the pool price is more than 10% below its recent high',
+  above_pool: 'a mint would be priced more than 10% above the pool (it dropped in the last blocks)',
+  supply_cap: 'the token\'s supply cap leaves no room for a mint',
+}
+const RESUMES = 'minting resumes once the pool price is back within 10% of both its 30-minute average and its recent high (the high decays 0.5% a minute; the average follows the price over 30 minutes)'
+
+/**
+ * Whether post-launch mints are refused now, by the rules mintPost checks (the wallet's own pace aside): the reads of
+ * poolSide plus the handler's previous block start, as of the latest block. → { pausedNow, reason, reasons } where reason
+ * is the first rule mintPost would hit.
+ */
+async function mintPause(ctx, token, sale, handler, side) {
+  const { spot, blockStart, high, average, room } = side.raw
+  const BPS = 10_000n
+  const reasons = []
+  if (spot * BPS < average * (BPS - MAX_DROP_BPS)) reasons.push('below_average')
+  if (spot * BPS < high * (BPS - HIGH_GAP_BPS)) reasons.push('below_recent_high')
+  const [bn, [b, bp], packed, one] = await Promise.all([
+    ctx.client.getBlockNumber(), ctx.read(handler, FLY_HANDLER_ABI, 'blockRefOf', [token]),
+    ctx.read(handler, FLY_HANDLER_ABI, 'prevBlockStartOf', [token]), ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n]),
+  ])
+  const [pb, pp] = BigInt(b) === bn ? [packed >> 224n, packed & ((1n << 224n) - 1n)] : [BigInt(b), bp]
+  const prev = bn - pb > PREV_START_BLOCKS ? 0n : pp
+  let ref = high > average ? high : average
+  if (prev > ref) ref = prev
+  const floor = (ref * (BPS - TWAP_FLOOR_BPS)) / BPS
+  let price = spot > blockStart ? spot : blockStart
+  if (floor > price) price = floor
+  if (price * BPS > spot * (BPS + HIGH_GAP_BPS)) reasons.push('above_pool')
+  // one share: the buyer's tokens and the liquidity's (at most its price of quote at spot) must fit under the cap
+  if (spot > 0n && price > 0n && (one * Q112) / price + (one * Q112) / spot > room) reasons.push('supply_cap')
+  return { pausedNow: reasons.length > 0, ...(reasons.length && { reason: reasons[0], reasons, why: PAUSE_WHY[reasons[0]] }) }
 }
 
 async function poolReserves(ctx, token, pair) {
@@ -426,8 +468,11 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       const { raw: _r, ...view } = side
       Object.assign(extra, view)
       if (sale.rules.postMint) {
-        const one = await ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n])
-        extra.postMint = { sharePriceNow: await units(ctx, sale.quote, one), tierMulNow: Number((one * 100n) / sale.sharePriceRaw) / 100 }
+        const [one, pause] = await Promise.all([ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n]), mintPause(ctx, token, sale, handler, side)])
+        extra.postMint = {
+          sharePriceNow: await units(ctx, sale.quote, one), tierMulNow: Number((one * 100n) / sale.sharePriceRaw) / 100, ...pause,
+          ...(pause.pausedNow && { resumes: pause.reason === 'supply_cap' ? 'post-launch minting is over: the supply cap is reached' : RESUMES }),
+        }
       }
       const [owedTax, swapBack] = await Promise.all([
         ctx.read(handler, FLY_HANDLER_ABI, 'owedOf', [token]),
@@ -438,7 +483,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     }
     if (owed > 0n) extra.owedDevCut = await units(ctx, sale.quote, owed)
     if (extra.owedDevCut || extra.owedCreatorTax) extra.release = `gang release --token ${token}${net} (anyone; pays the creator)`
-    return out({ success: true, chainId, kind: 'fly', ...pub(sale), ...extra, next: nextFor(sale, token, net) })
+    return out({ success: true, chainId, kind: 'fly', ...pub(sale), ...extra, next: nextFor(sale, token, net, undefined, extra.postMint) })
   }
 
   if (sub === 'status') {
@@ -490,12 +535,18 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       } else {
         Object.assign(pos, { reward: 'none', pendingReward: reward.claimable, note: 'did not mint in this sale: the holder reward is only for minters' })
       }
-      if (sale.rules.postMint && acct.view.quotaLeft > 0) {
-        const [acc, paid, fee, tokensOut, ok] = await ctx.read(ctx.pad, FLY_PAD_ABI, 'previewMintPost', [token, who, 1n])
-        pos.mintOneShareNow = acc ? { paid: await units(ctx, sale.quote, paid), fee: await units(ctx, sale.quote, fee), tokensOut: formatUnits(tokensOut, 18), ok } : null
+      if (sale.rules.postMint) {
+        const pause = await mintPause(ctx, token, sale, handler, side)
+        pos.mintPaused = { ...pause, ...(pause.pausedNow && { resumes: pause.reason === 'supply_cap' ? 'post-launch minting is over: the supply cap is reached' : RESUMES }) }
+        if (acct.view.quotaLeft > 0) {
+          const [acc, paid, fee, tokensOut, ok] = await ctx.read(ctx.pad, FLY_PAD_ABI, 'previewMintPost', [token, who, 1n])
+          pos.mintOneShareNow = acc ? { paid: await units(ctx, sale.quote, paid), fee: await units(ctx, sale.quote, fee), tokensOut: formatUnits(tokensOut, 18), ok } : null
+          // the sale's rules allow a mint, the wallet's own 30-minute pace does not
+          if (acc && !ok && !pause.pausedNow) pos.mintPaused = { pausedNow: true, reason: 'pace', why: 'this wallet\'s recent post-launch mints reach its 30-minute pace (2% of the pool\'s quote side)', resumes: 'the pace decays over 30 minutes' }
+        }
       }
     }
-    return out({ success: true, chainId, kind: 'fly', wallet: who, sale: pub(sale), position: pos, next: nextFor(sale, token, net, acct.view) })
+    return out({ success: true, chainId, kind: 'fly', wallet: who, sale: pub(sale), position: pos, next: nextFor(sale, token, net, acct.view, pos.mintPaused) })
   }
 
   if (sub === 'invite') {
@@ -517,6 +568,12 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       inviteBonusPerInvite: sale.rules.inviteBonus, invited: acct.view.invited, bonusShares: acct.view.inviteBonusShares,
       quota: acct.view.quota, quotaLeft: acct.view.quotaLeft,
       ...(board?.invitees && { invitees: board.invitees }),
+      // gang.fun's board counts an invite only while it holds up (so sell-backs can't farm it); the bonus above is the
+      // pad's and stays either way. Older servers have no such counts: the output is as before
+      ...(Number.isFinite(board?.validInvites) && {
+        validInvites: board.validInvites, totalInvites: board.totalInvites ?? acct.view.invited,
+        validNote: 'gang.fun counts an invite as valid while the invitee still holds pre-launch shares (before the fill), once the sale has filled or launched, or when the invitee first minted after launch; none counts in a refund-only sale. The quota bonus is on chain and stays either way',
+      }),
       ...(!board && { inviteesNote: `the list of invitees comes from ${API} (/fly/tokens/<token>/invites) once it indexes this pad; the count here is read on chain` }),
       note: 'an invite counts on the invitee\'s first mint in this token (before or after launch), when it passes --ref (gang mint --ref <inviter>) or opens the link; the inviter must have minted here and hold an Agent ID',
     })
@@ -922,11 +979,13 @@ const cfgView = (c) => ({
   ...(c.tierMode === 2 && { stepPct: pct(c.stepBps), stepShares: c.stepShares, maxMul: c.maxMulX100 / 100 }), supplyCapMul: c.supplyCapMul,
 })
 
-/** The command that acts on the sale next. */
-function nextFor(sale, token, net, acct) {
+/** The command that acts on the sale next. `paused`: mintPause (or the wallet's) after launch. */
+function nextFor(sale, token, net, acct, paused) {
   if (sale.status === 'minting') return `gang mint --token ${token} --shares <n>${net}${acct && !acct.minted ? ' [--ref <inviter>]' : ''}`
   if (sale.status === 'filled') return sale.launchableNow ? `gang fly launch --token ${token}${net}` : `wait until ${sale.launchAt}, then gang fly launch --token ${token}${net}`
   if (sale.status === 'stalled') return `gang fly launch --token ${token}${net} (or gang withdraw to sell back)`
   if (sale.status === 'refund') return `gang withdraw --token ${token} --all${net}`
+  if (sale.rules.postMint && paused?.pausedNow) return `gang buy --token ${token} --amount <quote>${net} (post-launch minting is paused: ${paused.why})`
+  if (sale.rules.postMint && acct && !acct.quotaLeft) return `gang buy --token ${token} --amount <quote>${net} (this wallet's mint quota is used up)`
   return sale.rules.postMint ? `gang mint --token ${token} --shares <n>${net} (or gang buy in the pool)` : `gang buy --token ${token} --amount <quote>${net}`
 }
