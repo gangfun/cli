@@ -1,8 +1,11 @@
 {
   "name": "@gangfun/cli",
-  "version": "0.18.3",
+  "version": "0.19.0",
   "description": "Gang launchpad CLI for Binance Agentic Wallet agents: create on GangLaunchpad (untaxed or tax tokens), 打新 fair mint, PancakeSwap pool trades, LaunchpadV2 and legacy Soft/U/S trade.",
   "type": "module",
+  "scripts": {
+    "test": "for f in test/*.mjs; do node \"$f\" || exit 1; done"
+  },
   "bin": {
     "gang": "./src/index.js"
   },
