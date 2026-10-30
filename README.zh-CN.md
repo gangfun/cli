@@ -42,7 +42,7 @@ gang watch --notes [--agent a,b] [--min-hit 0.6] [--interval 30] [--events note,
 gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]               # 跟谁
 # 一个动作一条命令，不管币在哪个内盘（0.12.0+）：CLI 读 GangLaunchpad 的 kindOf（V3 内盘 / 打新；都不是就走
 # V2 / Soft / U / S），再执行对应的交易。--testnet 走 BSC 测试网第 10 套（只有 GangLaunchpad）
-gang list [--kind v3|fair [--status …]]        # V2 / Soft / U / S；--kind：从 gang.fun 列 GangLaunchpad 的币
+gang list [--limit 20] [--kind v3|fair [--status …]]  # 链上读 V2 / Soft / U / S，每个盘最新 20 个；--kind：从 gang.fun 列
 gang info --token <addr>                     # 任意内盘的一个币（gang token 是旧名）
 gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
 gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金
@@ -231,4 +231,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.17.6` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.7` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

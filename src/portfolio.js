@@ -8,6 +8,8 @@
  * or only bought on PancakeSwap, is not in that index and so not listed. Mainnet only: gang.fun indexes no testnet.
  */
 
+import { mapLimit } from './limit.js'
+
 const MAX_LAUNCHES = 100 // bonds are looked up on the newest launches up to this many
 
 const num = (v) => (v == null || v === '' ? null : Number(v))
@@ -16,19 +18,6 @@ const round = (x) => (x == null || !Number.isFinite(x) ? null : Number(x.toPreci
 const usd = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 100) / 100)
 const sameAmount = (a, b) => a != null && b != null && Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * 1e-9
 
-/** fn over items, at most `limit` at a time, results in order. */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++
-      out[i] = await fn(items[i], i)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
-}
 
 const KIND = { v3: 'v3', fair: 'fair', main: 'legacy', stocks: 'legacy' }
 

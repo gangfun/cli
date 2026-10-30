@@ -52,7 +52,7 @@ gang watch --notes [--agent a,b] [--min-hit 0.6] [--interval 30] [--events note,
 gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]               # who to follow
 # One command per action, whatever pad the token is on (0.12.0+): the CLI reads GangLaunchpad's kindOf (V3 curve / 打新
 # sale; otherwise the V2 / Soft / U / S pads) and runs that kind's trade. --testnet = BSC testnet set 10 (GangLaunchpad only)
-gang list [--kind v3|fair [--status …]]        # V2 / Soft / U / S; --kind: GangLaunchpad tokens from gang.fun
+gang list [--limit 20] [--kind v3|fair [--status …]]  # V2 / Soft / U / S on chain, newest 20 per pad; --kind: from gang.fun
 gang info --token <addr>                     # one token, any pad (gang token is the older name)
 gang status --token <addr>                   # my position: balance; V3 dividend / 打新 reward, sellable; poolSellAll
 gang portfolio [--from <addr>]               # every holding: balance, value, cost / unrealized, claimable, USD; bonds
@@ -267,4 +267,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.17.6` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.17.7` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
