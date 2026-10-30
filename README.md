@@ -285,4 +285,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.19.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.19.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
