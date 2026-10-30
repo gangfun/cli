@@ -14,14 +14,20 @@ import { poolPayBnb, poolTrade } from './pool.js'
  * tokens are minted. Pool tax: buy 1%, sell 1–2%; holders who minted share part of it (the hold line, `holdBps`).
  * No GangBond and no buy-back splitter on these tokens (phase 1).
  * Contracts: gang-launchpad src/flywheel (GangFlywheelPad, FlywheelTaxHandler, GangMintToken; issue #75).
- * Env: GANG_FLY_PAD / GANG_TESTNET_FLY_PAD override the pad; the RPCs and the GangRouter (pool trades) are GangLaunchpad's.
+ * Two pad versions: V1 (the first pad) and V2 (FlyConfig adds guardBps / twapWindow; post-launch mints check only the
+ * TWAP guard and the price above the pool). New tokens go to V2 once it is listed here; every other command uses the
+ * token's own pad (token.launchpad()). The tax handler, token and token deployer are the same code on both.
+ * Env: GANG_FLY_PAD / GANG_TESTNET_FLY_PAD override V1, GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 V2; the RPCs and the
+ * GangRouter (pool trades) are GangLaunchpad's.
  */
 export const FLY_PADS = {
-  mainnet: { pad: '0x631e66560F4FAE4e486B65349edE48189E48B029', startBlock: 130634782n },
-  // testnet set 2 (2026-10-30, after the pre-mainnet audit fixes)
-  testnet: { pad: '0xD6482850aCAC74BA889804931Fc797294777951c', startBlock: 139749672n },
+  // V2 deployed 2026-10-31; creates go there (it says so while its migrator is unset: no fallback to V1)
+  mainnet: { v1: '0x631e66560F4FAE4e486B65349edE48189E48B029', v2: '0x281889ad915c1A95ffc4922235c6314b3Cbd8a5a', startBlock: 130634782n },
+  // V1: testnet set 2 (2026-10-30, after the pre-mainnet audit fixes); V2 from block 139842621 (2026-10-31)
+  testnet: { v1: '0xD6482850aCAC74BA889804931Fc797294777951c', v2: '0x706973e4F08dBf1604Cf540d0168428521e0E3d6', startBlock: 139749672n },
 }
 
+// V1's FlyConfig; V2 appends guardBps and twapWindow (CFG_V2): a new create / checkConfig selector and Created topic
 const CFG = '(uint256 raiseBnb, uint16 baseQuota, uint8 inviteBonus, uint8 maxPerTx, uint16 holdBps, uint16 mintFeeBps, uint16 exitFeeBps, uint16 devCutBps, uint16 buyBps, uint16 sellTaxBps, uint32 launchDelay, uint32 window, uint8 windowCapMul, bool postMint, uint8 tierMode, uint16 stepBps, uint32 stepShares, uint16 maxMulX100, uint16 supplyCapMul)'
 const SALE = '(address creator, address quote, address gate, address pair, uint128 basePrice, uint64 totalShares, uint64 filledAt, uint64 progressAt, uint16 sold, uint16 creatorShares, uint16 markSold, uint16 baseQuota, uint16 holdBps, uint16 mintFeeBps, uint16 exitFeeBps, uint16 devCutBps, uint16 buyBps, uint32 launchDelay, uint32 window, uint8 inviteBonus, uint8 maxPerTx, uint8 windowCapMul, uint8 tierMode, uint16 stepBps, uint32 stepShares, uint16 maxMulX100, bool postMint, bool launched)'
 export const FLY_PAD_ABI = parseAbi([
@@ -75,6 +81,14 @@ export const FLY_PAD_ABI = parseAbi([
   'event FeesFlushed(address indexed quote, uint256 amount)',
   'event ShareWriteFailed(address indexed token, address indexed user, uint256 share)',
 ])
+const CFG_V2 = CFG.replace(/\)$/, ', uint16 guardBps, uint32 twapWindow)')
+/** What only the V2 pad has (everything else in FLY_PAD_ABI is the same on both). */
+export const FLY_PAD_V2_ABI = parseAbi([
+  `function create(string[4] text, address quote, address refPool, ${CFG_V2} cfg, uint256 devShares) returns (address token)`,
+  `function checkConfig(${CFG_V2} cfg, uint256 devShares) view returns (bool ok, string reason)`,
+  'function postRulesOf(address token) view returns (uint16 guardBps, uint32 twapWindow)',
+  `event Created(address indexed token, address indexed creator, string name, string symbol, string logoURI, address quote, uint256 basePrice, ${CFG_V2} cfg)`,
+])
 export const FLY_HANDLER_ABI = parseAbi([
   'function protectionOf(address token) view returns (uint64 until, address gate, uint256 cap)',
   'function boughtInWindow(address token, address user) view returns (uint256)',
@@ -100,6 +114,7 @@ export const FLY_HANDLER_ABI = parseAbi([
   'event ShareWriteFailed(address indexed token, address indexed user, uint256 share)',
 ])
 const TOKEN_ABI = parseAbi([
+  'function launchpad() view returns (address)',
   'function balanceOf(address) view returns (uint256)',
   'function symbol() view returns (string)',
   'function totalSupply() view returns (uint256)',
@@ -115,7 +130,7 @@ const DEX_ABI = parseAbi(['function getAmountsOut(uint256 amountIn, address[] pa
 const GANG_ROUTER_VIEW = parseAbi(['function pancakeRouter() view returns (address)'])
 
 /** What `gang tx` decodes a 铸币飞轮 tx's logs with (the pad, the tax handler, the holder-reward vault). */
-export const FLY_EVENT_ABIS = [FLY_PAD_ABI, FLY_HANDLER_ABI, VAULT_ABI]
+export const FLY_EVENT_ABIS = [FLY_PAD_ABI, FLY_PAD_V2_ABI, FLY_HANDLER_ABI, VAULT_ABI]
 
 // platform constants (FlywheelLogic): the pad's own numbers, fixed in the contract
 const TOTAL_SHARES = 10_000
@@ -142,7 +157,7 @@ const HINTS = {
   TooEarly: 'too early: launch waits launchDelay after the fill; open-early needs at least 30% (3,000 shares) sold',
   OnlyCreator: 'only the creator can open the sale early',
   Slippage: 'fewer shares / tokens than the minimum: the sale or the price moved; re-run to re-quote',
-  PriceBelowAverage: 'the pool price is more than 10% below its 30-minute average: post-launch mints pause until it recovers',
+  PriceBelowAverage: 'the pool price is too far below its average (V1: 10% under 30 minutes; V2: the sale\'s guard under its TWAP window): post-launch mints pause until it recovers (gang info: postMint)',
   PriceBelowRecentHigh: 'the pool price is more than 10% below its recent high: post-launch mints pause until it recovers (the high decays 0.5% a minute)',
   PriceAbovePool: 'the mint price is more than 10% above the pool price right now (the pool just dropped): try again shortly',
   PaceExceeded: 'this wallet minted too much too fast: recent post-launch mints (decaying over 30 minutes) plus this one may be at most 2% of the pool\'s quote side; mint fewer shares or wait',
@@ -164,32 +179,63 @@ const HINTS = {
 }
 const revertOf = (e) => revertIn(e, [FLY_PAD_ABI, FLY_HANDLER_ABI, TOKEN_ABI, ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
 
-/** Network settings: GangLaunchpad's chain, RPCs, WBNB and GangRouter (pool trades), with the fly pad. */
+/**
+ * Network settings: GangLaunchpad's chain, RPCs, WBNB and GangRouter (pool trades), with the fly pads. ctx.pad /
+ * ctx.version start as the create target (V2 when known, else V1); bindPad switches them to a token's own pad.
+ */
 export function flyCtx(testnet) {
   const net = padNets('v3')[testnet ? 'testnet' : 'mainnet']
   const fly = FLY_PADS[testnet ? 'testnet' : 'mainnet']
-  const pad = process.env[testnet ? 'GANG_TESTNET_FLY_PAD' : 'GANG_FLY_PAD'] || fly.pad
+  const env = (n) => process.env[testnet ? `GANG_TESTNET_${n}` : `GANG_${n}`]
+  const pads = [
+    { address: env('FLY_PAD_V2') || fly.v2, version: 2 },
+    { address: env('FLY_PAD') || fly.v1, version: 1 },
+  ].filter((p) => p.address)
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return {
-    ...net, pad, startBlock: fly.startBlock, client,
+    ...net, pads, pad: pads[0].address, version: pads[0].version, startBlock: fly.startBlock, client,
     read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }),
   }
 }
 
-/** true when `token` is a 铸币飞轮 token on this pad; null on an RPC error. */
+/**
+ * The fly pad `token` belongs to, or null (not a fly token on these pads). A GangMintToken names its pad
+ * (launchpad()); other tokens are asked of each pad's kindOf. Throws on an RPC error.
+ */
+async function padOf(ctx, token) {
+  const named = await ctx.read(token, TOKEN_ABI, 'launchpad').catch(() => null)
+  const known = named && ctx.pads.find((p) => same(p.address, named))
+  if (known) return known
+  for (const p of ctx.pads) {
+    if (Number(await ctx.read(p.address, FLY_PAD_ABI, 'kindOf', [token])) === 3) return p
+  }
+  return null
+}
+
+/** true when `token` is a 铸币飞轮 token on one of the pads; null on an RPC error. */
 export async function isFlyToken(ctx, token) {
   try {
-    return Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'kindOf', [token])) === 3
+    return !!(await padOf(ctx, token))
   } catch {
     return null
   }
+}
+
+/** Point ctx at `token`'s own pad (V1 or V2); false when it is on neither. */
+async function bindPad(ctx, token) {
+  const p = await padOf(ctx, token)
+  if (!p) return false
+  ctx.pad = p.address
+  ctx.version = p.version
+  return true
 }
 
 /** The pad takes creates only once its migrator is set (mainnet: when the Safe opens it). */
 export async function padOpen(ctx) {
   return (await ctx.read(ctx.pad, FLY_PAD_ABI, 'migrator')) !== zeroAddress
 }
-const CLOSED = 'the 铸币飞轮 (Mint Flywheel) pad on BSC mainnet takes no creates right now (no migrator set): use --testnet to try it there'
+/** The create target has no migrator yet: say which pad, and that existing tokens are not affected. */
+const closed = (ctx, testnet) => `the ${ctx.version === 2 ? 'V2 ' : ''}铸币飞轮 (Mint Flywheel) pad on BSC ${testnet ? 'testnet' : 'mainnet'} is not open yet (no migrator set), so it takes no creates right now; existing 铸币飞轮 tokens keep working${testnet ? '' : '. Use --testnet to try it there'}`
 
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, TOKEN_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100
@@ -223,7 +269,7 @@ export async function saleOf(ctx, token) {
       : t >= graceEnds ? (sold >= EARLY_OPEN_SHARES ? 'stalled' : 'refund')
         : 'filled'
   return {
-    token, status, creator: s.creator, quote: s.quote, quoteSymbol, gate: s.gate === zeroAddress ? null : s.gate,
+    token, status, padVersion: ctx.version, pad: ctx.pad, creator: s.creator, quote: s.quote, quoteSymbol, gate: s.gate === zeroAddress ? null : s.gate,
     pair: s.pair === zeroAddress ? null : s.pair, launched: s.launched,
     sharePriceRaw: s.basePrice, sharePrice: await units(ctx, s.quote, s.basePrice),
     raise: await units(ctx, s.quote, s.basePrice * BigInt(TOTAL_SHARES)),
@@ -268,7 +314,9 @@ async function poolSide(ctx, token, sale, handler) {
       unit: `${sale.quoteSymbol || 'quote'} per token`,
       pool: q112(spot), blockStart: q112(blockStart), recentHigh: q112(high), average30m: q112(average),
       launchMintPerToken: formatUnits((sale.sharePriceRaw * 10n ** 18n) / TOKENS_PER_SHARE, 18),
-      note: 'a post-launch mint never pays less per token than the pool price; mints pause while the pool is more than 10% below its 30-minute average or its recent high',
+      note: ctx.version === 1
+        ? 'a post-launch mint never pays less per token than the pool price; mints pause while the pool is more than 10% below its 30-minute average or its recent high'
+        : 'a post-launch mint never pays less per token than the pool price; with the guard on, mints pause while the pool is more than the guard below its average (postRules); the recent high is shown for information only',
     },
     protection: {
       active: t < Number(until), until: iso(Number(until)), endsIn: Math.max(0, Number(until) - t),
@@ -281,44 +329,80 @@ async function poolSide(ctx, token, sale, handler) {
   }
 }
 
-// FlywheelPostLogic: a post-launch mint is refused while the pool is more than 10% below its 30-minute average or its
-// recent high, or when its buyer price is more than 10% above the pool; FlywheelOracle: the previous block start counts
-// for 20 blocks
-const MAX_DROP_BPS = 1_000n, HIGH_GAP_BPS = 1_000n, TWAP_FLOOR_BPS = 100n, PREV_START_BLOCKS = 20n
-const PAUSE_WHY = {
-  below_average: 'the pool price is more than 10% below its 30-minute average',
-  below_recent_high: 'the pool price is more than 10% below its recent high',
-  above_pool: 'a mint would be priced more than 10% above the pool (it dropped in the last blocks)',
-  supply_cap: 'the token\'s supply cap leaves no room for a mint',
-}
-const RESUMES = 'minting resumes once the pool price is back within 10% of both its 30-minute average and its recent high (the high decays 0.5% a minute; the average follows the price over 30 minutes)'
+// Post-launch mint rules (FlywheelPostLogic). V1: refused while the pool is more than 10% below its 30-minute average
+// or its recent high, or when the buyer price (spot, the block start, or 99% of the highest of the high, the average and
+// the previous block start, which counts for 20 blocks) is more than 10% above the pool. V2: refused only while the pool
+// is more than the sale's guard below its TWAP (guard on), or when max(spot, block start) is more than 10% above the pool.
+// Both: one share must fit under the supply cap. BPS = 10,000; prices are UQ112x112.
+const BPS = 10_000n, GAP_BPS = 1_000n, TWAP_FLOOR_BPS = 100n, PREV_START_BLOCKS = 20n
 
 /**
- * Whether post-launch mints are refused now, by the rules mintPost checks (the wallet's own pace aside): the reads of
- * poolSide plus the handler's previous block start, as of the latest block. → { pausedNow, reason, reasons } where reason
- * is the first rule mintPost would hit.
+ * The rules a post-launch mint of one share breaks now, in the order mintPost checks them (the wallet's pace aside).
+ * v: 1 | 2; guardBps (V2): 0 = off; prev (V1): the previous block start (0n once more than 20 blocks old); one: the
+ * price of one share; room: the token's mintRoom.
+ */
+export function pauseReasons({ v, spot, blockStart, high, average, prev = 0n, guardBps = 0n, one, room }) {
+  const reasons = []
+  let price = spot > blockStart ? spot : blockStart
+  if (v === 1) {
+    if (spot * BPS < average * (BPS - GAP_BPS)) reasons.push('below_average')
+    if (spot * BPS < high * (BPS - GAP_BPS)) reasons.push('below_recent_high')
+    let ref = high > average ? high : average
+    if (prev > ref) ref = prev
+    const floor = (ref * (BPS - TWAP_FLOOR_BPS)) / BPS
+    if (floor > price) price = floor
+  } else if (guardBps !== 0n && spot * BPS < average * (BPS - guardBps)) {
+    reasons.push('below_guard') // gang.fun's code for V2's guard (V1 keeps below_average)
+  }
+  if (price * BPS > spot * (BPS + GAP_BPS)) reasons.push('above_pool')
+  // one share: the buyer's tokens and the liquidity's (at most its price of quote at spot) must fit under the cap
+  if (spot > 0n && price > 0n && (one * Q112) / price + (one * Q112) / spot > room) reasons.push('supply_cap')
+  return reasons
+}
+
+/** What a rule means and when it lets minting back, for this pad version and its post-launch rules. */
+function pauseText(reason, v, rules) {
+  const avg = v === 1 ? '30-minute average' : `${rules.twapWindow / 60}-minute average (TWAP)`
+  const guard = v === 1 ? 10 : rules.guardBps / 100
+  return {
+    why: {
+      below_average: `the pool price is more than ${guard}% below its ${avg}`,
+      below_guard: `the pool price is more than ${guard}% below its ${avg} (the sale's guard)`,
+      below_recent_high: 'the pool price is more than 10% below its recent high',
+      above_pool: v === 1 ? 'a mint would be priced more than 10% above the pool (it dropped in the last blocks)' : 'a mint would be priced more than 10% above the pool (it dropped earlier in this block)',
+      supply_cap: 'the token\'s supply cap leaves no room for a mint',
+    }[reason],
+    resumes: reason === 'supply_cap' ? 'post-launch minting is over: the supply cap is reached'
+      : v === 1 ? 'minting resumes once the pool price is back within 10% of both its 30-minute average and its recent high (the high decays 0.5% a minute; the average follows the price over 30 minutes)'
+        : reason === 'above_pool' ? 'minting resumes in the next block (the price is checked against where the block started)'
+          : `minting resumes once the pool price is back within ${guard}% of its ${avg}`,
+  }
+}
+
+/** The post-launch rules of the token's sale: V2 reads its guard and TWAP window; V1's are fixed. */
+async function postRules(ctx, token) {
+  if (ctx.version === 1) return { guardBps: 1_000, twapWindow: 1_800, recentHigh: true }
+  const [guardBps, twapWindow] = await ctx.read(ctx.pad, FLY_PAD_V2_ABI, 'postRulesOf', [token])
+  return { guardBps: Number(guardBps), twapWindow: Number(twapWindow), recentHigh: false }
+}
+
+/**
+ * Whether post-launch mints are refused now, by the rules mintPost checks on this token's pad (the wallet's own pace
+ * aside), as of the latest block. → { pausedNow, reason, reasons, why, resumes }; reason is the first rule mintPost hits.
  */
 async function mintPause(ctx, token, sale, handler, side) {
   const { spot, blockStart, high, average, room } = side.raw
-  const BPS = 10_000n
-  const reasons = []
-  if (spot * BPS < average * (BPS - MAX_DROP_BPS)) reasons.push('below_average')
-  if (spot * BPS < high * (BPS - HIGH_GAP_BPS)) reasons.push('below_recent_high')
-  const [bn, [b, bp], packed, one] = await Promise.all([
-    ctx.client.getBlockNumber(), ctx.read(handler, FLY_HANDLER_ABI, 'blockRefOf', [token]),
-    ctx.read(handler, FLY_HANDLER_ABI, 'prevBlockStartOf', [token]), ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n]),
-  ])
-  const [pb, pp] = BigInt(b) === bn ? [packed >> 224n, packed & ((1n << 224n) - 1n)] : [BigInt(b), bp]
-  const prev = bn - pb > PREV_START_BLOCKS ? 0n : pp
-  let ref = high > average ? high : average
-  if (prev > ref) ref = prev
-  const floor = (ref * (BPS - TWAP_FLOOR_BPS)) / BPS
-  let price = spot > blockStart ? spot : blockStart
-  if (floor > price) price = floor
-  if (price * BPS > spot * (BPS + HIGH_GAP_BPS)) reasons.push('above_pool')
-  // one share: the buyer's tokens and the liquidity's (at most its price of quote at spot) must fit under the cap
-  if (spot > 0n && price > 0n && (one * Q112) / price + (one * Q112) / spot > room) reasons.push('supply_cap')
-  return { pausedNow: reasons.length > 0, ...(reasons.length && { reason: reasons[0], reasons, why: PAUSE_WHY[reasons[0]] }) }
+  const [rules, one] = await Promise.all([postRules(ctx, token), ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n])])
+  let prev = 0n
+  if (ctx.version === 1) {
+    const [bn, [b, bp], packed] = await Promise.all([
+      ctx.client.getBlockNumber(), ctx.read(handler, FLY_HANDLER_ABI, 'blockRefOf', [token]), ctx.read(handler, FLY_HANDLER_ABI, 'prevBlockStartOf', [token]),
+    ])
+    const [pb, pp] = BigInt(b) === bn ? [packed >> 224n, packed & ((1n << 224n) - 1n)] : [BigInt(b), bp]
+    prev = bn - pb > PREV_START_BLOCKS ? 0n : pp
+  }
+  const reasons = pauseReasons({ v: ctx.version, spot, blockStart, high, average, prev, guardBps: BigInt(rules.guardBps), one, room })
+  return { pausedNow: reasons.length > 0, ...(reasons.length && { reason: reasons[0], reasons, ...pauseText(reasons[0], ctx.version, rules) }) }
 }
 
 async function poolReserves(ctx, token, pair) {
@@ -390,9 +474,16 @@ const WITHDRAW_TOLERANCE_BPS = 10n
 
 /** J-template preset (spec §3–4) and the plain one; every field a flag can override. */
 export const FLY_PRESETS = {
-  j: { raise: 20, quota: 10, invite: 1, maxPerTx: 10, hold: 60, mintFee: 1, exitFee: 1, devCut: 10, buyPct: 30, sellTax: 2, launchDelay: 60, window: 600, capMul: 1, postMint: true, tier: 'standard', supplyCap: 100 },
-  steady: { raise: 20, quota: 100, invite: 0, maxPerTx: 10, hold: 60, mintFee: 1, exitFee: 1, devCut: 0, buyPct: 0, sellTax: 1, launchDelay: 60, window: 600, capMul: 1, postMint: false, tier: 'flat', supplyCap: 100 },
+  j: { raise: 20, quota: 10, invite: 1, maxPerTx: 10, hold: 60, mintFee: 1, exitFee: 1, devCut: 10, buyPct: 30, sellTax: 2, launchDelay: 60, window: 600, capMul: 1, postMint: true, tier: 'standard', supplyCap: 100, guard: 'off', twapWindow: 30 },
+  steady: { raise: 20, quota: 100, invite: 0, maxPerTx: 10, hold: 60, mintFee: 1, exitFee: 1, devCut: 0, buyPct: 0, sellTax: 1, launchDelay: 60, window: 600, capMul: 1, postMint: false, tier: 'flat', supplyCap: 100, guard: 'off', twapWindow: 30 },
 }
+// V2 only: the post-launch TWAP guard (off or 15 / 20 / 30% below the average) and its window (15 or 30 minutes). The
+// guard is off by default (the user's choice): minting does not pause on a price drop, and V2's quota cap of 10 shares
+// per wallet bounds what a wallet can mint; the window is still set (it only matters once the guard is on)
+const GUARDS = { off: 0, 15: 1_500, 20: 2_000, 30: 3_000 }
+const TWAP_WINDOWS = { 15: 900, 30: 1_800 }
+// V2: with post-launch minting on, a wallet's quota is at most this many shares and an invite adds at most one
+const MAX_POST_QUOTA = 10, MAX_POST_INVITE = 1
 // flag → [preset key, min, max, kind]
 const CREATE_FLAGS = {
   raise: ['raise', 3, 50, 'num'], quota: ['quota', 5, 100, 'int'], 'invite-bonus': ['invite', 0, 3, 'int'],
@@ -402,7 +493,7 @@ const CREATE_FLAGS = {
   'cap-mul': ['capMul', 1, 2, 'int'], 'supply-cap': ['supplyCap', 10, 500, 'int'],
   'step-pct': ['stepPct', 0, 10, 'num'], 'step-shares': ['stepShares', 100, 100_000, 'int'], 'max-mul': ['maxMul', 1, 10, 'num'],
 }
-export const FLY_CREATE_FLAGS = [...Object.keys(CREATE_FLAGS), 'preset', 'tier', 'post-mint', 'no-post-mint', 'dev-shares']
+export const FLY_CREATE_FLAGS = [...Object.keys(CREATE_FLAGS), 'preset', 'tier', 'post-mint', 'no-post-mint', 'dev-shares', 'guard', 'twap-window']
 
 /**
  * Entry for `gang fly <sub>` (and the routed verbs of a fly token). io: { opt, flag, out, fail, summarize, resolveLogo,
@@ -425,6 +516,8 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     return t
   }
   const loadSale = async (token) => {
+    // the token's own pad: V1 and V2 tokens both keep working
+    if (!(await bindPad(ctx, token))) fail(`not a 铸币飞轮 (Mint Flywheel) token${testnet ? ' on BSC testnet' : ''}`, { token, chainId, pads: ctx.pads.map((p) => p.address) })
     const sale = await saleOf(ctx, token)
     if (!sale) fail(`not a 铸币飞轮 (Mint Flywheel) token on this pad${testnet ? ' (BSC testnet)' : ''}`, { token, chainId, pad: ctx.pad })
     return sale
@@ -437,24 +530,37 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const limit = parseIntIn(fail, 'limit', opt('limit', '20'), 1, 200)
     const status = opt('status', 'all')
     if (!['all', 'minting', 'filled', 'launched'].includes(status)) fail('--status must be minting, filled, launched or all')
-    const count = Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'tokenCount'))
+    // newest pad first, each newest first (V2's tokens are the newer ones)
+    const create = { pad: ctx.pad, version: ctx.version }
     const items = []
-    for (let i = count - 1; i >= 0 && items.length < limit; i--) {
-      const token = await ctx.read(ctx.pad, FLY_PAD_ABI, 'allTokens', [BigInt(i)])
-      const s = await saleOf(ctx, token)
-      if (!s) continue
-      const st = s.status === 'stalled' || s.status === 'refund' ? 'filled' : s.status
-      if (status !== 'all' && st !== status) continue
-      items.push({
-        token, symbol: await symbolOf(ctx, token), status: s.status, quote: s.quoteSymbol, sharePrice: s.sharePrice, raise: s.raise,
-        sold: s.sold, sharesLeft: s.sharesLeft, mintedShares: s.mintedShares, baseQuota: s.rules.baseQuota, postMint: s.rules.postMint,
-        pair: s.pair, link: `https://gang.fun/token/${token}`,
-        next: s.status === 'minting' ? `gang mint --token ${token} --shares <n>${net}`
-          : s.status === 'launched' ? (s.rules.postMint ? `gang mint --token ${token} --shares <n>${net}` : `gang buy --token ${token} --amount <quote>${net}`)
-            : `gang info --token ${token}${net}`,
-      })
+    let total = 0
+    for (const p of ctx.pads) {
+      ctx.pad = p.address
+      ctx.version = p.version
+      const count = Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'tokenCount'))
+      total += count
+      for (let i = count - 1; i >= 0 && items.length < limit; i--) {
+        const token = await ctx.read(ctx.pad, FLY_PAD_ABI, 'allTokens', [BigInt(i)])
+        const s = await saleOf(ctx, token)
+        if (!s) continue
+        const st = s.status === 'stalled' || s.status === 'refund' ? 'filled' : s.status
+        if (status !== 'all' && st !== status) continue
+        items.push({
+          token, symbol: await symbolOf(ctx, token), padVersion: p.version, status: s.status, quote: s.quoteSymbol, sharePrice: s.sharePrice, raise: s.raise,
+          sold: s.sold, sharesLeft: s.sharesLeft, mintedShares: s.mintedShares, baseQuota: s.rules.baseQuota, postMint: s.rules.postMint,
+          pair: s.pair, link: `https://gang.fun/token/${token}`,
+          next: s.status === 'minting' ? `gang mint --token ${token} --shares <n>${net}`
+            : s.status === 'launched' ? (s.rules.postMint ? `gang mint --token ${token} --shares <n>${net}` : `gang buy --token ${token} --amount <quote>${net}`)
+              : `gang info --token ${token}${net}`,
+        })
+      }
     }
-    return out({ success: true, chainId, pad: ctx.pad, total: count, status, count: items.length, items, ...(!(await padOpen(ctx)) && { note: CLOSED }) })
+    ctx.pad = create.pad
+    ctx.version = create.version
+    return out({
+      success: true, chainId, createPad: ctx.pad, createPadVersion: ctx.version, pads: ctx.pads.map((p) => ({ version: p.version, pad: p.address })),
+      total, status, count: items.length, items, ...(!(await padOpen(ctx)) && { note: closed(ctx, testnet) }),
+    })
   }
 
   if (sub === 'info') {
@@ -469,9 +575,13 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       Object.assign(extra, view)
       if (sale.rules.postMint) {
         const [one, pause] = await Promise.all([ctx.read(ctx.pad, FLY_PAD_ABI, 'sharePrice', [token, 1n]), mintPause(ctx, token, sale, handler, side)])
+        const rules = await postRules(ctx, token)
         extra.postMint = {
-          sharePriceNow: await units(ctx, sale.quote, one), tierMulNow: Number((one * 100n) / sale.sharePriceRaw) / 100, ...pause,
-          ...(pause.pausedNow && { resumes: pause.reason === 'supply_cap' ? 'post-launch minting is over: the supply cap is reached' : RESUMES }),
+          sharePriceNow: await units(ctx, sale.quote, one), tierMulNow: Number((one * 100n) / sale.sharePriceRaw) / 100,
+          rules: ctx.version === 1
+            ? { average: '30 minutes', pausesBelowAveragePct: 10, pausesBelowRecentHighPct: 10 }
+            : { guardPct: rules.guardBps ? rules.guardBps / 100 : 'off', twapWindowMin: rules.twapWindow / 60 },
+          ...pause,
         }
       }
       const [owedTax, swapBack] = await Promise.all([
@@ -537,7 +647,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       }
       if (sale.rules.postMint) {
         const pause = await mintPause(ctx, token, sale, handler, side)
-        pos.mintPaused = { ...pause, ...(pause.pausedNow && { resumes: pause.reason === 'supply_cap' ? 'post-launch minting is over: the supply cap is reached' : RESUMES }) }
+        pos.mintPaused = pause
         if (acct.view.quotaLeft > 0) {
           const [acc, paid, fee, tokensOut, ok] = await ctx.read(ctx.pad, FLY_PAD_ABI, 'previewMintPost', [token, who, 1n])
           pos.mintOneShareNow = acc ? { paid: await units(ctx, sale.quote, paid), fee: await units(ctx, sale.quote, fee), tokensOut: formatUnits(tokensOut, 18), ok } : null
@@ -583,7 +693,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const name = opt('name'), symbol = opt('symbol')
     if (!name || !symbol) fail('--name and --symbol are required')
     checkMeta()
-    if (!(await padOpen(ctx))) fail(testnet ? 'the 铸币飞轮 pad on BSC testnet has no migrator set: it takes no creates right now' : CLOSED, { pad: ctx.pad })
+    if (!(await padOpen(ctx))) fail(closed(ctx, testnet), { pad: ctx.pad, padVersion: ctx.version })
     const presetName = opt('preset', 'j')
     const preset = FLY_PRESETS[presetName]
     if (!preset) fail(`--preset must be ${Object.keys(FLY_PRESETS).join(' or ')}`, { got: presetName })
@@ -599,9 +709,30 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (flag('post-mint') && flag('no-post-mint')) fail('give --post-mint or --no-post-mint, not both')
     if (flag('post-mint')) v.postMint = true
     if (flag('no-post-mint')) v.postMint = false
+    // V2's post-launch rules; a V1 create target has none, so the flags are refused there rather than ignored
+    const v2 = ctx.version === 2
+    if (!v2 && (flag('guard') || flag('twap-window'))) fail('--guard / --twap-window are settings of the V2 Mint Flywheel pad, which is not live on this network yet: leave them out')
+    if (flag('guard')) {
+      v.guard = String(opt('guard'))
+      if (!(v.guard in GUARDS)) fail('--guard must be off, 15, 20 or 30 (% below the average at which post-launch mints pause)', { got: opt('guard') ?? null })
+    }
+    if (flag('twap-window')) {
+      v.twapWindow = Number(opt('twap-window'))
+      if (!(v.twapWindow in TWAP_WINDOWS)) fail('--twap-window must be 15 or 30 (minutes)', { got: opt('twap-window') ?? null })
+    }
+    if (v2 && v.postMint && v.quota > MAX_POST_QUOTA) {
+      fail(`--quota must be 5-${MAX_POST_QUOTA} with post-launch minting on (the V2 pad's rule): lower --quota, or add --no-post-mint`, { quota: v.quota })
+    }
+    if (v2 && v.postMint && v.invite > MAX_POST_INVITE) {
+      fail(`--invite-bonus must be 0-${MAX_POST_INVITE} with post-launch minting on (the V2 pad's rule): lower it, or add --no-post-mint`, { inviteBonus: v.invite })
+    }
     // a pad without the Agent ID gate takes no dev cut (checkConfig refuses one): the preset's goes to 0 unless asked for
     const gated = await ctx.read(ctx.pad, FLY_PAD_ABI, 'agentGateEnabled')
     if (!gated && !flag('dev-cut')) v.devCut = 0
+    // V2: post-launch minting needs the Agent ID gate (one wallet per ID is what bounds the per-wallet quota)
+    if (v2 && v.postMint && !gated) {
+      fail('post-launch minting needs the Agent ID gate, which this pad has off right now: add --no-post-mint for a sale that only mints before launch', { pad: ctx.pad })
+    }
     const linear = v.tier === 'linear'
     if (!linear && ['step-pct', 'step-shares', 'max-mul'].some(flag)) fail('--step-pct / --step-shares / --max-mul only apply with --tier linear')
     if (linear) { v.stepPct ??= 1; v.stepShares ??= 1_000; v.maxMul ??= 10 }
@@ -613,8 +744,11 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       sellTaxBps: bps(v.sellTax), launchDelay: v.launchDelay, window: v.window, windowCapMul: v.capMul, postMint: v.postMint,
       tierMode: TIERS.indexOf(v.tier), stepBps: linear ? bps(v.stepPct) : 0, stepShares: linear ? v.stepShares : 0,
       maxMulX100: linear ? Math.round(v.maxMul * 100) : 0, supplyCapMul: v.supplyCap,
+      ...(v2 && { guardBps: GUARDS[v.guard], twapWindow: TWAP_WINDOWS[v.twapWindow] }),
     }
-    const [ok, reason] = await ctx.read(ctx.pad, FLY_PAD_ABI, 'checkConfig', [cfg, BigInt(devShares)])
+    // V2 has its own create / checkConfig (FlyConfig grew): the ABI follows the create target
+    const padAbi = v2 ? FLY_PAD_V2_ABI : FLY_PAD_ABI
+    const [ok, reason] = await ctx.read(ctx.pad, padAbi, 'checkConfig', [cfg, BigInt(devShares)])
     if (!ok) fail(`setting out of bounds: ${reason}`, { config: cfgView(cfg) })
     const quote = flag('quote') ? opt('quote') : ctx.wbnb
     const refPool = flag('ref-pool') ? opt('ref-pool') : (defaultRefPool(ctx.chainId, quote) ?? zeroAddress)
@@ -640,16 +774,21 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const pre = await fund(ctx, { me: who, token: quote, need, spender: ctx.pad, sym }, rawOnly, summarize)
     if (pre) return out(pre)
     const createData = (logoURI, metaURI) => encodeFunctionData({
-      abi: FLY_PAD_ABI, functionName: 'create', args: [[name, symbol, logoURI, metaURI], quote, refPool, cfg, BigInt(devShares)],
+      abi: padAbi, functionName: 'create', args: [[name, symbol, logoURI, metaURI], quote, refPool, cfg, BigInt(devShares)],
     })
     const dry = await dryRun(ctx, who, ctx.pad, createData('', ''))
     if (dry) return out({ success: false, step: 'create', ...dry })
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
     return out(write({ from: who, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
-      step: 'create', kind: 'fly', name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
+      step: 'create', kind: 'fly', padVersion: ctx.version, pad: ctx.pad, name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata, quote: sym || quote, preset: presetName, config: cfgView(cfg),
       sharePrice: await units(ctx, quote, quoteWbnb ? price : (price * 100n) / 102n), devShares, devCost: await units(ctx, quote, need),
+      ...(v2 && v.postMint && {
+        guardNote: cfg.guardBps
+          ? `post-launch mints pause while the pool is more than ${cfg.guardBps / 100}% below its ${cfg.twapWindow / 60}-minute average (--guard ${cfg.guardBps / 100})`
+          : 'the price guard is off (the default): post-launch minting does not pause when the price drops; the quota cap of 10 shares per wallet bounds it. Turn it on with --guard 15|20|30 (% below the average, over --twap-window 15|30 minutes)',
+      }),
       minWallets: Math.ceil(TOTAL_SHARES / cfg.baseQuota),
       note: '10,000 shares at one price; it launches once they are sold (or you open early at ≥ 30%: gang fly open-early), launchDelay later, by anyone (gang fly launch; gang.fun\'s keeper does it too). Minters can sell back before that at the mint price less the exit fee. No GangBond or buy-back on these tokens.',
     }))
@@ -742,12 +881,13 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       // a rule of the pad / handler / token counts: a quote-token revert (no allowance yet) says nothing about the rule
       const dry = await dryRun(ctx, who, ctx.pad, data, bnb ? maxSpent : 0n, bnb)
       const r = dry?.reverted && HINTS[dry.error] ? dry : null
-      const cap = side.raw.room < tokensOut * 2n
+      // no rule from the simulation (e.g. it stopped at the quote transfer): the pad's rules read as gang info does,
+      // and what is left when none applies is this wallet's own pace
+      const pause = r ? null : await mintPause(ctx, token, sale, handler, side)
       return out({
-        success: false, ...extra, error: `a post-launch mint is refused right now${r ? `: ${r.error}` : ''}`,
-        ...(r ? { reason: r.error, hint: r.hint } : {
-          reason: cap ? 'supply cap' : 'price or pace rule',
-          hint: cap ? HINTS.CapExceeded : 'the pool price is more than 10% below its average / recent high, the mint price is more than 10% above the pool, or this wallet hit its 30-minute pace (2% of the pool): wait, or mint fewer shares',
+        success: false, ...extra, error: `a post-launch mint is refused right now${r ? `: ${r.error}` : `: ${pause.pausedNow ? pause.reason : 'pace'}`}`,
+        ...(r ? { reason: r.error, hint: r.hint } : pause.pausedNow ? { reason: pause.reason, hint: pause.why, resumes: pause.resumes } : {
+          reason: 'pace', hint: HINTS.PaceExceeded,
         }),
         prices: side.prices, supply: side.supply,
       })
@@ -977,6 +1117,7 @@ const cfgView = (c) => ({
   mintFeePct: pct(c.mintFeeBps), exitFeePct: pct(c.exitFeeBps), devCutPct: pct(c.devCutBps), buyPct: pct(c.buyBps), sellTaxPct: pct(c.sellTaxBps),
   launchDelaySec: c.launchDelay, protectionSec: c.window, protectionCapMul: c.windowCapMul, postMint: c.postMint, tier: TIERS[c.tierMode],
   ...(c.tierMode === 2 && { stepPct: pct(c.stepBps), stepShares: c.stepShares, maxMul: c.maxMulX100 / 100 }), supplyCapMul: c.supplyCapMul,
+  ...(c.guardBps !== undefined && { guardPct: c.guardBps ? pct(c.guardBps) : 'off', twapWindowMin: c.twapWindow / 60 }),
 })
 
 /** The command that acts on the sale next. `paused`: mintPause (or the wallet's) after launch. */

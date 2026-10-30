@@ -6,7 +6,7 @@ Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve bu
 
 **One command per action (0.12.0+):** `gang buy` / `sell` / `info` / `status` / `claim` / `mint` / `withdraw` / `release` work on every token: the CLI reads the token's kind and runs the V3, 打新 or V2 / Soft code. `gang v3 …` / `gang fair …` stay as aliases.
 
-**铸币飞轮 / Mint Flywheel (0.18.0+):** `gang create --fly` starts a sale on GangFlywheelPad (its own pad, kind 3): shares with a quota per wallet (invites add quota), a pool at the mint price once it fills, and minting that goes on after launch. The unified commands detect these tokens (`kind: "fly"`); `gang fly …` is the alias. Live on BSC mainnet since 2026-10-30 (pad `0x631e66560F4FAE4e486B65349edE48189E48B029`, built in); `--testnet` uses BSC testnet set 2. Rules: `skill/references/fly.md`.
+**铸币飞轮 / Mint Flywheel (0.18.0+):** `gang create --fly` starts a sale on GangFlywheelPad (its own pad, kind 3): shares with a quota per wallet (invites add quota), a pool at the mint price once it fills, and minting that goes on after launch. The unified commands detect these tokens (`kind: "fly"`); `gang fly …` is the alias. Live on BSC mainnet since 2026-10-30 (V1 pad `0x631e66560F4FAE4e486B65349edE48189E48B029`); from 0.21.0 new tokens go to the V2 pad `0x281889ad915c1A95ffc4922235c6314b3Cbd8a5a` (built in; `create --fly` says so while it is not open yet), and every other command follows the token's own pad. `--testnet` uses BSC testnet (V1 set 2, V2 `0x7069…E3d6`). Rules: `skill/references/fly.md`.
 
 **V3 tax tokens and 打新 (0.9.0+):** on GangLaunchpad, live on BSC mainnet since 2026-10-27 (pad `0x15CFD2dc8278Fb87a1783ef42111618E20874365`, GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`, both built in); `--testnet` uses BSC testnet set 10.
 
@@ -83,6 +83,7 @@ gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] 
 # steady; every setting can be overridden: --raise 3-50 --quota 5-100 --invite-bonus 0-3 --max-per-tx 1-10 --hold 60-90
 # --mint-fee 1-3 --exit-fee 1-2 --dev-cut 0-10 --buy-pct 0-50 --sell-tax 1-2 --launch-delay 0-300 --window 300-1800
 # --cap-mul 1-2 --post-mint|--no-post-mint --tier flat|standard|linear [--step-pct --step-shares --max-mul] --supply-cap 10-500
+# V2 pad only: --guard off|15|20|30 (default off: no pause on price drops) --twap-window 15|30 (default 30); --quota ≤ 10 with post-launch minting
 gang create --fly --name <n> --symbol <s> [--preset j|steady] [settings…] [--dev-shares 1] [--logo …] [--testnet]
 gang mint --token <addr> --shares <n> [--ref <inviter>] [--slippage 2]   # before launch: the sale price; after: mintPost (pool price or above)
 gang fly open-early --token <addr>           # creator, ≥ 30% sold
@@ -282,7 +283,8 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | Override the merged GangLaunchpad (mainnet / testnet) behind V3 and 打新 (defaults: mainnet `0x15CF…4365`, testnet set 10 `0xFebF…5BB1`). Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
 | `GANG_TESTNET_RPC_URL` | Testnet RPC, one URL or a comma list (unset: PublicNode, then BNB Chain's testnet nodes); old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
-| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad (铸币飞轮). Defaults: mainnet `0x631e…B029` (open since 2026-10-30), testnet set 2 `0xD648…951c` |
+| `GANG_FLY_PAD_V2` / `GANG_TESTNET_FLY_PAD_V2` | GangFlywheelPad V2 (铸币飞轮), where new tokens go. Defaults: mainnet `0x2818…8a5a`, testnet `0x7069…E3d6` |
+| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad V1 (铸币飞轮). Defaults: mainnet `0x631e…B029` (open since 2026-10-30), testnet set 2 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond (creator bonds, `gang bond`). Defaults: mainnet `0xe92d…14E4` (since 2026-10-29, CLI 0.16.2+), testnet `0xd6a8…1086` |
 | `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | GangSplitModuleFactory (`--split`). Defaults: mainnet `0x27e0…067c` (since 2026-10-30, CLI 0.19.0+), testnet set 10 `0x5F7d…567E` |
 | `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | GangLiquiditySplitterFactory (`--lp`). Defaults (CLI 0.20.0+): mainnet `0xE043…C248` (since 2026-10-31), testnet set 10 `0xA729…1591` |
@@ -290,4 +292,4 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 ## Version
 
-`0.20.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.21.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

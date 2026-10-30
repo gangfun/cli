@@ -303,7 +303,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
               [--max-per-tx 1-10] [--hold 60-90] [--mint-fee 1-3] [--exit-fee 1-2] [--dev-cut 0-10] [--buy-pct 0-50]
               [--sell-tax 1-2] [--launch-delay 0-300] [--window 300-1800] [--cap-mul 1-2] [--post-mint | --no-post-mint]
               [--tier flat|standard|linear [--step-pct 0-10 --step-shares 100-100000 --max-mul 1-10]] [--supply-cap 10-500]
-              [--dev-shares <n>] [--quote 0x… --ref-pool 0x…] [--logo …] [--website URL] [--twitter @handle] [--description …]
+              [--guard off|15|20|30] [--twap-window 15|30] [--dev-shares <n>] [--quote 0x… --ref-pool 0x…] [--logo …]
+              [--website URL] [--twitter @handle] [--description …]
                                          a 铸币飞轮 (Mint Flywheel, GangFlywheelPad) sale (mainnet; --testnet = BSC testnet
                                          set 2). 10,000 shares at raise / 10,000 each; a quota per wallet
                                          (--quota + --invite-bonus per wallet it invites), --max-per-tx per mint, Agent ID
@@ -506,7 +507,10 @@ GANG_PAD / GANG_TESTNET_PAD (the one GangLaunchpad behind both gang v3 and gang 
 and GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD still work as aliases), GANG_TESTNET_RPC_URL (aliases
 GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET_ROUTER (alias GANG_ROUTER_TESTNET; GangRouter
 for BNB buys / mints and every pool trade; both default to the built-in mainnet / testnet set 10 addresses),
-GANG_FLY_PAD / GANG_TESTNET_FLY_PAD (GangFlywheelPad; default: the built-in mainnet / testnet set 2 addresses)
+GANG_FLY_PAD / GANG_TESTNET_FLY_PAD (GangFlywheelPad V1; default: the built-in mainnet / testnet set 2 addresses),
+GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 (V2, where new tokens go; default: the built-in mainnet / testnet V2). --guard / --twap-window
+(V2 only): the guard is off by default (post-launch minting does not pause on a price drop; the quota cap of 10 per
+wallet bounds it); --guard 15|20|30 pauses mints while the pool is that % below its average over --twap-window (30)
 
 Private RPC: this CLI never broadcasts itself. Trades go out through the Agentic Wallet (gang execute), which picks its
 own RPC; a --calldata tx is sent by whatever signs it. To keep a large pool buy out of the public mempool (front-running),
