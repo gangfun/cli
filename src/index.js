@@ -3,7 +3,7 @@ import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
   calldata, decodeTx, decodeLogs, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
-import { baw, bawAddress, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
+import { baw, bawAddress, bawError, bawFailed, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
 import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
 import {
@@ -410,7 +410,7 @@ GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET
 for BNB buys / mints and every pool trade; both default to the built-in mainnet / testnet set 10 addresses)`
 
 function summarizePreview(p, extra = {}) {
-  if (!p.success) return { success: false, step: extra.step, error: p.error }
+  if (!p.success) return { success: false, step: extra.step, ...bawError(p.error) }
   const d = p.data
   const changes = (d.simulationResult?.balanceChanges || []).map((b) => ({ token: b.contractAddress, type: b.tokenType, change: b.change }))
   return {
@@ -951,7 +951,7 @@ async function pendingReport() {
     const mine = recs.filter((r) => (r.chainId || '56') === chainId)
     const since = Math.min(...mine.map((r) => r.pendingAt)) - 60_000
     const h = baw(['wallet', 'tx-history', '--binanceChainId', chainId, '--type', 'confirmed', '--size', '100', '--startTime', String(since)])
-    if (!h.success) throw new Error(`baw wallet tx-history failed: ${JSON.stringify(h.error)}`)
+    if (!h.success) throw bawFailed('wallet tx-history', h.error)
     const read = chainId === '56' ? client : v3Ctx(true).client
     const matched = await matchPending(mine, h.data?.transactions || [], async (hash) => {
       const tx = await read.getTransaction({ hash })
@@ -1257,7 +1257,7 @@ async function main() {
     case 'execute': {
       const id = opt('request-id'); if (!id) fail('--request-id required')
       const r = bawExecute(id)
-      if (!r.success) return out({ success: false, error: r.error })
+      if (!r.success) return out({ success: false, ...bawError(r.error) })
       const d = r.data
       const pending = d.status === 'PENDING_CONFIRMATION'
       // gang tx --pending finds this trade's tx once the user approves it (pending.js): it lands after this block

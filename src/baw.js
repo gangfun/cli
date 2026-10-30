@@ -17,9 +17,30 @@ export function baw(args) {
   return JSON.parse(out)
 }
 
+const HINTS = {
+  351803: 'risk control refused it: Trade all tokens is off for this wallet, so it may only send whitelisted tokens (turn it on in the Binance App; gang preflight)',
+}
+
+/**
+ * baw's error ({ code, name, message }) → the fields a gang result prints: error as text, like every other gang error,
+ * and baw's code next to it.
+ */
+export function bawError(e) {
+  if (e == null || typeof e !== 'object') return { error: String(e ?? 'baw failed') }
+  return {
+    error: e.message || JSON.stringify(e),
+    ...(e.code != null && { code: e.code }), ...(e.name && { errorName: e.name }),
+    ...(HINTS[e.code] && { hint: HINTS[e.code] }),
+  }
+}
+export const bawFailed = (what, e) => {
+  const b = bawError(e)
+  return new Error(`baw ${what} failed: ${b.error}${b.code != null ? ` (code ${b.code})` : ''}`)
+}
+
 export function bawAddress(chainId = '56') {
   const r = baw(['wallet', 'address'])
-  if (!r.success) throw new Error(JSON.stringify(r.error))
+  if (!r.success) throw bawFailed('wallet address', r.error)
   const a = r.data.addresses.find((x) => x.binanceChainId === chainId)
   if (!a) throw new Error(`Agentic Wallet has no address on chain ${chainId}`)
   return a.address
@@ -27,7 +48,7 @@ export function bawAddress(chainId = '56') {
 
 export function bawSettings() {
   const r = baw(['wallet', 'settings'])
-  if (!r.success) throw new Error(JSON.stringify(r.error))
+  if (!r.success) throw bawFailed('wallet settings', r.error)
   return r.data
 }
 
