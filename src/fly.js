@@ -187,7 +187,7 @@ export async function isFlyToken(ctx, token) {
 export async function padOpen(ctx) {
   return (await ctx.read(ctx.pad, FLY_PAD_ABI, 'migrator')) !== zeroAddress
 }
-const CLOSED = 'the 持续打新 (continuous mint) pad on BSC mainnet is not open yet: it opens once testing on BSC testnet is done. Use --testnet to try it there'
+const CLOSED = 'the 持续打新 (continuous mint) pad on BSC mainnet takes no creates right now (no migrator set): use --testnet to try it there'
 
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, TOKEN_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100

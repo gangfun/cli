@@ -302,8 +302,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 持续打新 tok
               [--sell-tax 1-2] [--launch-delay 0-300] [--window 300-1800] [--cap-mul 1-2] [--post-mint | --no-post-mint]
               [--tier flat|standard|linear [--step-pct 0-10 --step-shares 100-100000 --max-mul 1-10]] [--supply-cap 10-500]
               [--dev-shares <n>] [--quote 0x… --ref-pool 0x…] [--logo …] [--website URL] [--twitter @handle] [--description …]
-                                         a 持续打新 (continuous mint, GangFlywheelPad) sale, BSC testnet until the mainnet pad
-                                         opens (mainnet says so). 10,000 shares at raise / 10,000 each; a quota per wallet
+                                         a 持续打新 (continuous mint, GangFlywheelPad) sale (mainnet; --testnet = BSC testnet
+                                         set 2). 10,000 shares at raise / 10,000 each; a quota per wallet
                                          (--quota + --invite-bonus per wallet it invites), --max-per-tx per mint, Agent ID
                                          only. Fills (or the creator opens early at ≥ 30%), launches --launch-delay s later
                                          (anyone; gang.fun's keeper too) into PancakeSwap at the mint price, then --window s

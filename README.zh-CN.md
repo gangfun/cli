@@ -6,7 +6,7 @@
 
 **一个动作一条命令（0.12.0+）：** `gang buy` / `sell` / `info` / `status` / `claim` / `mint` / `withdraw` / `release` 对所有币都能用：CLI 先读出这个币的类型，再执行 V3、打新或 V2 / Soft 的逻辑。`gang v3 …` / `gang fair …` 保留为别名。
 
-**持续打新（0.18.0+）：** `gang create --fly` 在 GangFlywheelPad（单独的发射台，kind 3）上开一场持续打新：按份 mint，每个钱包有额度，邀请可以加额度；打满后按 mint 价开池，开池后还能继续 mint。统一命令会自动识别这类币（`kind: "fly"`），`gang fly …` 是别名。目前只在 BSC 测试网（第 2 套）：主网发射台（`0x631e66560F4FAE4e486B65349edE48189E48B029`）要等测试完成后才开放，开放前在主网上 `create --fly` 会直接说明。规则见 `skill/references/fly.md`。
+**持续打新（0.18.0+）：** `gang create --fly` 在 GangFlywheelPad（单独的发射台，kind 3）上开一场持续打新：按份 mint，每个钱包有额度，邀请可以加额度；打满后按 mint 价开池，开池后还能继续 mint。统一命令会自动识别这类币（`kind: "fly"`），`gang fly …` 是别名。2026-10-30 起在 BSC 主网运行（发射台 `0x631e66560F4FAE4e486B65349edE48189E48B029`，已内置）；`--testnet` 走 BSC 测试网第 2 套。规则见 `skill/references/fly.md`。
 
 **V3 税收币和打新（0.9.0+）：** 走 GangLaunchpad，2026-10-27 起在 BSC 主网运行（内盘 `0x15CFD2dc8278Fb87a1783ef42111618E20874365`，GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`，都已内置）；`--testnet` 走 BSC 测试网第 10 套。
 
@@ -86,7 +86,7 @@ gang buyback status|set|set-payee|apply --token 0x… [--pct 0-100] [--to 0x…]
 gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
 gang execute --request-id <id>
 gang tx --pending                            # 在 Binance App 里批准过的交易：按预览时的调用自动找到交易，再按下面这条处理
-# 持续打新（GangFlywheelPad；主网发射台开放前只在测试网）。--preset j（默认，J 模板）或 steady，每一项都能单独改：
+# 持续打新（GangFlywheelPad；主网，--testnet 走测试网第 2 套）。--preset j（默认，J 模板）或 steady，每一项都能单独改：
 # --raise 3-50 --quota 5-100 --invite-bonus 0-3 --max-per-tx 1-10 --hold 60-90 --mint-fee 1-3 --exit-fee 1-2 --dev-cut 0-10
 # --buy-pct 0-50 --sell-tax 1-2 --launch-delay 0-300 --window 300-1800 --cap-mul 1-2 --post-mint|--no-post-mint
 # --tier flat|standard|linear [--step-pct --step-shares --max-mul] --supply-cap 10-500
@@ -238,10 +238,10 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 `0x15CF…4365`，测试网第 10 套 `0xFebF…5BB1`）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
 | `GANG_TESTNET_RPC_URL` | 测试网 RPC，可填一个或逗号分隔的多个（不设时先用 PublicNode，再用 BNB Chain 的测试网节点）；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
-| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad（持续打新）。默认：主网 `0x631e…B029`（尚未开放），测试网第 2 套 `0xD648…951c` |
+| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad（持续打新）。默认：主网 `0x631e…B029`（2026-10-30 起开放），测试网第 2 套 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond（押金承诺，`gang bond`）。默认：主网 `0xe92d…14E4`（2026-10-29 起，CLI 0.16.2+），测试网 `0xd6a8…1086` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 `0xE040…79C4`，测试网第 10 套 `0x6bB6…C9F6` |
 
 ## 版本
 
-`0.18.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.18.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
