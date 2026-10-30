@@ -244,4 +244,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.18.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.18.2` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

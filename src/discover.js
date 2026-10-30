@@ -94,7 +94,9 @@ function gangRow(r, quoteUsdOf) {
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),
     holders: r.holders != null ? num(r.holders) : fair ? num(r.participants) : null,
     ...(fair && { sharePrice: w(r.sharePrice), sharesLeft: num(r.sharesLeft), minWalletsLeft: num(r.minWalletsLeft) }),
-    ...(r.track === 'fly' && { status: r.status ?? null, postMint: !!r.postMint, baseQuota: num(r.baseQuota), inviteBonus: num(r.inviteBonus) }),
+    ...(r.track === 'fly' && {
+      status: r.status ?? null, postMint: !!r.postMint, mintPaused: !!r.mintPaused, baseQuota: num(r.baseQuota), inviteBonus: num(r.inviteBonus),
+    }),
     createdAt: r.createdAt, ageMin: r.createdAt ? Math.floor((now() - r.createdAt) / 60) : null,
     lastTradeAt: r.lastTradeAt || r.lastActivityAt || null, creatorHandle: r.creatorHandle || null, logoUrl: r.logoUrl || null,
     website: r.website && !websiteError(r.website) ? r.website : null,
@@ -183,7 +185,8 @@ const hint = (t) => {
   // mint); a filled sale waits for its launch, a refund-only one only sells back
   if (t.track === 'fly' && t.status === 'filled') return `gang info --token ${t.address}`
   if (t.track === 'fly' && t.status === 'refund') return `gang withdraw --token ${t.address} --all`
-  if (t.track === 'fly' && (!t.graduated || t.postMint)) return `gang mint --token ${t.address} --shares <n>`
+  // launched with post-launch minting paused (the pool too far below its references): the pool, not a mint
+  if (t.track === 'fly' && (!t.graduated || (t.postMint && !t.mintPaused))) return `gang mint --token ${t.address} --shares <n>`
   if (t.graduated) return `gang buy --token ${t.address} ${amount}` // the PancakeSwap pool, through GangRouter
   if (t.track === 'fair') return `gang mint --token ${t.address} --shares <n>`
   if (t.track === 'v3') return `gang buy --token ${t.address} ${amount}`
