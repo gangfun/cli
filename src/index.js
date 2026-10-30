@@ -396,8 +396,8 @@ A buy / sell / create preview without --note says so in agentNote.hint (also gan
 update: { current, latest, cmd, skill } (npm is asked at most once a day in the background; GANG_UPDATE_CHECK=0 turns it
 off, GANG_UPDATE_URL points it at an npm mirror).
 
-env: GANG_RPC_URL, GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes),
-GANG_UPDATE_CHECK, GANG_UPDATE_URL,
+env: GANG_RPC_URL (one URL or a comma list; unset: five public BSC nodes, the next one tried when one fails),
+GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes), GANG_UPDATE_CHECK, GANG_UPDATE_URL,
 GANG_PAD / GANG_TESTNET_PAD (the one GangLaunchpad behind both gang v3 and gang fair; old names GANG_V3_PAD / GANG_FAIR_PAD
 and GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD still work as aliases), GANG_TESTNET_RPC_URL (aliases
 GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET_ROUTER (alias GANG_ROUTER_TESTNET; GangRouter

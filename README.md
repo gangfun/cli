@@ -251,7 +251,7 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 
 | Var | Meaning |
 |---|---|
-| `GANG_RPC_URL` | BSC HTTP RPC |
+| `GANG_RPC_URL` | BSC HTTP RPC: one URL, or a comma-separated list tried in order. Unset: five public nodes (BNB Chain's dataseed nodes, then PublicNode); a call that fails on one (rate limit, timeout) moves to the next, and later calls start at the one that answered (0.17.5+). A revert is never retried on another node |
 | `GANG_LOGO_API` | Logo upload endpoint (default `https://gang.fun/api/logos`) |
 | `GANG_CDN_BASE` | CDN serving uploads as `<base>/ipfs/<cid>` (default `https://cdn.gang.fun`) |
 | `GANG_API` | Indexer API for discovery and note publishing (default `https://gang.fun/api`) |
@@ -260,10 +260,10 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_UPDATE_CHECK` | `0` turns off the once-a-day check for a newer CLI on npm (cached in `~/.gang/update.json`) |
 | `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | Override the merged GangLaunchpad (mainnet / testnet) behind V3 and 打新 (defaults: mainnet `0x15CF…4365`, testnet set 10 `0xFebF…5BB1`). Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
-| `GANG_TESTNET_RPC_URL` | Testnet RPC; old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
+| `GANG_TESTNET_RPC_URL` | Testnet RPC, one URL or a comma list (unset: PublicNode, then BNB Chain's testnet nodes); old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond (creator bonds, `gang bond`). Defaults: mainnet `0xe92d…14E4` (since 2026-10-29, CLI 0.16.2+), testnet `0xd6a8…1086` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter proxy (native-BNB V3 buys / mints, and every PancakeSwap trade of a graduated token); old name `GANG_ROUTER_TESTNET` still works. Defaults: mainnet `0xE040…79C4`, testnet set 10 `0x6bB6…C9F6` |
 
 ## Version
 
-`0.17.4` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.17.5` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

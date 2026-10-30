@@ -1,9 +1,9 @@
-import { createPublicClient, http, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseEther, parseUnits, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseEther, parseUnits, isAddress, zeroAddress } from 'viem'
 import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondAddress, bondGuard } from './bond.js'
 
@@ -111,7 +111,7 @@ export const FAIR_EVENT_ABIS = [PAD_ABI, VAULT_ABI]
 export function fairCtx(testnet) {
   const net = FAIR_NETS[testnet ? 'testnet' : 'mainnet']
   if (!net.pad) throw new Error(NOT_ON_MAINNET)
-  const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
+  const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return { ...net, client, read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }) }
 }
 

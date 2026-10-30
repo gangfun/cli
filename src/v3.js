@@ -1,9 +1,9 @@
-import { createPublicClient, http, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
 import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund, parseAmount, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI as GANG_ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
 import { splitterOf } from './buyback.js'
@@ -98,7 +98,7 @@ export const V3_EVENT_ABIS = [PAD_ABI, TAX_ROUTER_ABI, VAULT_ABI]
 export function v3Ctx(testnet) {
   const net = V3_NETS[testnet ? 'testnet' : 'mainnet']
   if (!net.pad) throw new Error(NOT_ON_MAINNET)
-  const client = createPublicClient({ chain: net.chain, transport: http(net.rpc) })
+  const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return { ...net, client, read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }) }
 }
 

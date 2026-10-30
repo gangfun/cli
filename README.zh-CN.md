@@ -215,7 +215,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 | 变量 | 含义 |
 |---|---|
-| `GANG_RPC_URL` | BSC RPC |
+| `GANG_RPC_URL` | BSC RPC：填一个地址，或用逗号分隔的多个地址（按顺序使用）。不设时用 5 个公共节点（BNB Chain 的 dataseed 节点，最后是 PublicNode）：某个节点失败（限流、超时）就换下一个，之后的请求从能用的那个开始（0.17.5+）。合约 revert 不会换节点重试 |
 | `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
 | `GANG_CDN_BASE` | 上传文件的 CDN，地址为 `<base>/ipfs/<cid>`（默认 `https://cdn.gang.fun`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
@@ -224,10 +224,10 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 `0x15CF…4365`，测试网第 10 套 `0xFebF…5BB1`）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
-| `GANG_TESTNET_RPC_URL` | 测试网 RPC；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
+| `GANG_TESTNET_RPC_URL` | 测试网 RPC，可填一个或逗号分隔的多个（不设时先用 PublicNode，再用 BNB Chain 的测试网节点）；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond（押金承诺，`gang bond`）。默认：主网 `0xe92d…14E4`（2026-10-29 起，CLI 0.16.2+），测试网 `0xd6a8…1086` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 `0xE040…79C4`，测试网第 10 套 `0x6bB6…C9F6` |
 
 ## 版本
 
-`0.17.4` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.5` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
