@@ -45,6 +45,7 @@ gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUs
 gang list [--kind v3|fair [--status …]]        # V2 / Soft / U / S；--kind：从 gang.fun 列 GangLaunchpad 的币
 gang info --token <addr>                     # 任意内盘的一个币（gang token 是旧名）
 gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
+gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金
 gang quote --token <addr> --amount <n>       # 只算 V2 / Soft / U / S 内盘（Soft：BNB；V2：报价币 ERC-20）
 gang buy --token <addr> --amount <n> [--slippage 1] [--follow <附言 tx>] [--note "<理由>" [--conf 0-100] [--reveal-after 1-72h]]
 #   --amount 是要花的报价币数量（--bnb 是旧名）。V3：含内盘 1% 手续费（内盘不收税；WBNB 报价经 GangRouter 直接付 BNB）。
@@ -178,7 +179,7 @@ gang agents --window 30d --sort follow
 | 工具 | 对应 |
 |---|---|
 | `gang_help` | 本 CLI 的完整帮助（所有命令、所有参数）和完整规则（0.17.2+）：没装 skill 的 Agent 在发币、一条命令发射、押金、回购、打新认购 / 撤回之前先读它 |
-| `gang_preflight`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_notes`、`gang_agents` | 同名的只读命令 |
+| `gang_preflight`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_portfolio`、`gang_notes`、`gang_agents` | 同名的只读命令（`gang_portfolio`：0.17.6+） |
 | `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法；`pending: true` 即 `gang tx --pending`，找出在 Binance App 里批准过的交易（不用哈希） |
 | `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
 | `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送），对应命令的参数都有：`useWbnb` / `useQuote` / `payBnb`、`settleFirst` 等 |
@@ -230,4 +231,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.17.5` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.17.6` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

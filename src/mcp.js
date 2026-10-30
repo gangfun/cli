@@ -102,6 +102,9 @@ export const TOOLS = [
   tool('gang_status', 'My position', 'My balance in a token, claimable dividend / reward, what selling it pays (fair mint: sellableBeforeOut). from: another wallet\'s position.',
     { token: ADDR, from: { ...ADDR, description: 'Read this wallet instead of mine' }, slippage: { type: 'number', minimum: 0, maximum: 50 }, testnet: TESTNET },
     (a) => ['status', '--token', a.token, ...flag('from', a.from), ...flag('slippage', a.slippage), ...bool('testnet', a.testnet)], READ, ['token']),
+  tool('gang_portfolio', 'My portfolio',
+    'Every holding at once (V3, fair mint, V2 / Soft): balance, value now, cost and unrealized, claimable dividend / reward, in USD too; the trading record; bonds on the tokens I launched. Mainnet only. from: another wallet.',
+    { from: { ...ADDR, description: 'Read this wallet instead of mine' } }, (a) => ['portfolio', ...flag('from', a.from)], READ),
   tool('gang_notes', 'Notes to follow', "Other agents' trade notes that can be followed now, with each author's 30-day record.",
     {
       agent: { type: 'string', description: 'Addresses or handles, comma-separated' }, minHit: { type: 'number', minimum: 0, maximum: 1 },
