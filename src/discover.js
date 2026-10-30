@@ -59,18 +59,20 @@ export function parseDuration(raw, name) {
 const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c'
 // BSC USDT / USDC: $1 when no V2 row prices them
 const STABLES = ['0x55d398326f99059ff775485246999027b3197955', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d']
-const TRACKS = ['all', 'v3', 'fair', 'v2', 'soft']
+const TRACKS = ['all', 'v3', 'fair', 'fly', 'v2', 'soft']
 // detail route per track (V2 / Soft details both live under /tokens) and trades route
-const DETAIL = { v2: '/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales' }
-const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales' }
+const DETAIL = { v2: '/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
+const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
 
 /**
- * GangLaunchpad rows: `v3` = V3 curves (/v3/tokens), `fair` = 打新 sales (/fair/sales; `graduated` = launched).
+ * GangLaunchpad rows: `v3` = V3 curves (/v3/tokens), `fair` = 打新 sales (/fair/sales; `graduated` = launched); GangFlywheelPad
+ * rows: `fly` = 持续打新 sales (/fly/tokens, shaped like the 打新 rows; launched ones may still mint).
  * List rows carry raw wei and no USD; details (/…/<addr>) carry human amounts and USD like the V2 rows.
  * `quoteUsdOf(quoteAddress)` prices a list row's quote (from the V2 / Soft rows), null when unknown.
  */
 function gangRow(r, quoteUsdOf) {
-  const fair = r.track === 'fair'
+  // a 持续打新 row reads like a 打新 one (sharePrice = basePrice, raiseQuote, sold of 10,000)
+  const fair = r.track === 'fair' || r.track === 'fly'
   const dec = r.quoteDecimals ?? 18
   const w = (v) => num(v) / 10 ** dec
   const detail = r.raisedQuote != null
@@ -92,6 +94,7 @@ function gangRow(r, quoteUsdOf) {
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),
     holders: r.holders != null ? num(r.holders) : fair ? num(r.participants) : null,
     ...(fair && { sharePrice: w(r.sharePrice), sharesLeft: num(r.sharesLeft), minWalletsLeft: num(r.minWalletsLeft) }),
+    ...(r.track === 'fly' && { status: r.status ?? null, postMint: !!r.postMint, baseQuota: num(r.baseQuota), inviteBonus: num(r.inviteBonus) }),
     createdAt: r.createdAt, ageMin: r.createdAt ? Math.floor((now() - r.createdAt) / 60) : null,
     lastTradeAt: r.lastTradeAt || r.lastActivityAt || null, creatorHandle: r.creatorHandle || null, logoUrl: r.logoUrl || null,
     website: r.website && !websiteError(r.website) ? r.website : null,
@@ -104,7 +107,7 @@ function gangRow(r, quoteUsdOf) {
  * LaunchpadV2 family), `soft` = legacy BNB curve (/tokens, 20 BNB graduation). Amounts are human units of `quote`.
  */
 export function normalize(r, quoteUsdOf = () => null) {
-  if (r.track === 'v3' || r.track === 'fair') return gangRow(r, quoteUsdOf)
+  if (r.track === 'v3' || r.track === 'fair' || r.track === 'fly') return gangRow(r, quoteUsdOf)
   const v2 = r.track === 'stocks'
   const quote = v2 ? (r.quoteSymbol || '?') : 'BNB'
   const raised = v2 ? num(r.raisedQuote) : num(r.raisedBnb)
@@ -148,11 +151,13 @@ export async function fetchMarket(track = 'all', stop) {
   const want = (t) => track === 'all' || track === t
   // the GangLaunchpad list rows have no USD: the V2 / Soft rows price their quotes. A track not listed is read for that
   // only, one page and best effort: no truncation, and a failure just leaves the USD fields null
-  const priced = want('v3') || want('fair')
+  const priced = want('v3') || want('fair') || want('fly')
   const prices = (path) => get(`${path}${path.includes('?') ? '&' : '?'}limit=200`, stop).then((p) => ({ rows: p?.items || [] }), () => none)
-  const [v3, fair, v2, soft] = await Promise.all([
+  const [v3, fair, fly, v2, soft] = await Promise.all([
     want('v3') ? pages('/v3/tokens?status=all', stop) : none,
     want('fair') ? pages('/fair/sales?status=all', stop) : none,
+    // 持续打新 (2026-10-30): a server without the route yet lists none, unless --track fly asked for it alone
+    want('fly') ? pages('/fly/tokens?status=all', stop).catch((e) => (track === 'fly' ? Promise.reject(e) : none)) : none,
     want('v2') ? pages('/stocks/tokens', stop) : priced ? prices('/stocks/tokens') : none,
     want('soft') ? pages('/tokens?sort=new', stop) : priced ? prices('/tokens?sort=new') : none,
   ])
@@ -163,17 +168,22 @@ export async function fetchMarket(track = 'all', stop) {
   for (const a of STABLES) if (!usdOf.has(a)) usdOf.set(a, 1)
   const quoteUsdOf = (a) => (a ? usdOf.get(a.toLowerCase()) ?? null : null)
   const seen = new Map()
-  const rows = [...v3.rows, ...fair.rows, ...(want('v2') ? v2.rows : []), ...(want('soft') ? soft.rows : [])]
+  const rows = [...v3.rows, ...fair.rows, ...fly.rows, ...(want('v2') ? v2.rows : []), ...(want('soft') ? soft.rows : [])]
   for (const r of rows) {
     const t = normalize(r, quoteUsdOf)
     if (!seen.has(t.address)) seen.set(t.address, t)
   }
-  return { tokens: [...seen.values()], truncated: [v3, fair, v2, soft].some((p) => p.truncated) }
+  return { tokens: [...seen.values()], truncated: [v3, fair, fly, v2, soft].some((p) => p.truncated) }
 }
 
 /** The command that acts on a token next: quote / preview a buy (no tx is sent before `gang execute`). */
 const hint = (t) => {
   const amount = `--amount <amount in ${t.quote}>`
+  // 持续打新: minting before launch, and after it while the server's postMint flag is on (gang mint picks the post-launch
+  // mint); a filled sale waits for its launch, a refund-only one only sells back
+  if (t.track === 'fly' && t.status === 'filled') return `gang info --token ${t.address}`
+  if (t.track === 'fly' && t.status === 'refund') return `gang withdraw --token ${t.address} --all`
+  if (t.track === 'fly' && (!t.graduated || t.postMint)) return `gang mint --token ${t.address} --shares <n>`
   if (t.graduated) return `gang buy --token ${t.address} ${amount}` // the PancakeSwap pool, through GangRouter
   if (t.track === 'fair') return `gang mint --token ${t.address} --shares <n>`
   if (t.track === 'v3') return `gang buy --token ${t.address} ${amount}`
@@ -202,7 +212,7 @@ export function rank(tokens, sort, { limit = 10, minPct = 50, maxAgeSec = null, 
 /** One token's detail. `track` known (later polls): its own route; else each route in turn. */
 async function tokenDetail(addr, stop, track) {
   const a = addr.toLowerCase()
-  for (const base of track ? [DETAIL[track]] : ['/tokens', '/v3/tokens', '/fair/sales']) {
+  for (const base of track ? [DETAIL[track]] : ['/tokens', '/v3/tokens', '/fair/sales', '/fly/tokens']) {
     const r = await get(`${base}/${a}`, stop)
     if (r) return normalize(r)
   }

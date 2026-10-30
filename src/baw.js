@@ -57,9 +57,13 @@ export function bawStatus() {
   return r.success ? r.data.status : 'UNCONNECTED'
 }
 
-/** Preview an external contract call through Binance's risk engine. */
-export function bawPreview({ from, to, value = 0n, data = '0x', chainId = '56' }) {
-  const p = baw(['contract-call', 'preview', '--binanceChainId', chainId, '--from', from, '--to', to, '--value', value.toString(), '--inputData', data])
+/**
+ * Preview an external contract call through Binance's risk engine. gasLimit: only where the CLI knows the call needs more
+ * than an estimate (baw simulates with it as the cap and sends it as is); otherwise baw estimates.
+ */
+export function bawPreview({ from, to, value = 0n, data = '0x', chainId = '56', gasLimit = null }) {
+  const p = baw(['contract-call', 'preview', '--binanceChainId', chainId, '--from', from, '--to', to, '--value', value.toString(), '--inputData', data,
+    ...(gasLimit ? ['--gasLimit', String(gasLimit)] : [])])
   // what this preview will send, so `gang tx --pending` can tell its tx once the user approves it in the App
   if (p?.success && p.data?.requestId) rememberPreview(p.data.requestId, { print: callPrint(to, data), chainId: String(chainId) })
   return p

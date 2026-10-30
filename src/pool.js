@@ -1,5 +1,5 @@
 import { parseAbi, encodeFunctionData, formatUnits, parseUnits, zeroAddress } from 'viem'
-import { decimalsOf, isMissingFunction, poolSellQuote, ROUTER_ABI, routerDeadline, step, units, GAS_RESERVE } from './steps.js'
+import { decimalsOf, isMissingFunction, poolSellQuote, roomyGas, ROUTER_ABI, routerDeadline, step, units, GAS_RESERVE } from './steps.js'
 import { bondGuard } from './bond.js'
 
 /**
@@ -157,13 +157,14 @@ async function fundingOf(ctx, { me, token, need, spender, sym, approveStep }) {
 export const poolPayBnb = (ctx, quote, flag) =>
   (!quote || quote === zeroAddress || same(quote, ctx.wbnb) ? !flag('use-quote') && !flag('use-wbnb') : flag('pay-bnb'))
 
-const rawTx = (ctx, { from, to, data, value = 0n }) => ({ chainId: Number(ctx.chainId), from, to, data, value: value.toString() })
+const rawTx = (ctx, { from, to, data, value = 0n, gas = null }) => ({ chainId: Number(ctx.chainId), from, to, data, value: value.toString(), ...(gas && { gas: gas.toString() }) })
 
 /**
  * Build a PancakeSwap trade through GangRouter. Returns the object the command prints.
  *  p: { side: 'buy'|'sell', token, quote, me, amount (decimal string; sell: null with all), all, slippage,
  *       buyTaxBps, sellTaxBps, handler (gang tax handler or null), swapBackGas (taxed gang token: the 700k note),
- *       payBnb (buy), toBnb (sell), base (fields every step carries) }
+ *       payBnb (buy), toBnb (sell), base (fields every step carries),
+ *       gasFloor (optional: the swap gets roomyGas(…, gasFloor) as its gas limit) }
  *  io: { rawOnly, summarize, revertOf } — revertOf(e) → { error, hint } | null
  */
 export async function poolTrade(ctx, p, io) {
@@ -261,7 +262,7 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
         sellTaxPct: taxPct(p.sellTaxBps), expectOut: formatUnits(out, outDec), minOut: formatUnits(minOut, outDec), slippagePct: slippage,
         deadline: Number(deadline), quotedWith,
         ...(toBnb && !quoteWbnb && { expectQuoteBeforeBnb: await units(ctx, quote, quoteOut) }),
-        gas: p.swapBackGas ? POOL_SELL_GAS_NOTE : 'let the wallet estimate gas',
+        gas: p.gasFloor ? 'the gas limit is set in this tx (gasLimit)' : p.swapBackGas ? POOL_SELL_GAS_NOTE : 'let the wallet estimate gas',
         ...guard?.info,
         note: quotedWith === 'getAmountsOut'
           ? `minOut = getAmountsOut of the amount less the ${taxPct(p.sellTaxBps)}% sell tax${toBnb && !quoteWbnb ? ' (then quote → WBNB)' : ''}, less --slippage (the sell reverts below it)`
@@ -290,8 +291,10 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
 
   if (pre.steps.length) {
     if (rawOnly) {
-      // raw txs: every step in order (the swap is not simulated: it needs the steps before it on-chain)
-      const steps = [...pre.steps.map((s) => ({ ...s.meta, tx: rawTx(ctx, s.tx) })), { step: fields.step, function: fields.function, tx: rawTx(ctx, swap) }]
+      // raw txs: every step in order (the swap is not simulated: it needs the steps before it on-chain, so its gas
+      // limit is the floor)
+      const last = p.gasFloor ? { ...swap, gas: p.gasFloor } : swap
+      const steps = [...pre.steps.map((s) => ({ ...s.meta, tx: rawTx(ctx, s.tx) })), { step: fields.step, function: fields.function, tx: rawTx(ctx, last) }]
       return {
         success: true, ...extra, ...fields, step: steps[0].step, steps, tx: steps[0].tx,
         note: `send the ${steps.length} txs in steps[] in order (tx = the first); the ${fields.step} is not simulated until the ${steps.slice(0, -1).map((s) => s.step).join(' / ')} is mined. ${fields.note}`,
@@ -317,5 +320,10 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
       ...(rawOnly && { doNotSend: true, unsentTxForInspection: rawTx(ctx, swap), txNote: 'DO NOT SEND: the simulation reverted; shown for inspection only' }),
     })
   }
-  return step(ctx, swap, { ...extra, ...fields }, rawOnly, summarize)
+  if (p.gasFloor) {
+    try { swap.gas = await roomyGas(ctx, swap, p.gasFloor) } catch (e) {
+      return failOut({ ...extra, ...fields, reverted: true, ...(revertOf(e) || { error: short(e) }) })
+    }
+  }
+  return step(ctx, swap, { ...extra, ...fields, ...(swap.gas && { gasLimit: swap.gas.toString() }) }, rawOnly, summarize)
 }
