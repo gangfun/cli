@@ -10,6 +10,7 @@ import { parseAmount, parseIntIn, step } from './steps.js'
 import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, splitterFactoryAddress, splitterOf } from './buyback.js'
 import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFactoryAddress, splitLine, splitNotDeployed, splitOf } from './split.js'
 import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf, simulateLp } from './lp.js'
+import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotDeployed, comboOf, comboParts, parseComboSpec, PERMANENT_NOTE, simulateCombo } from './combo.js'
 
 /**
  * One command for a launch: `gang create … [--buyback <pct>] [--dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>]
@@ -36,7 +37,12 @@ import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf,
  * --lp <pct> [--lp-to <addr>] (V3, taxed): the same three steps with GangLiquiditySplitterFactory — the dev's LP splitter
  * (lp-burn-v1: --lp % of the recipient's part added to the pair as liquidity, the LP to 0xdead) is cloned at
  * predict(dev, salt), named as the recipient, then bound (`module: 'lp'` in the plan). A launch keeps the ratio and payee
- * it began with. --buyback, --split, --lp and --recipient are exclusive (each sets the recipient).
+ * it began with. --recipient goes with none of them (each sets the recipient).
+ * More than one of --buyback, --lp, --split (taxed V3): the same three steps with GangComboSplitterFactory — the dev's
+ * combined recipient (combo-v1: --buyback % of the recipient's part bought back and burned, --lp % added as liquidity, the
+ * rest pushed to the --split payees, or to the dev alone without --split) is cloned at predict(dev, salt), named as the
+ * recipient, then bound (`module: 'combo'`). Everything in it is fixed for good, so a re-run with other ratios or payees
+ * is refused rather than starting over. --buyback-to / --lp-to don't apply (the payees are --split's).
  */
 
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
@@ -61,7 +67,7 @@ const REGISTRY_ABI = parseAbi(['function quoteRegistry() view returns (address)'
  * --split takes the same quotes: a quote that calls the receiver back on transfer would let one payee make every split
  * run out of gas, and the keeper splits only these quotes anyway (split spec §2.4).
  * --lp takes the same quotes: the keeper adds liquidity only over these, and an unlisted quote may tax or block the
- * transfers into the pair every chunk makes.
+ * transfers into the pair every chunk makes. A combined recipient (several of them) takes the same quotes for all reasons.
  * null when trusted; otherwise the failure to report.
  */
 const UNTRUSTED = {
@@ -76,6 +82,10 @@ const UNTRUSTED = {
   lp: {
     why: '--lp needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: the keeper adds liquidity only over those quotes, and an unlisted quote may tax or block the transfers into the pair every chunk makes',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --lp',
+  },
+  combo: {
+    why: 'a combined recipient (more than one of --buyback / --lp / --split) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its buy-backs and liquidity adds price on what the pair receives (a quote that taxes transfers into the pair fails every chunk), the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
+    hint: 'drop --quote (WBNB), use a listed quote, or launch without --buyback / --lp / --split',
   },
 }
 export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') {
@@ -102,8 +112,10 @@ export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: 
 
 /** The run asks for a chained launch (`kind` 'v3' | 'fair'). */
 export const isLaunch = (kind, flag) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && flag('dev-buy'))
-/** The recipient modules a launch can clone (their flags), at most one per launch. */
+/** The recipient modules a launch can clone (their flags): one alone clones its own module, several a combined one. */
 const MODULE_FLAGS = ['buyback', 'split', 'lp']
+/** How a module's flags read in a message. */
+const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split' }
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -149,9 +161,9 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (kind === 'fair' && flag('buyback')) fail('--buyback is for V3 tokens: it makes the tax recipient a buy-back splitter, and a 打新 token has no recipient')
   if (kind === 'fair' && flag('split')) fail('--split is for V3 tokens: it makes the tax recipient a split module, and a 打新 token has no recipient')
   if (kind === 'fair' && flag('lp')) fail('--lp is for V3 tokens: it makes the tax recipient an LP splitter, and a 打新 token has no recipient')
-  if (flag('split') && flag('buyback')) fail('give --split or --buyback, not both: each makes the tax recipient its own module (a split with a buy-back is not supported)')
   const mods = MODULE_FLAGS.filter((f) => flag(f))
-  if (mods.length > 1) fail(`give one of --${mods.join(' / --')}, not several: each makes the tax recipient its own module`)
+  // more than one: one combined recipient (GangComboSplitter) does them all
+  const combo = mods.length > 1
 
   // everything checked before the create, so a launch never stops half way on a bad flag
   const devBuy = kind === 'v3' && flag('dev-buy') ? parseAmount(fail, 'dev-buy', opt('dev-buy')) : null
@@ -169,10 +181,27 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     bond = { amount: parseAmount(fail, 'bond', opt('bond')), hold, days: parseIntIn(fail, 'bond-days', opt('bond-days'), 7, 90) }
   }
 
+  // several of --buyback / --lp / --split: a taxed V3 token whose recipient is the dev's combined recipient
+  let comboFactory = null
+  if (combo) {
+    const names = mods.map((f) => `--${f}`).join(' + ')
+    comboFactory = comboFactoryAddress(testnet)
+    if (!comboFactory) fail(comboNotDeployed(testnet), { flags: mods.map((f) => `--${f}`) })
+    for (const to of ['buyback-to', 'lp-to']) {
+      if (flag(to)) fail(`--${to} does not apply to a combined recipient (${names}): the part not bought back or added goes to the payees — name them with --split self:<pct>,<addr>:<pct>,… (shares of that rest; without --split it all goes to you)`)
+    }
+    const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
+    if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
+      fail(`${names} needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the combined recipient is paid from the tax`)
+    }
+    if (flag('recipient')) fail(`${names} makes the recipient your combined recipient: leave --recipient out`)
+    if (/^0*100(\.0+)?$/.test(opt('dividend', '0'))) fail(`--dividend 100 leaves nothing for the recipient: lower it or drop ${names}`)
+  }
+
   // --buyback: a taxed V3 token whose recipient (the part left after holders) is the dev's splitter
   let buyback = null
   if (flag('buyback-to') && !flag('buyback')) fail('--buyback-to <addr> goes with --buyback <pct>: it names where the part not bought back goes')
-  if (flag('buyback')) {
+  if (flag('buyback') && !combo) {
     const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
     if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
       fail('--buyback needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the buy-back is paid from the tax')
@@ -191,9 +220,24 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   const me = walletFor({ chainId: net.chainId }, opt('from'))
 
+  // the combined recipient's ratios and payees (shares of the rest), checked as its initialize checks them
+  let comboSpec = null
+  if (combo) {
+    const spec = parseComboSpec({
+      buybackBps: flag('buyback') ? buybackBpsOf(fail, opt('buyback')) : 0,
+      lpBps: flag('lp') ? lpBpsOf(fail, opt('lp')) : 0,
+      split: flag('split') ? (opt('split') ?? '') : undefined,
+    }, me)
+    if (spec.error) {
+      const { error, ...extra } = spec
+      fail(error, extra)
+    }
+    comboSpec = { ...spec, factory: comboFactory }
+  }
+
   // --split: a taxed V3 token whose recipient is the dev's split module (fixed payees and shares)
   let split = null
-  if (flag('split')) {
+  if (flag('split') && !combo) {
     const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
     if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
       fail('--split needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the split is paid from the tax')
@@ -213,7 +257,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   // --lp: a taxed V3 token whose recipient is the dev's LP splitter (auto-liquidity, the LP to 0xdead)
   let lp = null
   if (flag('lp-to') && !flag('lp')) fail('--lp-to <addr> goes with --lp <pct>: it names where the part not added to the pool goes')
-  if (flag('lp')) {
+  if (flag('lp') && !combo) {
     const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
     if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
       fail('--lp needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the liquidity is paid from the tax')
@@ -229,12 +273,12 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     lp = { bps: lpBpsOf(fail, opt('lp')), factory, payee }
   }
-  const mod = buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : null
+  const mod = comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : null
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
-  const cloneStep = buyback ? 'buyback-splitter' : split ? 'split-module' : 'lp-splitter'
+  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
     ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
   const rerun = 're-run this same command after executing it'
@@ -246,14 +290,15 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
   const created = plan?.startCount !== undefined
-  // the module this plan cloned: 'split' / 'lp' when it says so, else a --buyback splitter (plans from before --split)
-  const planMod = plan?.salt ? (plan.module === 'split' || plan.module === 'lp' ? plan.module : 'buyback') : null
-  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter' }
+  // the module this plan cloned: 'split' / 'lp' / 'combo' when it says so, else a --buyback splitter (plans from before --split)
+  const planMod = plan?.salt ? (['split', 'lp', 'combo'].includes(plan.module) ? plan.module : 'buyback') : null
+  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient' }
   if (mod && created && !plan.splitter) {
-    return fail(`this launch was created without --${mod} (its recipient is fixed): run it again without --${mod}, or add --restart for a new token`)
+    return fail(`this launch was created without ${MOD_FLAG[mod]} (its recipient is fixed): run it again without ${mod === 'combo' ? '--buyback / --lp / --split' : MOD_FLAG[mod]}, or add --restart for a new token`)
   }
   if (planMod && mod !== planMod && (!created || mod)) {
-    return fail(`this launch began with --${planMod} (its ${modNoun[planMod]} is cloned or on the way): run it again with --${planMod}${mod ? ` instead of --${mod}` : ''}, or add --restart${mod ? '' : ` without it`}`)
+    const again = planMod === 'combo' ? 'the same --buyback / --lp / --split as before' : MOD_FLAG[planMod]
+    return fail(`this launch began with ${MOD_FLAG[planMod]} (its ${modNoun[planMod]} is cloned or on the way): run it again with ${again}${mod ? ` instead of ${MOD_FLAG[mod]}` : ''}, or add --restart${mod ? '' : ' without it'}`)
   }
 
   // ---- buy-back splitter: cloned for the dev before the create, at predict(dev, plan.salt)
@@ -389,6 +434,54 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // ---- combined recipient: cloned for the dev before the create, at predict(dev, plan.salt)
+  if (comboSpec && !created) {
+    if (!plan?.salt) {
+      const refused = await untrustedBuybackQuote(read, net, flag('quote') ? opt('quote') : net.wbnb, 'combo')
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
+      if ((await client.getCode({ address: comboSpec.factory }) ?? '0x') === '0x') {
+        const env = testnet ? 'GANG_TESTNET_COMBO_FACTORY' : 'GANG_COMBO_FACTORY'
+        return fail(`GangComboSplitterFactory has no code at ${comboSpec.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}: give one of --buyback / --lp / --split alone for now${process.env[env] ? ` (or fix ${env})` : ''}`, { factory: comboSpec.factory })
+      }
+      const salt = `0x${randomBytes(32).toString('hex')}`
+      const at = await read(comboSpec.factory, COMBO_FACTORY_ABI, 'predict', [me, salt])
+      if (comboSpec.payees.some((p) => p.toLowerCase() === at.toLowerCase())) return fail('--split: a payee cannot be the combined recipient itself', { module: at })
+      const args = [comboSpec.buybackBps, comboSpec.lpBps, comboSpec.payees, comboSpec.shares, salt]
+      const sim = await simulateCombo(client, me, comboSpec.factory, COMBO_FACTORY_ABI, 'create', args)
+      if (sim.failed) return out({ success: false, step: 'combo-module', factory: comboSpec.factory, ...tag('combo-module'), ...sim.failed })
+      writePlan(key, { ...base, salt, splitter: at, factory: comboSpec.factory, module: 'combo' })
+      const data = encodeFunctionData({ abi: COMBO_FACTORY_ABI, functionName: 'create', args })
+      const parts = comboParts(comboSpec.buybackBps, comboSpec.lpBps, comboSpec.payees.length)
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: comboSpec.factory, data }, {
+          step: 'combo-module', chainId: Number(net.chainId), factory: comboSpec.factory, module: at,
+          buybackPct: comboSpec.buybackBps / 100, lpPct: comboSpec.lpBps / 100, payeesPct: (10_000 - comboSpec.buybackBps - comboSpec.lpBps) / 100,
+          payees: comboSpec.list, permanent: true, parts,
+          note: `clones your combined recipient (combo-v1, listed as a tax recipient in the same tx). Of the recipient's part of the tax: ${comboLine(comboSpec.buybackBps, comboSpec.lpBps, comboSpec.payees, comboSpec.shares)}. ${PERMANENT_NOTE}. ${parts.otherAssets[0].toUpperCase()}${parts.otherAssets.slice(1)}`,
+        }, flag('calldata'), io.summarize),
+        ...tag('combo-module', { module: at, next: `${rerun}: it then builds the create with the combined recipient as the recipient` }),
+      })
+    }
+    if ((await client.getCode({ address: plan.splitter }) ?? '0x') === '0x') {
+      return out({
+        success: false, ...tag('combo-module', { module: plan.splitter }), error: 'the combined recipient is not on chain yet',
+        hint: `if the clone was executed, wait for it to land and ${rerun.replace(' after executing it', '')}; if it was not, add --restart to build it again`,
+      })
+    }
+    const s = await comboOf(read, plan.splitter, { wbnb: net.wbnb })
+    if (!s || s.dev.toLowerCase() !== me.toLowerCase() || s.token) {
+      return fail('the module at this launch\'s address is not an unbound combined recipient of this wallet: add --restart', { module: plan.splitter })
+    }
+    const same = s.buybackBps === comboSpec.buybackBps && s.lpBps === comboSpec.lpBps && s.payees.length === comboSpec.payees.length
+      && s.payees.every((p, i) => p.payee.toLowerCase() === comboSpec.payees[i].toLowerCase() && p.bps === comboSpec.shares[i])
+    if (!same) {
+      return fail(`this launch's combined recipient is ${comboLine(s.buybackBps, s.lpBps, s.payees.map((p) => p.payee), s.payees.map((p) => p.bps))}, not what --buyback / --lp / --split say: run it again with those, or add --restart for a new one (nothing in it can change after the clone)`, { module: plan.splitter })
+    }
+  }
+
   // ---- create
   if (!created) {
     const startCount = (await read(net.pad, PAD_ABI, 'tokenCount')).toString()
@@ -439,7 +532,9 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   const bal = await read(token, ERC20_ABI, 'balanceOf', [me])
   const isSplit = plan.module === 'split'
   const isLp = plan.module === 'lp'
-  const buybackState = () => (plan.splitter && !isSplit && !isLp ? splitterOf(read, plan.splitter) : null)
+  const isCombo = plan.module === 'combo'
+  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo ? splitterOf(read, plan.splitter) : null)
+  const comboState = () => (plan.splitter && isCombo ? comboOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const lpState = () => (plan.splitter && isLp ? lpOf(read, plan.splitter, { pad: net.pad }) : null)
   const splitState = () => (plan.splitter && isSplit ? splitOf(read, plan.splitter, { wbnb: net.wbnb, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
 
@@ -455,23 +550,27 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (sp) done.split = sp
     const lps = await lpState()
     if (lps) done.lp = lps
+    const cs = await comboState()
+    if (cs) done.combo = cs
     if (!bond) return out({ ...done, note: `launched: gang ${kind} info --token ${token}${testnet ? ' --testnet' : ''}` })
     return runBond('status', { ...stepIo({}), out: (o) => out({ ...done, bondStatus: o, note: `launched and bonded: gang bond status --token ${token}${testnet ? ' --testnet' : ''}` }) })
   }
   if (plan.done) return report()
 
-  // ---- bind the splitter / split module / LP splitter to the token (anyone may; the launch does it right after the create)
+  // ---- bind the splitter / split module / LP splitter / combined recipient to the token (anyone may; the launch does it right after the create)
   if (plan.splitter) {
-    const abi = isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
+    const abi = isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
     const bound = await read(plan.splitter, abi, 'token')
     if (bound === zeroAddress) {
-      const sim = await (isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
+      const sim = await (isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
       if (sim.failed) return out({ success: false, step: 'bind', ...tag('bind', { token }), ...sim.failed })
       const data = encodeFunctionData({ abi, functionName: 'bind', args: [token] })
       return out({
         ...step({ chainId: net.chainId }, { from: me, to: plan.splitter, data }, {
-          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit ? { module: plan.splitter } : { splitter: plan.splitter }),
-          note: isSplit
+          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo ? { module: plan.splitter } : { splitter: plan.splitter }),
+          note: isCombo
+            ? 'ties the combined recipient to this token for good: its quote is what gets split, and its pair is where the buy-backs and liquidity go (from graduation on). Nothing is split before this'
+            : isSplit
             ? 'ties the split module to this token for good: the keeper then splits its quote among the payees'
             : isLp
               ? 'ties the LP splitter to this token for good: its pair is where the liquidity goes (from graduation on)'
@@ -481,7 +580,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       })
     }
     if (bound.toLowerCase() !== token.toLowerCase()) {
-      return out({ success: false, ...tag('bind', { token }), error: `the ${isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
+      return out({ success: false, ...tag('bind', { token }), error: `the ${isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
     }
   }
 

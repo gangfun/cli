@@ -9,6 +9,7 @@ import { bondGuard } from './bond.js'
 import { splitterOf } from './buyback.js'
 import { splitOf } from './split.js'
 import { lpOf } from './lp.js'
+import { comboOf, decoyWarning } from './combo.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -285,6 +286,11 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ? await splitOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, extraAssets: [c.quote], ref: `--token ${token}${net}` }) : null
     // or the dev's LP splitter (lp-burn-v1): its ratio, what is set aside for the pool, the next chunk
     const lp = c.recipient && !c.recipientIsCreator && !buyback && !split ? await lpOf(ctx.read, c.recipient, { pad: ctx.pad }) : null
+    // or the dev's combined recipient (combo-v1): fixed buy-back / LP ratios and payees, the set-aside parts, the next chunk
+    const comboRef = `--token ${token}${net}`
+    const combo = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp
+      ? await comboOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, pad: ctx.pad, extraAssets: [c.quote], ref: comboRef }) : null
+    const comboWarning = combo ? decoyWarning(combo, token, c.quote, comboRef) : null
     const lpWarn = lp && lp.token && lp.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
@@ -292,6 +298,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     return out({
       success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
+      ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
     })
   }
 

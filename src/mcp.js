@@ -24,7 +24,7 @@ const WATCH_MAX_SEC = 30 * 60
 
 // what the host shows the agent up front; some hosts cut server instructions near 2,000 characters, so the long form is in
 // RULES (gang_help). Keep both in step with skill/SKILL.md "Hard rules"
-const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. Curve trades need a Binance Agentic Wallet with a .ai Agent ID: call gang_preflight first, relay each issues[].fix. Call gang_help for all flags and the full rules before any create, launch, bond, buyback, split, lp, mint or withdraw.
+const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. Curve trades need a Binance Agentic Wallet with a .ai Agent ID: call gang_preflight first, relay each issues[].fix. Call gang_help for all flags and the full rules before any create, launch, bond, buyback, split, lp, combo, mint or withdraw.
 Hard rules:
 - Preview -> show the user -> wait for a yes -> gang_execute. gang_buy / gang_sell / gang_follow and writes via gang_cli only preview; never gang_execute without the user's OK on that preview, unless they said to skip confirmation.
 - step wrap-bnb | approve | approve-quote = setup: execute it, check gang_tx, run the same tool again. A launch in one command is re-run until launch.stage is done.
@@ -42,7 +42,7 @@ Hard rules:
 export const RULES = [
   'Start: gang_preflight; relay each issues[].fix. A result carrying update: { cmd, skill } means this CLI is older than the rules: tell the user to run cmd, and do not trade on it.',
   'Preview -> show -> confirm -> execute. Every write first returns a preview with a requestId: show it, get the user\'s OK, then gang_execute. Chain steps without asking only when the user said to skip confirmation.',
-  'Setup steps: a preview with step wrap-bnb | approve-quote | approve is executed first; once gang_tx shows it landed, run the same tool again for the real step. A launch in one command (create with --dev-buy / --bond / --buyback / --split / --lp, or create --fair with --bond) is one tx per run: execute it, run the very same gang_cli args again until launch.stage is done.',
+  'Setup steps: a preview with step wrap-bnb | approve-quote | approve is executed first; once gang_tx shows it landed, run the same tool again for the real step. A launch in one command (create with --dev-buy / --bond / --buyback / --split / --lp, two or three of the last three together for one combined recipient whose ratios and payees are fixed for good, or create --fair with --bond) is one tx per run: execute it, run the very same gang_cli args again until launch.stage is done.',
   'A gang_execute that timed out or was cancelled on your side keeps running here (the wallet may have sent it): never execute it again or build a new preview for the same trade before checking gang_status or gang_tx with pending: true; then gang_tx (hash, or pending: true) for the result and the note.',
   'Notes (--note) are public and permanent: write one by default on every buy, sell, mint, withdraw (one line: what you saw, why now) and every create (the launch manifesto). Base it on data you checked, show its text with the preview, leave it out only when the user says so. No links. --conf is an honest 0-100.',
   'Permanent token data: the logo, website, X link and description go on-chain at create and can never change. Use only links the user gave; ask once if they have not said. Never host a logo on a temporary file host. Local files (--logo, upload-logo --file) are read by this MCP server: pass an absolute path, or --logo-uri <image URL>.',
@@ -85,7 +85,7 @@ const tool = (name, title, description, properties, args, annotations, required 
 
 export const TOOLS = [
   tool('gang_help', 'Commands and rules',
-    'Every gang command with all its flags (the CLI help) and the full rules. Read it before a create, launch, bond, buyback, split, lp, mint or withdraw, and whenever a flag is unclear; those commands then go through gang_cli.',
+    'Every gang command with all its flags (the CLI help) and the full rules. Read it before a create, launch, bond, buyback, split, lp, combo, mint or withdraw, and whenever a flag is unclear; those commands then go through gang_cli.',
     {}, () => [], READ),
   tool('gang_preflight', 'Check wallet setup', 'Signed in to baw, Developer Mode, Trade all tokens, Agent ID; each issue comes with a fix.',
     {}, () => ['preflight'], READ),
@@ -175,7 +175,7 @@ export const TOOLS = [
     { hash: HASH, pending: { type: 'boolean', description: 'Find the txs of trades approved in the Binance App (no hash needed)' }, testnet: TESTNET },
     (a) => (a.pending ? ['tx', '--pending'] : ['tx', '--hash', a.hash, ...bool('testnet', a.testnet)]), PREVIEW),
   tool('gang_cli', 'Other gang commands',
-    'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; create --fly = Mint Flywheel; launch in one command with --dev-buy / --bond / --buyback / --split / --lp), mint (--ref <inviter> on a Mint Flywheel token), withdraw, claim, release, fly open-early|launch|invite, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, split status|distribute|release|set-payee|bind, lp status|set|set-payee|apply|bind|release|add, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
+    'Every other gang command, its flags as separate items (gang_help lists them all): create (V3; create --fair = fair mint; create --fly = Mint Flywheel; launch in one command with --dev-buy / --bond / --buyback / --split / --lp, several of the last three = one combined recipient), mint (--ref <inviter> on a Mint Flywheel token), withdraw, claim, release, fly open-early|launch|invite, quote, list, upload-logo, bond post|topup|raise-hold|extend|status|start|report|settle|refund|burn|tx, buyback status|set|set-payee|apply|bind|release, split status|distribute|release|set-payee|bind, lp status|set|set-payee|apply|bind|release|add, combo status|distribute|release|set-payee|bind|chunk, v3 income, version; the flags no other tool takes (--calldata, --from, …) too. E.g. ["create","--name","My Token","--symbol","MYT","--logo","/Users/me/avatar.png"], ["bond","status","--token","0x…"]. Local files are read by this server: absolute paths, or --logo-uri <image URL>. Writes only preview, as above. execute / watch / help have their own tools.',
     { args: { type: 'array', items: { type: 'string' }, minItems: 1 } }, (a) => a.args, { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, ['args']),
 ]
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))
