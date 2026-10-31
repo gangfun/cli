@@ -3,7 +3,8 @@ import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund,
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, CREATOR_FEE_ABI, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
+import { createNote, curveCreatorFee } from './creatorfee.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
 import { splitterOf } from './buyback.js'
@@ -23,6 +24,7 @@ export const V3_NETS = padNets('v3')
 const TAX = '(uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address recipient)'
 const PAD_ABI = parseAbi([
   `function create(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, ${TAX} tax) returns (address)`,
+  `function createWithGradTarget(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, ${TAX} tax, uint256 gradBnb) returns (address)`,
   'function buy(address token, uint256 quoteIn, uint256 minTokensOut) returns (uint256)',
   'function sell(address token, uint256 tokensIn, uint256 minQuoteOut) returns (uint256)',
   `function checkTaxConfig(${TAX} tax) view returns (bool ok, string reason)`,
@@ -74,6 +76,7 @@ const HINTS = {
   BadTaxConfig: 'a tax setting is out of bounds, or the recipient is neither you nor on the whitelist: see reason',
   NotAgent: 'this wallet holds no Agent ID; V3 create and curve trades are Agent-only',
   WalletCapReached: 'this wallet already holds the per-wallet cap (1% of supply)',
+  BadGradTarget: 'the graduation target (--grad) must be one of the pad\'s GRAD_BNB_TIERS: 6 / 9 / 12 / 15 BNB raised',
   AlreadyGraduated: 'the token graduated: re-run gang buy / gang sell, which now trade it in the PancakeSwap pool',
   Slippage: 'the price moved past --slippage; re-run to re-quote',
   RefPoolRequired: 'a non-WBNB --quote needs --ref-pool: a Pancake V2 pair or V3 pool that holds the quote token',
@@ -95,8 +98,8 @@ const HINTS = {
   VaultFloorTooHigh: 'the platform\'s dividend vault requires a larger holding than V3 dividends allow (10,000 tokens), so a dividend token can\'t be created right now; --dividend 0 still works, or ask gang to fix the vault setting',
 }
 
-/** What `gang tx` decodes a V3 trade's logs with (the pad, the tax router, the dividend vault). */
-export const V3_EVENT_ABIS = [PAD_ABI, TAX_ROUTER_ABI, VAULT_ABI]
+/** What `gang tx` decodes a V3 trade's logs with (the pad and its 2.0 creator fee, the tax router, the dividend vault). */
+export const V3_EVENT_ABIS = [PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, VAULT_ABI]
 
 export function v3Ctx(testnet) {
   const net = V3_NETS[testnet ? 'testnet' : 'mainnet']
@@ -107,11 +110,19 @@ export function v3Ctx(testnet) {
 
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, ERC20_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100
+const bnbOf = (wei) => Number(wei / 10n ** 15n) / 1000
+/**
+ * The graduation target in words. A non-WBNB quote fixes the amount in the quote at create (`inQuote`, e.g. "1234.5
+ * USDT"): the BNB figure is what that was worth then, a nominal target whose BNB worth moves with the quote's price.
+ */
+const gradLine = (bnb, inQuote) => (inQuote
+  ? `the curve graduates into PancakeSwap once ${inQuote} is raised: ${bnb} BNB priced in the quote at create, fixed in the quote, so what it is worth in BNB moves with the quote's price (market cap at graduation ≈ 5× the target)`
+  : `the curve graduates into PancakeSwap once ${bnb} BNB is raised (market cap then ≈ ${bnb * 5} BNB)`)
 const VIRTUAL_TOKEN = 1_066_666_666_666_666_666_666_666_667n
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
-const revertOf = (e) => revertIn(e, [PAD_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
 
 /** eth_call `data` from `from`: { result } when it passes, { failed } with the revert (or RPC error) otherwise. */
 async function simulate(ctx, from, to, abi, functionName, args, value = 0n) {
@@ -159,9 +170,11 @@ export async function curveOf(ctx, token) {
   const [creator, quote, realQuote, sold, gradAmt, virtualQuote, graduated, buyTaxBps, sellTaxBps, dividendBps, pair] = c
   if (creator === zeroAddress) return null
   // the recipient is not in curves(): it lives on the tax handler's route, read back through taxConfigOf
-  const [{ handler, router, registry }, remaining, tax] = await Promise.all([
+  const [{ handler, router, registry }, remaining, tax, targetBnb] = await Promise.all([
     taxContracts(ctx),
     ctx.read(ctx.pad, PAD_ABI, 'graduationRemaining', [token]), ctx.read(ctx.pad, PAD_ABI, 'taxConfigOf', [token]),
+    // the target in BNB raised (2.0: the creator's pick); graduationAt below is the same target in the quote
+    gradTargetBnbOf(ctx, token).catch(() => null),
   ])
   const recipient = tax[3] === zeroAddress ? null : tax[3]
   // §22: the creator may be its own recipient without a listing; say so, the platform did not review it
@@ -184,23 +197,28 @@ export async function curveOf(ctx, token) {
     buyTaxPct: pct(buyTaxBps), sellTaxPct: pct(sellTaxBps), dividendPct: pct(dividendBps), recipient, recipientLabel: label,
     ...(recipientIsCreator && { recipientIsCreator: true, recipientNote: 'the recipient is the creator itself, not reviewed by the platform' }),
     raised: await units(ctx, quote, graduated ? gradAmt : realQuote), graduationAt: await units(ctx, quote, gradAmt),
-    toGraduation: await units(ctx, quote, remaining),
+    graduationTargetBnb: targetBnb, toGraduation: await units(ctx, quote, remaining),
     progressPct: graduated ? 100 : gradAmt > 0n ? Number((realQuote * 10_000n) / gradAmt) / 100 : 0,
     priceQuote: await units(ctx, quote, price), priceFrom: graduated ? 'pool' : 'curve', priceRaw: price,
-    owedToRecipient: await units(ctx, quote, owed), owedRaw: owed, reserveTokenRaw, curveRaw: { realQuote, sold, virtualQuote },
+    owedToRecipient: await units(ctx, quote, owed), owedRaw: owed, reserveTokenRaw, curveRaw: { realQuote, sold, virtualQuote, remaining },
   }
 }
 
 /**
- * What a curve buy of `quoteIn` that gets `tokensOut` spends, the fee included (CurveLogic _quoteInFor + _recomputeFee):
- * less than quoteIn when the wallet cap or the graduation cut trimmed it and the rest is refunded.
+ * What a curve buy of `quoteIn` that gets `tokensOut` spends, the fee included, as CurveLogic trims it: first to the
+ * token's own graduation amount (what is still to raise), then to the wallet cap (`room`, _quoteInFor), each followed by
+ * _recomputeFee. { spent, cut: null | 'graduation' | 'wallet cap' }: the rest of quoteIn is refunded.
  */
-async function spentFor(ctx, c, quoteIn, tokensOut) {
-  const { realQuote, sold, virtualQuote } = c.curveRaw
-  const net = ceilDiv(virtualQuote * VIRTUAL_TOKEN, VIRTUAL_TOKEN - sold - tokensOut) - (virtualQuote + realQuote)
+async function spentFor(ctx, c, quoteIn, tokensOut, room) {
+  const { realQuote, sold, virtualQuote, remaining } = c.curveRaw
   const feeBps = BigInt(Math.round((await feesOf(ctx)).curveFeePct * 100))
-  const gross = ceilDiv(net * 10_000n, 10_000n - feeBps)
-  return gross < quoteIn ? gross : quoteIn
+  const gross = (net) => { const g = ceilDiv(net * 10_000n, 10_000n - feeBps); return g < quoteIn ? g : quoteIn }
+  if (room !== undefined && tokensOut === room) {
+    const net = ceilDiv(virtualQuote * VIRTUAL_TOKEN, VIRTUAL_TOKEN - sold - tokensOut) - (virtualQuote + realQuote)
+    return { spent: gross(net), cut: 'wallet cap' }
+  }
+  if (quoteIn - (quoteIn * feeBps) / 10_000n > remaining) return { spent: gross(remaining), cut: 'graduation' }
+  return { spent: quoteIn, cut: null }
 }
 
 /** `token` funding for `need` toward the pad (wrap BNB, then approve): a step object, or null when ready. */
@@ -256,12 +274,17 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     return out({ success: true, status, items: (r.items || []).map((x) => ({
       token: x.address, symbol: x.symbol, buyTaxPct: pct(x.buyTaxBps), sellTaxPct: pct(x.sellTaxBps), dividendPct: pct(x.dividendBps),
       recipient: x.recipient, recipientLabel: x.recipientLabel, quote: x.quoteSymbol, progressPct: x.progressPct, graduated: x.graduated,
+      // the target per token (2.0: the creator's pick), never a fixed 15 BNB: in the quote from gradAmt, in BNB when gang.fun sends it
+      ...(x.gradAmt != null && { graduationAt: f(x.gradAmt, x.quoteDecimals) }),
+      ...(x.gradTargetBnb != null && { graduationTargetBnb: Number(x.gradTargetBnb) }),
       chainId: x.chainId, link: `https://gang.fun/token/${x.address}`,
     })) })
   }
 
   let ctx
   try { ctx = v3Ctx(testnet) } catch (e) { return fail(e.message) }
+  // a token is served by the GangLaunchpad generation that has it (its pad, router, GangBond); a create goes to the newest
+  if (sub !== 'create' && sub !== 'tx' && (await atTokenPad(ctx, opt('token'))) === null) return fail(KIND_UNREAD.error, { token: opt('token'), retry: KIND_UNREAD.retry })
   // not a curve on this pad: on the merged pad it may be a 打新 token (kindOf), so point at `gang fair`
   const notV3 = async (token) => {
     const { error, kind } = await notThisKind(ctx, token, 'v3', net)
@@ -295,8 +318,13 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the split module, but the module is bound to another token (${split.token}): the keeper never splits this token's tax (${c.quote}); it is split only by hand (gang split distribute --token ${token}${net} --asset ${c.quote})` } : null
+    // 2.0: the creator's part of the curve fee, waiting on the pad
+    const gen = await curveCreatorFee(ctx, token, c, net)
+    const nonWbnb = c.quote.toLowerCase() !== String(ctx.wbnb).toLowerCase()
+    const graduationNote = c.graduationTargetBnb != null && !c.graduated
+      ? gradLine(c.graduationTargetBnb, nonWbnb ? `${c.graduationAt} ${c.quoteSymbol || 'of the quote'}` : null) : null
     return out({
-      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
     })
@@ -312,9 +340,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const { claimableRaw: _r, ...dividend } = c.dividendPct > 0 ? await dividendOf(ctx, vault, token, me, c.quote, c.priceRaw) : {}
     // graduated: what selling the whole balance into the pool pays now (sell tax and the chunk sold first included)
     const q = c.graduated && c.pair && bal > 0n ? await poolSellQuote(ctx, c.taxHandler, token, bal) : null
+    // the creator's own view also shows its creator fee (2.0)
+    const { creatorFee } = me.toLowerCase() === c.creator.toLowerCase() ? await curveCreatorFee(ctx, token, c, net) : {}
     return out({
       success: true, chainId: Number(ctx.chainId), wallet: me, token, quote: c.quoteSymbol, graduated: c.graduated,
-      balance: formatUnits(bal, 18), dividendPct: c.dividendPct,
+      balance: formatUnits(bal, 18), dividendPct: c.dividendPct, ...(creatorFee && { creatorFee }),
+      graduationTargetBnb: c.graduationTargetBnb, graduationAt: c.graduationAt, progressPct: c.progressPct,
       ...(q && {
         poolSellAll: {
           expectOut: await units(ctx, c.quote, q.out), minOut: await units(ctx, c.quote, minOf(q.out, slippage)), slippagePct: slippage,
@@ -367,6 +398,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (!(n >= 1 && n <= 5)) fail(`--${f} must be a number between 1 and 5 (in %); for an untaxed token leave out both tax flags (or give both as 0)`, { got: opt(f) ?? null })
       return n
     }
+    // --grad: the graduation target in BNB raised, one of the pad's GRAD_BNB_TIERS (2.0); left out: the pad's default
+    const grad = flag('grad') ? Number(opt('grad')) : null
+    if (grad !== null && !(grad > 0)) fail('--grad must be the graduation target in BNB raised: 6, 9, 12 or 15', { got: opt('grad') ?? null })
     const buyTax = taxed ? taxOf('buy-tax') : 0
     const sellTax = taxed ? taxOf('sell-tax') : 0
     const dividend = taxed ? parseNum(fail, 'dividend', opt('dividend', '0'), 0, 100) : 0
@@ -379,6 +413,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const refPool = flag('ref-pool') ? opt('ref-pool') : (defaultRefPool(ctx.chainId, quote) ?? zeroAddress)
     if (!isAddress(quote ?? '') || !isAddress(refPool ?? '')) fail('--quote / --ref-pool must be 0x addresses')
     const tax = { buyTaxBps: Math.round(buyTax * 100), sellTaxBps: Math.round(sellTax * 100), dividendBps: Math.round(dividend * 100), recipient }
+    // --grad first: a pad without the pick (1.0) refuses it whatever else the create would say
+    const tiers = await gradTiersOf(ctx)
+    if (grad !== null && !tiers) {
+      fail(`--grad: this GangLaunchpad${ctx.gen ? ` (${ctx.gen})` : ''} has no graduation target to pick; every curve graduates at ${bnbOf(await ctx.read(ctx.pad, GRAD_TARGET_ABI, 'TARGET_GRAD_BNB'))} BNB raised: leave --grad out`)
+    }
+    if (grad !== null && !tiers.includes(grad)) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') })
     // the recipient may be the creator itself: checkTaxConfigFor knows who creates (a pad without it: checkTaxConfig)
     const [ok, reason] = await ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfigFor', [me, tax]).catch((e) => {
       if (!noSuchFunction(e)) throw e
@@ -386,15 +426,22 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     })
     if (!ok) fail(`tax setting refused: ${reason}`, { hint: HINTS.BadTaxConfig, tax: { buyTax, sellTax, dividend, recipient } })
     if (!(await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me]))) fail('this wallet holds no Agent ID; V3 create is Agent-only', { wallet: me })
-    // like LaunchpadV2: WBNB → 15 BNB; a fixed rate in QuoteRegistry; else --ref-pool prices the target
+    // the target: --grad (2.0, createWithGradTarget) or the pad's default (create: 9 BNB on 2.0, 15 on 1.0)
+    const targetBnb = grad ?? bnbOf(await ctx.read(ctx.pad, GRAD_TARGET_ABI, 'TARGET_GRAD_BNB'))
+    // the target in the quote: WBNB as is; a fixed rate in QuoteRegistry; else --ref-pool prices it. On 2.0 it is read
+    // with graduationAmountFor for the very target the create takes, so GradAmtTooSmall / QuoteAmountTooLarge show here
     let gradAmt
-    try { gradAmt = await ctx.read(ctx.pad, PAD_ABI, 'graduationAmountOf', [quote, refPool]) } catch (e) {
+    try {
+      gradAmt = tiers ? await ctx.read(ctx.pad, GRAD_TARGET_ABI, 'graduationAmountFor', [quote, refPool, parseUnits(String(targetBnb), 18)])
+        : await ctx.read(ctx.pad, PAD_ABI, 'graduationAmountOf', [quote, refPool])
+    } catch (e) {
       return fail('cannot price the graduation target in this quote', revertOf(e) || { detail: e.shortMessage || e.message })
     }
-    const createData = (logoURI, metaURI) =>
-      encodeFunctionData({ abi: PAD_ABI, functionName: 'create', args: [name, symbol, logoURI, metaURI, quote, refPool, tax] })
+    const fn = grad !== null ? 'createWithGradTarget' : 'create'
+    const argsOf = (logoURI, metaURI) => [name, symbol, logoURI, metaURI, quote, refPool, tax, ...(grad !== null ? [parseUnits(String(grad), 18)] : [])]
+    const createData = (logoURI, metaURI) => encodeFunctionData({ abi: PAD_ABI, functionName: fn, args: argsOf(logoURI, metaURI) })
     // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
-    const dry = await simulate(ctx, me, ctx.pad, PAD_ABI, 'create', [name, symbol, '', '', quote, refPool, tax])
+    const dry = await simulate(ctx, me, ctx.pad, PAD_ABI, fn, argsOf('', ''))
     if (dry.failed) return out({ success: false, step: 'create', ...dry.failed })
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
@@ -405,10 +452,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     const rest = 100 - dividend
     const fees = await feesOf(ctx)
+    const creatorFee = await createNote(ctx, net)
     return out(notes.step(ctx, { from: me, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata,
-      quote: (await symbolOf(ctx, quote)) || quote, graduationAt: await units(ctx, quote, gradAmt),
+      quote: (await symbolOf(ctx, quote)) || quote, graduationTargetBnb: targetBnb, graduationAt: await units(ctx, quote, gradAmt),
+      graduation: `${gradLine(targetBnb, quote.toLowerCase() === String(ctx.wbnb).toLowerCase() ? null : `${await units(ctx, quote, gradAmt)} ${(await symbolOf(ctx, quote)) || 'of the quote'}`)}${tiers ? `; ${grad !== null ? 'picked with --grad' : 'the default'}, --grad picks ${tiers.join(' / ')}` : ''}`,
       ...(refPool !== zeroAddress && quote.toLowerCase() !== String(ctx.wbnb).toLowerCase() && { refPool }),
       buyTaxPct: buyTax, sellTaxPct: sellTax, dividendPct: dividend,
       recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: dry.result,
@@ -416,6 +465,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
         : 'untaxed: no tax in the PancakeSwap pool after graduation, no dividend, no recipient',
+      ...(creatorFee && { creatorFee }),
       note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang tx --hash …\`.`,
     }, 'create'))
   }
@@ -439,17 +489,28 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     const me = walletFor(ctx, opt('from'))
     if (!(await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me]))) fail('this wallet holds no Agent ID; curve trades are Agent-only', { wallet: me })
-    if ((await ctx.read(ctx.pad, PAD_ABI, 'walletRoom', [token, me])) === 0n) fail(HINTS.WalletCapReached)
+    const room = await ctx.read(ctx.pad, PAD_ABI, 'walletRoom', [token, me])
+    if (room === 0n) fail(HINTS.WalletCapReached)
     if (!flag('amount') && !flag('bnb')) fail('--amount <quote to spend> required (the 1% curve fee included; no tax on the curve)')
     const raw = parseAmount(fail, flag('amount') ? 'amount' : 'bnb', opt('amount') ?? opt('bnb'))
     const quoteIn = parseUnits(raw, await decimalsOf(ctx, c.quote))
     const slippage = parseSlippage(fail, opt('slippage', '1'))
     // asked from gang.fun before any wrap / approve round, so a follow that can't count fails first
     const follow = await notes.follow(token, me)
-    const priced = async (tokensOut) => follow && notes.priced(follow, token, await spentFor(ctx, c, quoteIn, tokensOut), await decimalsOf(ctx, c.quote))
-    const extra = (tokensOut, minOut) => ({
+    const priced = async (tokensOut) => follow && notes.priced(follow, token, (await spentFor(ctx, c, quoteIn, tokensOut, room)).spent, await decimalsOf(ctx, c.quote))
+    // the pad trims a buy past the token's own graduation amount or the wallet cap and refunds the rest: say what it spends
+    const cutOf = async (tokensOut, refundAs) => {
+      const { spent, cut } = await spentFor(ctx, c, quoteIn, tokensOut, room)
+      if (!cut) return {}
+      const [s, r] = await Promise.all([units(ctx, c.quote, spent), units(ctx, c.quote, quoteIn - spent)])
+      const why = cut === 'graduation'
+        ? `only ${c.toGraduation} ${c.quoteSymbol} is left to raise before this token graduates at ${c.graduationAt} ${c.quoteSymbol}`
+        : `the 1% wallet cap leaves this wallet room for ${formatUnits(tokensOut, 18)} more tokens only`
+      return { spent: s, refund: r, cutBy: cut, cutNote: `${why}: the buy spends ${s} ${c.quoteSymbol} (fee included) and refunds ${r} ${refundAs}` }
+    }
+    const extra = async (tokensOut, minOut, refundAs = c.quoteSymbol) => ({
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
-      minTokensOut: formatUnits(minOut, 18), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
+      minTokensOut: formatUnits(minOut, 18), ...(await cutOf(tokensOut, refundAs)), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
     })
     // WBNB-quoted: pay native BNB through the router in one tx (it wraps; tokens land in this wallet; a cap / graduation
     // refund comes back from the pad to this wallet as WBNB, not BNB)
@@ -465,7 +526,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const minOut = minOf(sim.result, slippage)
       const data = encodeFunctionData({ abi: GANG_ROUTER_ABI, functionName: 'v3BuyBNB', args: [token, minOut, routerDeadline()] })
       return out(notes.step(ctx, { from: me, to: ctx.router, data, value: quoteIn }, {
-        ...extra(sim.result, minOut), via: 'router', curveFeePct: (await feesOf(ctx)).curveFeePct,
+        ...(await extra(sim.result, minOut, 'WBNB (not BNB)')), via: 'router', curveFeePct: (await feesOf(ctx)).curveFeePct,
         note: 'paid in BNB through GangRouter; spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap or the graduation cut the excess comes back to this wallet as WBNB (not BNB)',
       }, 'buy', await priced(sim.result)))
     }
@@ -475,7 +536,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (sim.failed) return out({ success: false, step: 'buy', ...sim.failed })
     const minOut = minOf(sim.result, slippage)
     return out(notes.step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, quoteIn, minOut] }) }, {
-      ...extra(sim.result, minOut), curveFeePct: (await feesOf(ctx)).curveFeePct,
+      ...(await extra(sim.result, minOut)), curveFeePct: (await feesOf(ctx)).curveFeePct,
       note: 'spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap the excess is refunded',
     }, 'buy', await priced(sim.result)))
   }
@@ -556,7 +617,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const r = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
     const events = []
     for (const log of r.logs) {
-      for (const abi of [PAD_ABI, TAX_ROUTER_ABI, VAULT_ABI]) {
+      for (const abi of V3_EVENT_ABIS) {
         try {
           const ev = decodeEventLog({ abi, data: log.data, topics: log.topics })
           events.push({ event: ev.eventName, ...Object.fromEntries(Object.entries(ev.args).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])) })

@@ -3,9 +3,9 @@ import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
-import { bondAddress, bondGuard } from './bond.js'
+import { bondGuard } from './bond.js'
 
 /**
  * `gang fair …` — 打新 (fair mint): one fixed price per share both ways (mint buys at it, withdraw sells back at it);
@@ -259,6 +259,8 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
 
   let ctx
   try { ctx = fairCtx(testnet) } catch (e) { return fail(e.message) }
+  // a token is served by the GangLaunchpad generation that has it (its pad, router, GangBond); a create goes to the newest
+  if (sub !== 'create' && sub !== 'tx' && (await atTokenPad(ctx, opt('token'))) === null) return fail(KIND_UNREAD.error, { token: opt('token'), retry: KIND_UNREAD.retry })
   // not a sale on this pad: on the merged pad it may be a V3 token (kindOf), so point at `gang v3`
   const notFair = async (token) => {
     const { error, kind } = await notThisKind(ctx, token, 'fair', testnet ? ' --testnet' : '')
@@ -275,7 +277,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
       const swapBack = sale.launched && sale.pair
         ? await swapBackState(ctx, await ctx.read(ctx.pad, PAD_ABI, 'taxHandler'), token, (await poolReserves(ctx, token, sale.pair))[0])
         : null
-      return out({ success: true, chainId: Number(ctx.chainId), ...pub, ...(swapBack && { swapBack }) })
+      return out({ success: true, chainId: Number(ctx.chainId), ...pub, ...(ctx.gen && { padGen: ctx.gen }), ...(swapBack && { swapBack }) })
     }
     const slippage = parseNum(fail, 'slippage', opt('slippage', '1'), 0, 50)
     const me = walletFor(ctx, opt('from'))
@@ -288,6 +290,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     checkMeta() // a bad --website / --twitter / --description fails here, before any wrap / approve round or upload
     const raise = parseNum(fail, 'raise', opt('raise', '15'), 5, 50)
     if (flag('hours')) fail('--hours was removed: a fair-mint sale has no deadline and stays open until it fills')
+    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0): a 打新 sale fills at its --raise instead, so leave --grad out')
     const capPct = parseNum(fail, 'cap', opt('cap', '0.5'), 0.25, 1)
     const holdPct = parseNum(fail, 'hold', opt('hold', '60'), 60, 90)
     const mintFeePct = parseNum(fail, 'mint-fee', opt('mint-fee', '1'), 1, 3)
@@ -395,7 +398,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     if (!held) return fail('this wallet has no shares in this sale')
     const shares = flag('all') ? Number(held) : parseIntIn(fail, 'shares', opt('shares'), 1, Number(held))
     // a bond posted during the sale already binds: selling shares back takes their tokens out of the creator's wallet
-    const guard = bondAddress(testnet) && await bondGuard(ctx, {
+    const guard = ctx.bond && await bondGuard(ctx, {
       token, me, amount: BigInt(shares) * (await ctx.read(ctx.pad, PAD_ABI, 'TOKENS_PER_SHARE')), testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first'),
     }, rawOnly, summarize)
     if (guard?.refuse) return out({ success: false, step: 'withdraw', wallet: me, ...guard.refuse })

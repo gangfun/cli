@@ -1,6 +1,6 @@
 import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
 import { decimalsOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, revertOf as revertIn, step, units, GAS_RESERVE } from './steps.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
 import { bawAddress } from './baw.js'
 
 /**
@@ -12,17 +12,13 @@ import { bawAddress } from './baw.js'
  * returns the whole bond to the creator; refund does the same when the pair never came within 30 days of the post.
  * One contract per network, no owner; it only reads the pad.
  *
- * Env: GANG_BOND (mainnet), GANG_TESTNET_BOND (testnet) override the addresses below.
+ * One GangBond per GangLaunchpad generation (it reads one pad): a token's bond is on its own generation's GangBond.
+ * Env: GANG_BOND (mainnet), GANG_TESTNET_BOND (testnet) override the create target's (gangpad.js).
  */
 
-// script/DeployGangBond.s.sol. Testnet: 2026-10-29, block 139463214, over the set-10 pad — the audited version (two-step
-// settle, one buy-back chunk per 4 minutes; earlier testnet versions: 0x587f…5d7E after the pair only, 0x5a99…d716
-// without the refund notice, 0xB034…EBE3 before the audit; docs/TESTNET-GANG-BOND-2026-10-28.md). Mainnet: 2026-10-29,
-// block 130407146, over the live pad 0x15CF…4365, with the re-review L-1 fix (a buy-back chunk is priced on what the
-// pair received); it replaces 0xf26F…C817 (block 130335965, never used; CLI 0.15.1–0.16.1)
-// (docs/MAINNET-GANG-BOND-2026-10-29.md). GANG_BOND / GANG_TESTNET_BOND override either
-export const MAINNET_BOND = '0xe92dC940CB23Dc328639A7334e69F9CCdf3a14E4'
-export const TESTNET_BOND = '0xd6a8dd5d1E6641a34A255f25Db2B3ED397CB1086'
+// script/DeployGangBond.s.sol, once per generation: the create target's (GANG_GENS in gangpad.js has each one's history)
+export const MAINNET_BOND = GANG_GENS.mainnet[0].bond
+export const TESTNET_BOND = GANG_GENS.testnet[0].bond
 
 export const BOND_ABI = parseAbi([
   'function post(address token, uint256 amount, uint256 holdAmount, uint64 duration) payable',
@@ -105,16 +101,17 @@ const TOTAL_SUPPLY = 1_000_000_000n * 10n ** 18n
 const DAY = 86_400
 const MAX_UINT = 2n ** 256n - 1n
 
-/** GangBond address of `testnet` / mainnet: env first, then the shipped one; null when not deployed there. */
+/** GangBond of the create target on `testnet` / mainnet (env first); null when not deployed there. */
 export function bondAddress(testnet) {
-  return (testnet ? process.env.GANG_TESTNET_BOND || TESTNET_BOND : process.env.GANG_BOND || MAINNET_BOND) || null
+  return gangGens(testnet)[0].bond || null
 }
 
 function bondCtx(testnet) {
   const net = padNets('v3')[testnet ? 'testnet' : 'mainnet']
   if (!net.pad) throw new Error(NOT_ON_MAINNET)
+  // a token's bond is its own generation's (set after atTokenPad); the create target may have none yet
   const bond = bondAddress(testnet)
-  if (!bond) throw new Error(`GangBond is not deployed on ${testnet ? 'the BSC testnet' : 'BSC mainnet'} in this CLI version: set ${testnet ? 'GANG_TESTNET_BOND' : 'GANG_BOND'} to its address`)
+  if (!net.gens.some((g) => g.bond)) throw new Error(`GangBond is not deployed on ${testnet ? 'the BSC testnet' : 'BSC mainnet'} in this CLI version: set ${testnet ? 'GANG_TESTNET_BOND' : 'GANG_BOND'} to its address`)
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   return { ...net, bond, client, read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }) }
 }
@@ -307,7 +304,8 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
     const r = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
     const events = []
     for (const log of r.logs) {
-      if (!same(log.address, ctx.bond)) continue
+      // any generation's GangBond (a token's bond is on its own generation's)
+      if (!ctx.gens.some((g) => same(log.address, g.bond))) continue
       try {
         const ev = decodeEventLog({ abi: BOND_ABI, data: log.data, topics: log.topics })
         events.push({ event: ev.eventName, ...Object.fromEntries(Object.entries(ev.args).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])) })
@@ -317,6 +315,9 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
   }
 
   const token = tokenArg(opt, fail)
+  // the token's generation: its pad and its GangBond
+  if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry })
+  if (!ctx.bond) return fail('this token\'s GangLaunchpad generation has no GangBond in this CLI version', { token, chainId, padGen: ctx.gen })
   const m = await marketOf(ctx, token)
   if (!m) return fail('not a GangLaunchpad token (V3 or 打新) on this network: bonds cover only those', { token, chainId })
   const view = await bondView(ctx, token, m)
@@ -555,7 +556,8 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
  * - { info: {…} } — go on, with these fields added to the preview (headroom after the sell, or the --break-bond warning).
  */
 export async function bondGuard(ctx, p, rawOnly, summarize) {
-  const addr = bondAddress(p.testnet)
+  // the token's generation's GangBond when ctx is on its pad (atTokenPad), else the create target's
+  const addr = 'bond' in ctx ? ctx.bond : bondAddress(p.testnet)
   if (!addr) return null
   let b
   try { b = await ctx.read(addr, BOND_ABI, 'bondOf', [p.token]) } catch (e) {
