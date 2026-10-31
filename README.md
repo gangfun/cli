@@ -14,6 +14,8 @@ Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve bu
 
 **Auto-liquidity recipient (0.20.0+):** `gang create … --buy-tax … --sell-tax … --lp 70 [--lp-to 0x…]` makes a V3 token's tax recipient the dev's LP splitter (GangLiquiditySplitter, `lp-burn-v1`, the buy-back splitter's sibling): `--lp` % of the recipient's part of the tax is added to the token's PancakeSwap pair as liquidity whose LP goes to 0xdead (locked for good), the rest goes to the dev or `--lp-to`. After graduation the keeper adds it in chunks (half buys the token, all of it goes back in with the matching quote; one per 4 minutes). The ratio and payee change as for `--buyback` (a raise at once, a cut after a 3-day notice; the payee at once). Same quotes as `--buyback` / `--split`. `gang lp …` shows and drives it. Live on BSC mainnet (factory `0xE0436867dAFcf42Ee1418083251a9B8B61F0C248`, allowed by the platform's Safe on 2026-10-31, built in) and testnet set 10 (factory `0xA729C60FCa0Bd0D28a55E22126D3fE412AA41591`).
 
+**Combined recipient (0.22.0+):** two or three of `--buyback`, `--lp`, `--split` on one taxed launch make a V3 token's tax recipient one GangComboSplitter (`combo-v1`): `gang create … --buy-tax 3 --sell-tax 3 --buyback 30 --lp 30 --split self:70,0x…:30` buys back and burns 30% of the recipient's part, adds 30% to the pair as liquidity (LP to 0xdead) and pushes the rest (40%) to the payees, whose `--split` shares are of that rest (here 28% / 12% of the recipient's part); without `--split` the rest goes to the dev, and `--buyback` + `--lp` = 100 takes no payees. **Everything is permanent**: the ratios, payees and shares can never change (unlike a lone `--buyback` / `--lp`, whose ratio the dev can change); a payee can only move its own slot. Any other asset sent to it: the buy-back + LP share to 0xdead, the rest to the payees. `--buyback-to` / `--lp-to` don't apply. One flag alone still uses its own module. `gang combo status|distribute|release|set-payee|bind|chunk` shows and drives it. On BSC mainnet (factory `0xd33C38BE3f8472b3013167830F0638C1704e1DBd`, deployed 2026-10-31, built in) and testnet set 10 (factory `0x52a8f90a92E5C1828b4436a0B99C6b293f7F4CFE`).
+
 ## Install
 
 Node ≥ 18. Also install Binance Agentic Wallet CLI (`baw`):
@@ -112,6 +114,8 @@ gang create … --buy-tax 3 --sell-tax 3 --split self:60,0x…:30,0x…:10 [--de
 gang split status|distribute|release|set-payee|bind --token 0x… [--asset 0x…] [--index <i>] [--to 0x…]  # the split module: payees (slot --index from 0), what waits / is owed; split by hand; a payee moves its own slot
 gang create … --buy-tax 3 --sell-tax 3 --lp 70 [--lp-to 0x…] [--dev-buy …]  # V3: the recipient's part of the tax 70% added to the pool as liquidity (LP to 0xdead), the rest to you (or --lp-to)
 gang lp status|set|set-payee|apply|bind|release|add --token 0x… [--pct 0-100] [--to 0x…] [--slippage 1]  # the LP splitter: ratio, payee, what is set aside, the next chunk; add = one chunk now (anyone)
+gang create … --buy-tax 3 --sell-tax 3 --buyback 30 --lp 30 [--split self:70,0x…:30] [--dev-buy …]  # V3, combined recipient: 30% bought back + burned, 30% added as liquidity, the rest to the payees (shares of the rest; default you). PERMANENT
+gang combo status|distribute|release|set-payee|bind|chunk --token 0x… [--asset 0x…] [--index <i>] [--to 0x…] [--slippage 1]  # the combined recipient: ratios, payees, set aside, owed, the next chunk and the keeper's plan; chunk = one chunk now (anyone)
 gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>                 # 打新: create (dev shares) → bond
 gang execute --request-id <id>
 gang tx --pending                            # trades approved in the Binance App: found by the exact call previewed, then as below
@@ -223,7 +227,7 @@ take MCP servers instead of a shell (Claude Desktop / Code, Cursor, …). Each t
 
 | Tool | Runs |
 |---|---|
-| `gang_help` | this CLI's whole help (every command, every flag) and the full rules (0.17.2+): what an agent with no skill installed reads before a create, launch, bond, buyback, split, lp, mint or withdraw |
+| `gang_help` | this CLI's whole help (every command, every flag) and the full rules (0.17.2+): what an agent with no skill installed reads before a create, launch, bond, buyback, split, lp, combo, mint or withdraw |
 | `gang_preflight`, `gang_hot`, `gang_new`, `gang_near_grad`, `gang_info`, `gang_status`, `gang_portfolio`, `gang_notes`, `gang_agents` | the read commands of the same name (`gang_portfolio`: 0.17.6+) |
 | `gang_tx` | `gang tx --hash …`: decode a tx, publish its queued note; `pending: true` = `gang tx --pending`, the trades approved in the Binance App (no hash needed) |
 | `gang_watch` | `gang watch` until `maxEvents` (default 1) or `timeout` (default 50s, at most 30m): returns `{ events, meta }`, `timedOut: true` when nothing came; call it again to keep waiting |
@@ -288,8 +292,9 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond (creator bonds, `gang bond`). Defaults: mainnet `0xe92d…14E4` (since 2026-10-29, CLI 0.16.2+), testnet `0xd6a8…1086` |
 | `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | GangSplitModuleFactory (`--split`). Defaults: mainnet `0x27e0…067c` (since 2026-10-30, CLI 0.19.0+), testnet set 10 `0x5F7d…567E` |
 | `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | GangLiquiditySplitterFactory (`--lp`). Defaults (CLI 0.20.0+): mainnet `0xE043…C248` (since 2026-10-31), testnet set 10 `0xA729…1591` |
+| `GANG_COMBO_FACTORY` / `GANG_TESTNET_COMBO_FACTORY` | GangComboSplitterFactory (several of `--buyback` / `--lp` / `--split`). Defaults (CLI 0.22.0+): mainnet `0xd33C…1DBd` (since 2026-10-31), testnet set 10 `0x52a8…4CFE` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | GangRouter proxy (native-BNB V3 buys / mints, and every PancakeSwap trade of a graduated token); old name `GANG_ROUTER_TESTNET` still works. Defaults: mainnet `0xE040…79C4`, testnet set 10 `0x6bB6…C9F6` |
 
 ## Version
 
-`0.21.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.22.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
