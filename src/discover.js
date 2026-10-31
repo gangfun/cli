@@ -89,6 +89,8 @@ function gangRow(r, quoteUsdOf) {
     taxed: fair || num(r.buyTaxBps) > 0 || num(r.sellTaxBps) > 0,
     graduated, pair: r.pair || null,
     progressPct: num(r.progressPct), raised, graduationTarget: target, remaining,
+    // a V3 curve's target in BNB raised (2.0: the creator's pick) when gang.fun sends it; graduationTarget is it in the quote
+    ...(r.track === 'v3' && r.gradTargetBnb != null && { graduationTargetBnb: num(r.gradTargetBnb) }),
     remainingUsd: quoteUsd ? usd(remaining * quoteUsd) : null,
     priceUsd: r.priceUsd ?? (quoteUsd ? num(r.priceQuote) * quoteUsd : null), fdvUsd: inUsd('fdvUsd', 'fdvQuote'),
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),

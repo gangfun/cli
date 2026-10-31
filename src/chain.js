@@ -1,7 +1,7 @@
 import { createPublicClient, formatEther, parseEther, encodeFunctionData, decodeEventLog, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
 import { SOFT_ABI, V2_ABI, S_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
-import { kindOf, padNets, rpcTransport } from './gangpad.js'
+import { genOf, padNets, rpcTransport } from './gangpad.js'
 import { mapLimit } from './limit.js'
 
 export const ADDR = {
@@ -49,7 +49,7 @@ export async function resolvePad(token) {
     } catch { /* wrong ABI shape or empty */ }
   }
   // tokens from `gang create` / `gang fair create` live on GangLaunchpad, which these commands don't trade
-  const kind = await kindOf({ pad: padNets('v3').mainnet.pad, read }, token)
+  const { kind } = await genOf({ gens: padNets('v3').mainnet.gens, read }, token)
   if (GANG_POINTER[kind]) throw new Error(`${token} is ${GANG_POINTER[kind](token)}`)
   throw new Error(
     `not a Gang token on known pads (V2/Soft/U/S): ${token}. ` +

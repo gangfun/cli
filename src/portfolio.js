@@ -1,6 +1,6 @@
 /**
  * `gang portfolio`: one wallet's holdings on every gang.fun track (V3, 打新, 铸币飞轮, V2 / Soft / U / S) in one answer, plus its
- * trading record and the bonds on the tokens it launched.
+ * trading record, the bonds on the tokens it launched and the creator fee they keep for it (GangLaunchpad 2.0).
  *
  * Which tokens: gang.fun's index of the wallet's curve and sale trades (/agents/<addr>/positions), which also gives the
  * cost basis, the average price, the realized PnL and the USD price of each quote. Balance, value and what is claimable
@@ -168,18 +168,21 @@ function bondRow(l, b) {
 /**
  * wallet: 0x address. get(path) → JSON or null (discover.js get). statusOf(kind, token, wallet, position) → the
  * `gang status` result of that kind, or throws (legacy: tokenInfo, or { graduated, myBalanceRaw } for a token no known
- * pad has). bondOf(token) → the `gang bond status` view, or throws.
+ * pad has). bondOf(token) → the `gang bond status` view, or throws. creatorFeesOf(wallet) → creatorfee.js creatorFeeList
+ * (the wallet's 2.0 tokens and their creator fee, read on chain), or throws; optional.
  */
-export async function portfolio({ wallet, get, statusOf, bondOf, concurrency = 6 }) {
+export async function portfolio({ wallet, get, statusOf, bondOf, creatorFeesOf, concurrency = 6 }) {
   const w = wallet.toLowerCase()
-  const [profile, positions, launches] = await Promise.all([
+  const [profile, positions, launches, fees] = await Promise.all([
     get(`/agents/${w}`),
     get(`/agents/${w}/positions`),
     get(`/agents/${w}/launches?limit=${MAX_LAUNCHES}`),
+    creatorFeesOf ? creatorFeesOf(wallet).catch((e) => ({ error: e.message })) : null,
   ])
   if (!Array.isArray(positions?.items)) throw new Error('gang API has no positions at /agents/<addr>/positions')
 
   const errors = []
+  if (fees?.error) errors.push({ creatorFee: fees.error })
   const rows = await mapLimit(positions.items, concurrency, async (p) => {
     const kind = KIND[p.track]
     if (!kind) return null
@@ -228,6 +231,7 @@ export async function portfolio({ wallet, get, statusOf, bondOf, concurrency = 6
       launches: l.count ?? null, launchesGraduated: l.graduated ?? null,
     },
     bonds,
+    ...creatorFeeRows(fees),
     ...(launches?.hasMore && { bondsNote: `bonds were looked up on the newest ${MAX_LAUNCHES} launches only` }),
     ...(errors.length && { errors }),
     note: 'Holdings are the tokens gang.fun saw this wallet trade on a curve or sale; balance and value are read on chain now. '
@@ -235,4 +239,20 @@ export async function portfolio({ wallet, get, statusOf, bondOf, concurrency = 6
   }
 }
 
-export const _test = { holdingOf, bondRow, withBond, mapLimit }
+/**
+ * The 2.0 creator fee waiting for this wallet on the tokens it created: { creatorFees: { tokens, totals } } with the
+ * tokens that have some, or nothing when the network has no 2.0 pad (or the read failed: then it is in errors).
+ */
+function creatorFeeRows(fees) {
+  if (!fees?.scanned?.length) return {}
+  const due = fees.tokens.filter((x) => x.claimableRaw !== '0')
+  return {
+    creatorFees: {
+      tokens: due.map((x) => ({ token: x.token, symbol: x.symbol, quote: x.quoteSymbol, claimable: num(x.claimable), padGen: x.padGen, next: `gang creator-fee --token ${x.token} --claim` })),
+      totals: fees.totals.filter((x) => num(x.claimable) > 0),
+      note: 'GangLaunchpad 2.0 keeps 70% of the 1% curve fee of your V3 tokens for you; gang creator-fee lists every one of them',
+    },
+  }
+}
+
+export const _test = { holdingOf, bondRow, withBond, mapLimit, creatorFeeRows }

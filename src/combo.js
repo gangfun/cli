@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, maxUint128, maxUint256, parseUnits, zeroAddress } from 'viem'
-import { padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseNum, revertOf as revertIn, step } from './steps.js'
 import { parseSplitSpec } from './split.js'
@@ -22,14 +22,13 @@ import { parseSplitSpec } from './split.js'
  * `bind`).
  * Gas: a chunk takes ~0.55–0.75M, and a split pushes up to 10 payees, each needing ~365k gas left before it. The CLI never
  * sets a gas limit: the wallet / node estimates it; a lower one reverts PushStarved (nothing moves) or the chunk.
- * Env: GANG_COMBO_FACTORY / GANG_TESTNET_COMBO_FACTORY override the built-in factory addresses.
+ * Env: GANG_COMBO_FACTORY / GANG_TESTNET_COMBO_FACTORY override the create target's factory (gangpad.js).
  */
 
-// BSC 56: deployed 2026-10-31 (pad 0x15CF…4365); a clone reverts NotFactory until the platform's Safe allows the
-// factory on GangHandlerAdmin
-export const MAINNET_COMBO_FACTORY = '0xd33C38BE3f8472b3013167830F0638C1704e1DBd'
-// BSC 97, set 10
-export const TESTNET_COMBO_FACTORY = '0x52a8f90a92E5C1828b4436a0B99C6b293f7F4CFE'
+// one factory per GangLaunchpad generation (it is bound to one pad and its GangHandlerAdmin): the create target's
+// (GANG_GENS in gangpad.js). A clone reverts NotFactory until the platform allows the factory on GangHandlerAdmin
+export const MAINNET_COMBO_FACTORY = GANG_GENS.mainnet[0].comboFactory
+export const TESTNET_COMBO_FACTORY = GANG_GENS.testnet[0].comboFactory
 export const COMBO_TYPE = 'combo-v1'
 export const MAX_PAYEES = 10
 const BPS = 10_000
@@ -161,9 +160,9 @@ export async function simulateCombo(client, from, address, abi, functionName, ar
   }
 }
 
+/** The create target's combo factory (a launch clones its combined recipient there, for the pad the token goes to). */
 export function comboFactoryAddress(testnet) {
-  return (testnet ? process.env.GANG_TESTNET_COMBO_FACTORY || TESTNET_COMBO_FACTORY
-    : process.env.GANG_COMBO_FACTORY || MAINNET_COMBO_FACTORY) || null
+  return gangGens(testnet)[0].comboFactory || null
 }
 
 export const comboNotDeployed = (testnet) => (testnet
@@ -423,6 +422,7 @@ export async function runCombo(sub, { opt, flag, out, fail, summarize }) {
   } else {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
+    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
     try {
       const [creator, quote] = await ctx.read(ctx.pad, PAD_ABI, 'curves', [token])
       if (creator === zeroAddress) throw new Error('not a curve')

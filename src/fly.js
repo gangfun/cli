@@ -192,8 +192,10 @@ export function flyCtx(testnet) {
     { address: env('FLY_PAD') || fly.v1, version: 1 },
   ].filter((p) => p.address)
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
+  // pool trades go through the GangRouter they were accepted with (1.0's), whatever generation GangLaunchpad creates on
+  const router = (net.gens.find((g) => g.gen === '1.0') ?? net).router
   return {
-    ...net, pads, pad: pads[0].address, version: pads[0].version, startBlock: fly.startBlock, client,
+    ...net, router, pads, pad: pads[0].address, version: pads[0].version, startBlock: fly.startBlock, client,
     read: (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args }),
   }
 }
@@ -694,6 +696,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (!name || !symbol) fail('--name and --symbol are required')
     checkMeta()
     if (!(await padOpen(ctx))) fail(closed(ctx, testnet), { pad: ctx.pad, padVersion: ctx.version })
+    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0): a 铸币飞轮 sale fills at its --raise instead, so leave --grad out')
     const presetName = opt('preset', 'j')
     const preset = FLY_PRESETS[presetName]
     if (!preset) fail(`--preset must be ${Object.keys(FLY_PRESETS).join(' or ')}`, { got: presetName })

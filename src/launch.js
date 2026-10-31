@@ -3,13 +3,14 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync,
 import { dirname, join } from 'node:path'
 import { createPublicClient, parseAbi, formatUnits, encodeFunctionData, isAddress, zeroAddress } from 'viem'
 import { DIR } from './notes.js'
-import { padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { creatorFeeShareOf, gradTiersOf, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { bondAddress, BOND_ABI } from './bond.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseIntIn, step } from './steps.js'
 import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, splitterFactoryAddress, splitterOf } from './buyback.js'
 import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFactoryAddress, splitLine, splitNotDeployed, splitOf } from './split.js'
 import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf, simulateLp } from './lp.js'
+import { claimCmd, notThroughModule } from './creatorfee.js'
 import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotDeployed, comboOf, comboParts, parseComboSpec, PERMANENT_NOTE, simulateCombo } from './combo.js'
 
 /**
@@ -45,6 +46,8 @@ import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotD
  * is refused rather than starting over. --buyback-to / --lp-to don't apply (the payees are --split's).
  */
 
+// the dev's recipient modules by flag, as the creator-fee note names them
+const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient' }
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
 const TTL_MS = 7 * 24 * 3600_000
 const PAD_ABI = parseAbi([
@@ -277,6 +280,12 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
+  // --grad (2.0): checked here, before a module clone, since the create that takes it comes later
+  if (kind === 'v3' && flag('grad')) {
+    const tiers = await gradTiersOf({ chainId: net.chainId, pad: net.pad, read })
+    if (!tiers) fail(`--grad: GangLaunchpad ${net.gen ?? net.pad} has no graduation target to pick: leave --grad out`)
+    if (!tiers.includes(Number(opt('grad')))) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') ?? null })
+  }
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
   const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
@@ -286,6 +295,22 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   const withTag = (stage, extra) => (o) => out({ ...o, ...tag(stage, extra) })
 
   let plan = flag('restart') ? null : readPlan(key)
+  // a launch begun on another generation's pad (an older CLI) and not done: its module and token belong to that pad, so
+  // it is never carried on here, nor started again without --restart
+  if (!plan && !flag('restart')) {
+    const old = net.gens.slice(1).map((g) => ({ g, p: readPlan([net.chainId, g.pad, me.toLowerCase(), kind, name, symbol].join('|')) })).find((x) => x.p && !x.p.done)
+    if (old) {
+      const tn = testnet ? ' --testnet' : ''
+      // two pads of one generation (testnet: 2.0 before and after the graduation pick) are told apart by address
+      const same = old.g.gen === net.gen
+      const lbl = (g) => (same ? `${g.gen ?? ''} pad ${g.pad}`.trim() : g.gen ?? g.pad)
+      const [was, now] = [lbl(old.g), lbl(net)]
+      return fail(`this launch began on GangLaunchpad ${was} and is not done; new tokens now go to ${now}`, {
+        ...(old.p.token ? { token: old.p.token, hint: `the token is out on ${was}: finish its steps one by one (gang buy --token ${old.p.token} --amount <quote>${tn}, gang bond post --token ${old.p.token} …${tn}), or add --restart to launch a new token on ${now}` }
+          : { hint: `${old.p.splitter ? `its module ${old.p.splitter} was made for the ${was} pad and does not work with ${now}: ` : ''}add --restart to launch on ${now}` }),
+      })
+    }
+  }
   const base = { kind, name, symbol, me, chainId: net.chainId, pad: net.pad }
 
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
@@ -496,6 +521,8 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
         const after = steps[steps.indexOf(kind === 'v3' ? 'create' : 'create (dev shares included)') + 1]
         return out({
           ...o,
+          // 2.0: the creator fee is the dev's own, not the module's
+          ...(o.creatorFee && mod && { creatorFee: `${o.creatorFee} ${notThroughModule(MODULE_NAMES[mod], { at: plan?.splitter, net: testnet ? ' --testnet' : '', kind: mod })}` }),
           ...tag('create', built ? { next: `${rerun}: it finds the new token and continues with ${after ?? 'nothing'}` } : o.success ? { next: `${rerun}: it then builds the create` } : {}),
         })
       },
@@ -552,6 +579,11 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (lps) done.lp = lps
     const cs = await comboState()
     if (cs) done.combo = cs
+    // 2.0: where the creator fee of a V3 token is claimed (and that a module does not get it)
+    const share = kind === 'v3' ? await creatorFeeShareOf({ chainId: net.chainId, pad: net.pad, read }).catch(() => null) : null
+    if (share != null) {
+      done.creatorFee = `${share / 100}% of the 1% curve fee is kept for you, the creator: ${claimCmd(token, testnet ? ' --testnet' : '')}${plan.splitter ? `. ${notThroughModule(MODULE_NAMES[planMod], { token, at: plan.splitter, net: testnet ? ' --testnet' : '', kind: planMod })}` : ''}`
+    }
     if (!bond) return out({ ...done, note: `launched: gang ${kind} info --token ${token}${testnet ? ' --testnet' : ''}` })
     return runBond('status', { ...stepIo({}), out: (o) => out({ ...done, bondStatus: o, note: `launched and bonded: gang bond status --token ${token}${testnet ? ' --testnet' : ''}` }) })
   }

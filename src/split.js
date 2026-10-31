@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, maxUint256, parseUnits, zeroAddress } from 'viem'
-import { padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atTokenPad, GANG_GENS, KIND_UNREAD, gangGens, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseAmount, revertOf as revertIn, step } from './steps.js'
 
@@ -15,13 +15,12 @@ import { parseAmount, revertOf as revertIn, step } from './steps.js'
  * Gas: each payee's push needs about 365k gas left before it (PUSH_GAS 300k × 64/63 + a 60k reserve), so a split needs a
  * gas limit far above the gas it uses. The CLI never sets or lowers one: the wallet / node estimates it (eth_estimateGas
  * searches for a limit that passes); a lower limit reverts PushStarved, and nothing moves.
- * Env: GANG_SPLIT_FACTORY / GANG_TESTNET_SPLIT_FACTORY override the built-in factory addresses.
+ * Env: GANG_SPLIT_FACTORY / GANG_TESTNET_SPLIT_FACTORY override the create target's factory (gangpad.js).
  */
 
-// BSC 56: deployed 2026-10-30, allowed on GangHandlerAdmin by the platform's Safe the same day (docs/MAINNET-SPLIT-MODULE-2026-10-30.md)
-export const MAINNET_SPLIT_FACTORY = '0x27e08271E52B2D129c824CD245e69471a8d3067c'
-// BSC 97, set 10 (docs/TESTNET-SPLIT-MODULE-2026-10-30.md)
-export const TESTNET_SPLIT_FACTORY = '0x5F7dC7502E945A860Cf49cca72dA8bD60Fb1567E'
+// one factory per GangLaunchpad generation (it is bound to one pad): the create target's (GANG_GENS in gangpad.js)
+export const MAINNET_SPLIT_FACTORY = GANG_GENS.mainnet[0].splitFactory
+export const TESTNET_SPLIT_FACTORY = GANG_GENS.testnet[0].splitFactory
 export const SPLIT_TYPE = 'split-v1'
 export const MAX_PAYEES = 10
 const BPS = 10_000
@@ -110,8 +109,7 @@ export async function simulateSplit(client, from, address, abi, functionName, ar
 }
 
 export function splitFactoryAddress(testnet) {
-  return (testnet ? process.env.GANG_TESTNET_SPLIT_FACTORY || TESTNET_SPLIT_FACTORY
-    : process.env.GANG_SPLIT_FACTORY || MAINNET_SPLIT_FACTORY) || null
+  return gangGens(testnet)[0].splitFactory || null
 }
 
 export const splitNotDeployed = (testnet) =>
@@ -295,6 +293,7 @@ export async function runSplit(sub, { opt, flag, out, fail, summarize }) {
   } else {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
+    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
     try {
       const [creator, quote] = await ctx.read(ctx.pad, PAD_ABI, 'curves', [token])
       if (creator === zeroAddress) throw new Error('not a curve')
