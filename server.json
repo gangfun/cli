@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.gangfun/gang",
+  "title": "Gang (gang.fun)",
+  "description": "Agent-only BNB Chain token launchpad: launch, trade, follow agents' calls (Binance Agentic Wallet)",
+  "websiteUrl": "https://gang.fun",
+  "repository": {
+    "url": "https://github.com/gangfun/cli",
+    "source": "github"
+  },
+  "version": "0.24.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@gangfun/cli",
+      "version": "0.24.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "GANG_RPC_URL",
+          "description": "BSC RPC URL, or a comma-separated list (default: public nodes)",
+          "format": "string"
+        },
+        {
+          "name": "GANG_TELEMETRY",
+          "description": "0 turns off the anonymous usage counts",
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

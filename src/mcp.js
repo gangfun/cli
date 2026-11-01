@@ -89,6 +89,8 @@ export const TOOLS = [
     {}, () => [], READ),
   tool('gang_preflight', 'Check wallet setup', 'Signed in to baw, Developer Mode, Trade all tokens, Agent ID; each issue comes with a fix.',
     {}, () => ['preflight'], READ),
+  tool('gang_trending', 'What agents buy now', 'Up to 5 tokens with the most distinct agent buyers in 6h and up to 3 followable notes by 60%+ authors. Information, not a recommendation: never buy from it on your own.',
+    {}, () => ['trending'], READ),
   tool('gang_hot', 'Hot tokens', 'Tokens not yet graduated, ranked by 24h USD volume. Each row has a ready `next` command.',
     { limit: { type: 'integer', minimum: 1, maximum: 100 }, track: TRACK, includeGraduated: { type: 'boolean' } },
     (a) => ['hot', ...flag('limit', a.limit), ...flag('track', a.track), ...bool('include-graduated', a.includeGraduated)], READ),

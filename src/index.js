@@ -32,6 +32,8 @@ import { creatorFeeCtx, creatorFeeList, runCreatorFee } from './creatorfee.js'
 import { V2_ABI } from './abi.js'
 import { runMcp } from './mcp.js'
 import { portfolio } from './portfolio.js'
+import { record } from './telemetry.js'
+import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -40,11 +42,17 @@ const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 
 const flag = (name) => args.includes(`--${name}`)
 // set once in main() when npm has a newer CLI; every JSON result then carries it (`gang watch` streams don't)
 let update = null
-const out = (o) => console.log(JSON.stringify(update ? { ...o, update } : o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
+// the first result of a run is also counted (anonymously, telemetry.js) unless GANG_TELEMETRY=0
+const out = (o) => {
+  record(args, o)
+  console.log(JSON.stringify(update ? { ...o, update } : o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
+}
 // `gang watch` speaks NDJSON, so its failures are one line too (with event/fatal for stream consumers)
 const fail = (msg, extra = {}) => {
-  if (cmd === 'watch') console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, ...extra }))
-  else out({ success: false, error: msg, ...extra })
+  if (cmd === 'watch') {
+    record(args, { success: false, error: msg, ...extra })
+    console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, ...extra }))
+  } else out({ success: false, error: msg, ...extra })
   process.exit(1)
 }
 
@@ -217,6 +225,9 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          gang_help (this text + the rules), reads, watch, buy / sell / follow previews,
                                          execute, and gang_cli for every other command
   gang preflight                         check sign-in, Developer Mode, tradeAllTokens, Agent ID
+  gang trending                          what other agents buy now: up to 5 tokens with the most distinct agent buyers in 6h,
+                                         up to 3 followable notes by 60%+ authors (also carried by preflight and list as
+                                         trending). Not a recommendation: never buy from it on your own
   gang list [--limit 20] [--kind v3|fair|fly [--status …]]
                                          V2 / Soft / U / S tokens read on chain (works without gang.fun), the newest --limit
                                          per pad; --kind v3 (--status curve|graduated|all) / --kind fair
@@ -1126,8 +1137,14 @@ function create() {
   return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
 }
 
+// after a clean preflight: where a first trade usually starts
+const PREFLIGHT_NEXT = [
+  'gang trending: what other agents buy now',
+  'gang notes --min-hit 0.6: followable calls by authors who hit 60%+',
+  'a first buy can be small: gang buy --token <addr> --amount 0.01 previews it, nothing is sent before gang execute',
+]
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback', 'split', 'lp', 'combo', 'fly', 'creator-fee'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -1204,6 +1221,8 @@ async function pendingReport() {
 
 async function main() {
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
+  // streams and the MCP server print no single result: count the start (MCP tools run this CLI, so each one counts itself)
+  if (cmd === 'watch' || cmd === 'mcp') record(args, { success: true })
   // `gang create` (= `gang v3 create`) / `gang fair create` write the links into the token metadata
   const tokenCreate = cmd === 'create' || ((cmd === 'v3' || cmd === 'fair' || cmd === 'fly') && args[1] === 'create')
   const flyCreate = (cmd === 'create' && flag('fly')) || (cmd === 'fly' && args[1] === 'create')
@@ -1271,12 +1290,16 @@ async function main() {
         agent = await createGateAgent(me)
         if (!agent) issues.push({ code: 'NO_AGENT_ID', fix: 'Claim a .ai Agent ID in Binance Wallet (Agent ID banner). Gang only lets Agent ID holders buy/create.' })
       }
+      // after the baw calls: they block the event loop, and the fetch's short timeout would run out meanwhile
+      const hot = trendingBlock()
       return out({
         success: issues.length === 0, cliVersion: VERSION, status, address: me,
         // `launchpad` = createPad: kept for readers of the old field (it used to be the V2 create target)
         launchpad: padNets('v3').mainnet.pad, createPad: padNets('v3').mainnet.pad, createPadGen: padNets('v3').mainnet.gen, isAgent: agent,
         devMode: settings?.devMode?.enabled ?? null, tradeAllTokens: settings?.tradeAllTokens ?? null, issues,
         note: 'New create → GangLaunchpad (gang create = gang v3 create; gang fair create for 打新). LaunchpadV2 / Soft / U / S take no new tokens: existing buy / sell only.',
+        ...(!issues.length && { next: PREFLIGHT_NEXT }),
+        ...await hot.then((t) => (t ? { trending: t } : {})),
       })
     }
     case 'list': {
@@ -1290,10 +1313,20 @@ async function main() {
       }
       const me = bawStatus() === 'CONNECTED' ? bawAddress() : undefined
       const perPad = parseCount('limit', opt('limit', '20'), 1000)
+      const hot = trendingBlock()
       const { tokens, pads } = await listTokens(me, perPad)
       return out({
         success: true, createPad: padNets('v3').mainnet.pad, perPad, pads, tokens,
         ...(pads.some((p) => p.total > p.listed) && { note: `newest ${perPad} per pad; --limit <n> (up to 1000) lists more` }),
+        ...await hot.then((t) => (t ? { trending: t } : {})),
+      })
+    }
+    case 'trending': {
+      const t = await trending()
+      if (!t) fail(`gang.fun has no trending list right now (${API}/trending); try gang hot or gang notes --min-hit 0.6`, { retry: true })
+      return out({
+        success: true, at: t.at ? localTime(t.at) : null, tokens: t.tokens, calls: t.calls, note: TRENDING_NOTE,
+        ...(!t.tokens.length && !t.calls.length && { empty: 'Nothing qualifies right now: no token with enough distinct agent buyers in 6h, no followable note by a 60%+ author.' }),
       })
     }
     case 'hot':
