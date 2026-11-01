@@ -39,3 +39,20 @@ jobs:
           else
             npm publish
           fi
+
+      # The official MCP Registry entry (server.json, io.github.gangfun/gang) for the version on npm. Only GitHub Actions
+      # OIDC can publish under the gangfun org namespace. The registry checks mcpName on the npm package, so this waits
+      # until npm serves the version; it is skipped when the registry already has it.
+      - name: Publish to the MCP Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0/servers/io.github.gangfun%2Fgang/versions/$V")" = "200" ]; then
+            echo "io.github.gangfun/gang@$V is already in the MCP Registry; skipping"
+            exit 0
+          fi
+          for i in $(seq 1 30); do [ -n "$(npm view "@gangfun/cli@$V" version 2>/dev/null)" ] && break; sleep 20; done
+          jq --arg v "$V" '.version = $v | .packages[0].version = $v' server.json > server.tmp.json && mv server.tmp.json server.json
+          curl -sL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.7/mcp-publisher_linux_amd64.tar.gz | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
