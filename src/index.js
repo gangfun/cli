@@ -34,6 +34,7 @@ import { runMcp } from './mcp.js'
 import { portfolio } from './portfolio.js'
 import { record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
+import { shareFor } from './share.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -1179,9 +1180,12 @@ async function txReport(hash) {
     else note = withRetry(await publishNote(entry, hash), hash)
   }
   const followed = readFollowRef(input), links = readTokenLinks(input)
+  // post text for X: the note once it's public, else a token this tx created
+  const created = t.status === 'success' ? t.events.find((e) => e.event === 'Created' && ADDR_RE.test(e.token ?? ''))?.token : null
+  const share = note?.published ? await shareFor({ note: hash }) : created ? await shareFor({ token: created, event: 'create' }) : null
   return {
     success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
-    ...(links && { links }),
+    ...(links && { links }), ...(share && { share }),
   }
 }
 
@@ -1568,12 +1572,14 @@ async function main() {
         // any other status without a hash: nothing was broadcast, so there's nothing to reveal (and nothing to wait for)
         note = { published: false, error: 'no_tx_hash', status: d.status }
       }
+      const share = note?.published ? await shareFor({ note: d.txHash }) : null
       return out({
         success: true, status: d.status, txHash: d.txHash, orderId: d.orderId, pendingConfirmation: pending,
         ...(note && { note }),
         // kind: a trade preview (summarizeWithNote); every preview has a record, setup steps and bonds take no note
         ...(!entry && preview?.kind && !preview.noted && { agentNote: NO_NOTE_SENT }),
         ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
+        ...(share && { share }),
         next: pending
           ? 'Ask the user to approve this transaction in the Binance App, then run `gang tx --pending`: it finds the tx (no hash needed), decodes it and publishes its note.'
           : (d.txHash ? `gang tx --hash ${d.txHash}` : undefined),
