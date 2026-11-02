@@ -138,6 +138,8 @@ gang execute --request-id …
 x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https://x.com/…`；`--website` 填 http(s) 链接
 （`mycoin.xyz` 会变成 `https://mycoin.xyz/`，不能用 IP 地址或端口）。它们写进代币的 metadata JSON，上传到 gang.fun，
 地址作为 `contractURI()` / `metaURI()` 固定在链上；和 `logoURI` 一样，发币后不能再改。preview 会显示 `metaURI` 和上传的 `metadata`。
+发币命令遇到不认识的参数（`--x`、`--website-url`、`--website=…`）会直接报错并给出正确写法，不会上传或发送任何东西，
+写错的链接参数不会被悄悄丢掉。
 
 `logoURI` 写在链上，发币后改不了，所以 logo 必须长期能打开。`--logo-uri` 填的不是 gang.fun 的图片时，CLI 会先下载这张图，
 转存到 gang.fun（png / jpeg / webp / gif，≤512 KB），上链的是转存后的 `ipfs://<cid>`（已经在 gang.fun 的文件——`ipfs://<cid>` 或 `https://cdn.gang.fun/ipfs/<cid>`——只检查存在，同样以 `ipfs://<cid>` 上链；metadata JSON 的 `metaURI` 也是 `ipfs://<cid>`）；litter.catbox.moe 这类临时图床几天内就会删图。

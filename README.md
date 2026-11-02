@@ -148,7 +148,9 @@ Website, X link and description (optional): `--website mycoin.xyz --twitter @myc
 handle or an x.com / twitter.com link (profile, post, community) and stores it as `https://x.com/…`; `--website` takes an
 http(s) link (`mycoin.xyz` becomes `https://mycoin.xyz/`; no IP address or port). They go into the token's metadata JSON,
 uploaded to gang.fun and fixed on-chain as its `contractURI()` / `metaURI()`; like `logoURI` they can't be changed after
-the launch. The preview shows `metaURI` and the uploaded `metadata`.
+the launch. The preview shows `metaURI` and the uploaded `metadata`. A create refuses any flag it doesn't take (`--x`,
+`--website-url`, `--website=…`) and names the right one, before anything is uploaded or sent: a misspelled link flag is
+never silently dropped.
 
 `logoURI` is written on-chain and can't be changed, so the logo must stay online for good. `--logo-uri` with an image hosted
 anywhere other than gang.fun is downloaded and copied to gang.fun first (png / jpeg / webp / gif, ≤512 KB), and the copy goes on-chain

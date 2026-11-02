@@ -36,6 +36,7 @@ import { portfolio } from './portfolio.js'
 import { record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { shareFor } from './share.js'
+import { CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -156,7 +157,6 @@ const parseNote = () => {
   try { return makeNote(raw, opt('conf'), opt('reveal-after')) } catch (e) { fail(e.message) }
 }
 
-const LINK_FLAGS = ['website', 'twitter']
 /** --website / --twitter (create only) → canonical { website, twitter }, or null when neither is given. */
 const parseLinks = () => {
   for (const name of LINK_FLAGS) {
@@ -351,7 +351,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          --twitter / --description and the logo go into the token's metadata JSON (uploaded to
                                          gang.fun; the token's contractURI / metaURI, permanent). --logo-uri images are copied
                                          to gang.fun first (other hosts expire); --keep-logo-uri puts a permanent URL (e.g.
-                                         ipfs://) on-chain as is; gang.fun files always go on as ipfs://<cid>
+                                         ipfs://) on-chain as is; gang.fun files always go on as ipfs://<cid>. A flag no create
+                                         takes (--x, --website-url, --website=…) is refused before any upload, never ignored
   gang create --fly --name <n> --symbol <s> [--preset j|steady] [--raise 3-50] [--quota 5-100] [--invite-bonus 0-3]
               [--max-per-tx 1-10] [--hold 60-90] [--mint-fee 1-3] [--exit-fee 1-2] [--dev-cut 0-10] [--buy-pct 0-50]
               [--sell-tax 1-2] [--launch-delay 0-300] [--window 300-1800] [--cap-mul 1-2] [--post-mint | --no-post-mint]
@@ -1137,9 +1138,6 @@ function alias(kind, sub) {
   return { ...io, out: (o) => out(o && typeof o === 'object' ? { ...o, useInstead: `${use} (same flags)` } : o) }
 }
 
-// gang create: V3 by default, a 打新 sale with --fair; a setting of the other kind is refused, not ignored
-const V3_CREATE_FLAGS = ['buy-tax', 'sell-tax', 'dividend', 'recipient']
-const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee', 'shares']
 // 铸币飞轮 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
 const FLY_ONLY_FLAGS = FLY_CREATE_FLAGS.filter((f) => !['raise', 'hold', 'mint-fee', 'exit-fee', 'sell-tax'].includes(f))
 const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter, combined recipient or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
@@ -1268,6 +1266,9 @@ async function main() {
   // `gang create` (= `gang v3 create`) / `gang fair create` write the links into the token metadata
   const tokenCreate = cmd === 'create' || ((cmd === 'v3' || cmd === 'fair' || cmd === 'fly') && args[1] === 'create')
   const flyCreate = (cmd === 'create' && flag('fly')) || (cmd === 'fly' && args[1] === 'create')
+  // a flag no create reads is refused first, before any check that reads the others (flags.js)
+  const unknown = tokenCreate && unknownFlagError(args, CREATE_ACCEPTS, cmd === 'create' ? 'gang create' : `gang ${cmd} create`)
+  if (unknown) fail(unknown)
   if (flyCreate) {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${FLY_NO_BOND}`)
