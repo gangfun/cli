@@ -60,6 +60,7 @@ export const RULES = [
 const TRACK = { type: 'string', enum: ['all', 'v3', 'fair', 'fly', 'v2', 'soft'], description: 'Launchpad track (default all; fly = Mint Flywheel)' }
 const ADDR = { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' }
 const HASH = { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$' }
+const REF = { type: 'string', description: 'Who invited this wallet (0x address or .ai handle), only one the user gave: counts on its first Gang trade' }
 // one plain type: some MCP hosts (Gemini function calling, OpenAI strict mode) reject a schema with a union type. A number
 // sent anyway is turned into a string before the check (coerce)
 const AMOUNT = { type: 'string', pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'A plain decimal, e.g. "0.05"' }
@@ -144,14 +145,14 @@ export const TOOLS = [
   tool('gang_buy', 'Preview a buy',
     'Build a buy preview (curve, or the PancakeSwap pool once graduated). Nothing is sent: show the preview, and on the user\'s yes call gang_execute with its requestId. amount = what to pay, in the token\'s quote.',
     {
-      token: ADDR, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, follow: { ...HASH, description: 'Note tx to follow' }, ...NOTE,
+      token: ADDR, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, follow: { ...HASH, description: 'Note tx to follow' }, ...NOTE, ref: REF,
       useWbnb: { type: 'boolean', description: 'Curve buy of a WBNB-quoted token: pay WBNB instead of BNB' },
       useQuote: { type: 'boolean', description: 'Pool buy of a WBNB-quoted token: pay WBNB' },
       payBnb: { type: 'boolean', description: 'Pool buy of a token quoted in another token: pay BNB (BNB -> quote -> token)' },
       testnet: TESTNET,
     },
     (a) => ['buy', '--token', a.token, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...flag('follow', a.follow),
-      ...noteFlags(a), ...bool('use-wbnb', a.useWbnb), ...bool('use-quote', a.useQuote), ...bool('pay-bnb', a.payBnb),
+      ...noteFlags(a), ...flag('ref', a.ref), ...bool('use-wbnb', a.useWbnb), ...bool('use-quote', a.useQuote), ...bool('pay-bnb', a.payBnb),
       ...bool('testnet', a.testnet)], PREVIEW, ['token', 'amount']),
   tool('gang_sell', 'Preview a sell',
     'Build a sell preview: amount (tokens) or all. Nothing is sent before gang_execute. breakBond / confirmOut only with the user\'s explicit yes after the warning in a refused preview; settleFirst settles an expired bond before the sell (asks first, settles an hour later).',
@@ -164,8 +165,8 @@ export const TOOLS = [
       ...bool('settle-first', a.settleFirst), ...bool('testnet', a.testnet)], PREVIEW, ['token']),
   tool('gang_follow', 'Preview a follow',
     "Build a buy of the token another agent's note is about, marked on-chain as following it. Show the note, its author's record and until when it counts; nothing is sent before gang_execute.",
-    { noteTx: HASH, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, ...NOTE, useWbnb: { type: 'boolean', description: 'Pay WBNB instead of BNB' } },
-    (a) => ['follow', a.noteTx, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...noteFlags(a), ...bool('use-wbnb', a.useWbnb)],
+    { noteTx: HASH, amount: AMOUNT, slippage: { type: 'number', minimum: 0, maximum: 50 }, ...NOTE, ref: REF, useWbnb: { type: 'boolean', description: 'Pay WBNB instead of BNB' } },
+    (a) => ['follow', a.noteTx, '--amount', String(a.amount), ...flag('slippage', a.slippage), ...noteFlags(a), ...flag('ref', a.ref), ...bool('use-wbnb', a.useWbnb)],
     PREVIEW, ['noteTx', 'amount']),
   tool('gang_execute', 'Send a previewed transaction',
     'Broadcast a preview by its requestId. Only after the user said yes to that exact preview (or explicitly skipped confirmation). Publishes its note. If this call times out or is cancelled it still runs: never retry it; check gang_status / the wallet history first.',

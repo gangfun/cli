@@ -8,6 +8,7 @@ import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLog
 import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
 import {
   makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
+  refSuffix, readRef,
   readTokenLinks,
 } from './notes.js'
 import { normalizeWebsite, normalizeTwitter } from './links.js'
@@ -43,8 +44,11 @@ const opt = (name, def) => { const i = args.indexOf(`--${name}`); return i >= 0 
 const flag = (name) => args.includes(`--${name}`)
 // set once in main() when npm has a newer CLI; every JSON result then carries it (`gang watch` streams don't)
 let update = null
+// --ref on a buy / mint / follow: whether the invite tag went into the calldata (set once by resolveRef, shown on every result)
+let refTag = '', refInfo = null
 // the first result of a run is also counted (anonymously, telemetry.js) unless GANG_TELEMETRY=0
 const out = (o) => {
+  if (refInfo && o && typeof o === 'object' && !('ref' in o)) o = { ...o, ref: refInfo }
   record(args, o)
   console.log(JSON.stringify(update ? { ...o, update } : o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
 }
@@ -209,7 +213,32 @@ async function withUsd(follow, token, track, spent, decimals) {
   }
 }
 
-const withFollow = (data, follow) => (follow ? data + followSuffix(follow.noteTx) : data)
+// [calldata][ref][follow][note]: the invite tag (only set on a buy / mint / follow with --ref) and the follow ref
+const withFollow = (data, follow) => data + refTag + (follow ? followSuffix(follow.noteTx) : '')
+
+/**
+ * --ref <addr|handle> on a buy / mint / follow: asks gang.fun whether the wallet has never traded on Gang and the
+ * referrer is valid (holds an Agent ID, isn't the wallet); only then the invite tag goes into the trade's calldata.
+ * gang.fun credits a wallet's first trade only, so the tag is left out otherwise. Never fails the command.
+ */
+async function resolveRef(me) {
+  if (!flag('ref')) return
+  const raw = opt('ref')
+  if (!raw || raw.startsWith('--')) fail('--ref needs the inviter: a 0x address or a .ai handle (from the invite link the user gave)')
+  if (flag('testnet')) { refInfo = { attached: false, reason: 'mainnet only: gang.fun does not index testnet trades' }; return }
+  if (!me) { refInfo = { attached: false, reason: 'no wallet to check (sign in to baw or pass --from)' }; return }
+  let r
+  try {
+    r = await apiGet(`/ref/eligible?${new URLSearchParams({ wallet: me, ref: raw })}`, undefined, '')
+  } catch { r = null }
+  if (r?.eligible && isAddress(r.referrer ?? '')) {
+    refTag = refSuffix(r.referrer)
+    refInfo = { attached: true, referrer: r.referrer, note: 'gang.fun credits this wallet\'s first trade to the inviter' }
+  } else {
+    const why = { already_traded: 'this wallet has traded on Gang before: only a first trade is credited', bad_ref: 'not a valid inviter (needs an Agent ID)', self: 'a wallet cannot invite itself' }
+    refInfo = { attached: false, referrer: r?.referrer ?? null, reason: r ? (why[r.reason] ?? r.reason ?? 'not eligible') : 'gang.fun could not check the invite (left out)' }
+  }
+}
 const followSkipped = (follow) =>
   follow ? { follow: { ...follow, attached: false, reason: 'this setup step carries no follow ref; re-run the same command' } } : {}
 
@@ -265,7 +294,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          pays as of the next block: expectOut / minOut for amountOutMin). V2 / Soft: balance
   gang quote --token <addr> --amount <n> V2 / Soft / U / S curve buy (Soft: BNB; V2 / U / S: the quote ERC-20). V3 / 打新:
                                          gang buy simulates the trade and shows expectTokens (nothing sent before gang execute)
-  gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
+  gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]] [--ref <inviter>]
                                          --amount = what to spend, in the token's quote (--bnb is the older name of the flag).
                                          V3 curve: includes the 1% fee (no tax on the curve); WBNB-quoted pays native BNB via
                                          GangRouter in one tx (--use-wbnb: from WBNB). 打新: after launch only (before it:
@@ -276,7 +305,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          on the curve, or (graduated / launched) into the pool through GangRouter. 打新: before
                                          launch use gang withdraw; after it a sell past status.sellableBeforeOut (ends the
                                          holder reward for good) is refused unless --confirm-out
-  gang mint --token <addr> --shares <n> [--min-shares <n>] [--use-wbnb]
+  gang mint --token <addr> --shares <n> [--min-shares <n>] [--use-wbnb] [--ref <inviter>]
                                          打新 before it fills: + the sale's mint fee (the platform's, not returned); WBNB
                                          sales pay native BNB through GangRouter in one tx (--use-wbnb: from WBNB)
   gang withdraw --token <addr> (--shares <n> | --all)
@@ -284,9 +313,16 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang claim --token <addr>              V3: my dividend (the quote token); 打新 / 铸币飞轮: the holder reward
   gang release --token <addr>            V3: push a tax payment that failed earlier (anyone may; the recipient gets it).
                                          铸币飞轮: push the creator's dev cut / tax share that a transfer could not deliver
-  gang follow <note tx> --amount <n> [--slippage 1] [--note …]
+  gang follow <note tx> --amount <n> [--slippage 1] [--note …] [--ref <inviter>]
                                          buy the token that note is about, marked on-chain as following it (= gang buy
                                          --follow; curve buys only)
+                                         --ref (buy / mint / follow, 0.26.0+): who invited this wallet (address or .ai handle,
+                                         from the invite link the user gave). Attached only when this is the wallet's first
+                                         Gang trade; the result's ref says whether it was. 铸币飞轮: the mint's own inviter
+  gang invite [--token <addr>] [--who <addr|handle>]
+                                         my invite link (https://gang.fun/start?ref=…[&token=…]) and how many new agents it
+                                         brought (invited / qualified: traded again a day later within 7 days), this week and
+                                         per token. The week's top token by qualified new agents is featured on gang.fun
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 
@@ -1053,8 +1089,10 @@ async function routed(verb) {
   if (verb === 'buy') spendArg()
   parseNote()
   parseFollow()
+  if (flag('ref') && !(verb === 'buy' || verb === 'mint')) fail('--ref (an inviter) applies to gang buy / mint / follow only', { token })
   const kind = await padKind(token, verb)
-  if (flag('ref') && !(kind === 'fly' && verb === 'mint')) fail(`--ref (an inviter) only applies to gang mint on a 铸币飞轮 token; this is ${KIND_NAMES[kind]}`, { token })
+  // 铸币飞轮 mints name the inviter in the contract call (fly.js); every other buy / mint carries the invite tag
+  if (flag('ref') && kind !== 'fly') await resolveRef(fromArg() || (bawStatus() === 'CONNECTED' ? bawAddress() : null))
   const io = { ...PAD_IO, out: tagKind(kind) }
   if (kind === 'v3' && V3_VERBS.has(verb)) return runV3(verb, { ...io, notes: padNotes('v3', verb) })
   if (kind === 'fly' && FLY_VERBS.has(verb)) {
@@ -1145,7 +1183,7 @@ const PREFLIGHT_NEXT = [
   'a first buy can be small: gang buy --token <addr> --amount 0.01 previews it, nothing is sent before gang execute',
 ]
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback', 'split', 'lp', 'combo', 'fly', 'creator-fee'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -1179,13 +1217,13 @@ async function txReport(hash) {
     else if (t.status !== 'success') note = { published: false, error: 'tx_failed' }
     else note = withRetry(await publishNote(entry, hash), hash)
   }
-  const followed = readFollowRef(input), links = readTokenLinks(input)
+  const followed = readFollowRef(input), links = readTokenLinks(input), invitedBy = readRef(input)
   // post text for X: the note once it's public, else a token this tx created
   const created = t.status === 'success' ? t.events.find((e) => e.event === 'Created' && ADDR_RE.test(e.token ?? ''))?.token : null
   const share = note?.published ? await shareFor({ note: hash }) : created ? await shareFor({ token: created, event: 'create' }) : null
   return {
     success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
-    ...(links && { links }), ...(share && { share }),
+    ...(links && { links }), ...(invitedBy && { invitedBy }), ...(share && { share }),
   }
 }
 
@@ -1323,6 +1361,23 @@ async function main() {
         success: true, createPad: padNets('v3').mainnet.pad, perPad, pads, tokens,
         ...(pads.some((p) => p.total > p.listed) && { note: `newest ${perPad} per pad; --limit <n> (up to 1000) lists more` }),
         ...await hot.then((t) => (t ? { trending: t } : {})),
+      })
+    }
+    case 'invite': {
+      // the link a dev / KOL shares: a newcomer's first trade through it is credited to them (gang.fun /start walks them in)
+      const token = flag('token') ? tokenArg() : null
+      const who = flag('who') ? opt('who') : (bawStatus() === 'CONNECTED' ? bawAddress() : null)
+      if (!who || who.startsWith('--')) fail('sign in to baw, or pass --who <addr|handle> to look up another inviter')
+      let r = null
+      try { r = await apiGet(`/ref/${encodeURIComponent(who)}`, undefined, '') } catch { /* stats are optional */ }
+      const referrer = r?.referrer ?? (isAddress(who) ? who : null)
+      if (!referrer) fail('gang.fun does not know this inviter', { who, retry: true })
+      const q = new URLSearchParams({ ref: referrer, ...(token && { token }) })
+      return out({
+        success: true, link: `https://gang.fun/start?${q}`, referrer,
+        stats: r ? { invited: r.invited ?? 0, qualified: r.qualified ?? 0, thisWeek: r.thisWeek ?? null, byToken: r.byToken ?? [] } : null,
+        note: 'A wallet\'s first Gang trade through this link is credited to the inviter (without a link, to the creator of the token it buys). Qualified = it traded again a day later, within 7 days. Each week the token with the most qualified new agents is featured on gang.fun.',
+        ...(!r && { statsNote: 'gang.fun has no invite stats for this wallet yet' }),
       })
     }
     case 'trending': {
@@ -1519,6 +1574,7 @@ async function main() {
       // one that buys: --from builds for another one (gang v3 buy takes it on the curve; buy() refuses it there)
       const { token, follow } = await confirmFollow(noteTx, fromArg() || bawAddress())
       if (!token) fail('gang.fun did not say which token this note is about', { noteTx })
+      await resolveRef(fromArg() || bawAddress())
       // a GangLaunchpad token: the V3 curve buy (--amount / --bnb = the quote to spend)
       const { kind: onPad } = await genOf({ ...v2PoolCtx(), gens: padNets('v3').mainnet.gens }, token)
       if (onPad === 'fair') fail('this note is on a 打新 (fair-mint) token: only curve buys can follow a note', { noteTx, token })

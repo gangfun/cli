@@ -5,6 +5,7 @@
  *   v2 suffix = "gang" 0x02 uint32be(revealAfter) keccak256(UTF-8("gang-note:v2\n" salt "\n" conf "\n" revealAfter "\n" text))  (41 bytes)
  *   follow ref = "gang" 0x03 followed note tx hash (37 bytes), right before the note suffix (or last without one)
  *   token links (create) = "gang" 0x04 UTF-8(website "\n" twitter) uint16be(length), same place (see readTokenLinks; written by LaunchpadV2 creates before CLI 0.10)
+ *   ref = "gang" 0x05 referrer address (25 bytes), right before the follow ref: [calldata][ref][follow][note] (see readRef)
  * The text is sent after the tx lands (POST /api/notes), so anyone can check it was written before the trade.
  * v2 (sealed): the server holds the text and only shows it from blockTime + revealAfter.
  * Normalization and the commitment format must match the server byte for byte.
@@ -21,7 +22,8 @@ import { websiteError, twitterError } from './links.js'
 export const MAGIC = '67616e6701' // "gang" + version 1
 export const MAGIC_V2 = '67616e6702' // "gang" + version 2 (sealed)
 export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref
-export const LINKS_MAGIC = '67616e6704' // "gang" + 04: token links (01–04 are never reused)
+export const LINKS_MAGIC = '67616e6704' // "gang" + 04: token links
+export const REF_MAGIC = '67616e6705' // "gang" + 05: who invited this wallet (01–05 are never reused)
 const MAX_CP = 280
 const REVEAL_MIN_H = 1, REVEAL_MAX_H = 72
 const LINK = /https?:\/\/|www\.|t\.me\//i
@@ -118,6 +120,31 @@ export function readFollowRef(input) {
   const f = s.slice(Math.max(0, end - 74), end)
   const tx = `0x${f.slice(10)}`
   return f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(tx) ? tx : null
+}
+
+/**
+ * Invite reference (same code as the server's indexer): the wallet's first Gang trade names who invited it.
+ * "gang" 05 referrer (25 bytes), lower-case hex without 0x, right before the follow ref and the note suffix, if any:
+ * [calldata][ref][follow][note]. gang.fun only counts it on a wallet's first trade.
+ */
+export function refSuffix(referrer) {
+  const a = String(referrer || '').toLowerCase()
+  if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error('bad referrer')
+  return `${REF_MAGIC}${a.slice(2)}`
+}
+
+/**
+ * The referrer a tx input names, or null. Only one place counts: the 25 bytes right before the follow ref (when the
+ * input has one) and the note suffix, so one input names at most one referrer.
+ */
+export function readRef(input) {
+  const s = String(input || '').toLowerCase()
+  const c = readNoteCommit(s)
+  let end = s.length - (c ? (c.version === 2 ? 82 : 74) : 0)
+  const f = s.slice(Math.max(0, end - 74), end)
+  if (f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(`0x${f.slice(10)}`)) end -= 74
+  const r = s.slice(Math.max(0, end - 50), end)
+  return r.length === 50 && r.startsWith(REF_MAGIC) && /^[0-9a-f]{40}$/.test(r.slice(10)) ? `0x${r.slice(10)}` : null
 }
 
 /*
