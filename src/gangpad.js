@@ -7,7 +7,7 @@ import { bsc, bscTestnet } from 'viem/chains'
  * on the pad says which kind a token is (0 = not this pad's, 1 = V3 curve, 2 = 打新). The two `create` overloads keep
  * their old selectors, so each command keeps its own ABI fragment.
  *
- * Each network may have several generations of this pad (GANG_GENS: 1.0, 2.0); kindOf on each tells which one has a token.
+ * Each network may have several generations of this pad (GANG_GENS: 1.0, 2.0, 2.0 金库版); kindOf on each tells which one has a token.
  *
  * Env (new name first; the old per-command names still work as aliases). The contracts set the create target (gangGens):
  *   mainnet: GANG_PAD (aliases GANG_V3_PAD / GANG_FAIR_PAD), GANG_ROUTER, GANG_BOND, GANG_SPLITTER_FACTORY,
@@ -20,10 +20,17 @@ import { bsc, bscTestnet } from 'viem/chains'
  */
 
 /**
- * GangLaunchpad generations on each network, newest first. A create goes to the first; a token already out stays on the
- * pad that created it and is served with that generation's GangRouter, GangBond and module factories (each of them is
- * bound to one pad). 2.0 (docs/SPEC-CURVE-CREATOR-FEE-2026-10-31.md) has the same V3 curves and 打新 sales, and keeps
- * 70% of the 1% curve fee for the token's creator (creatorFeeOf / claimCreatorFee); a 1.0 pad has neither.
+ * 2.0 金库版 (GangVaultLaunchpad): 2.0 whose only create is createWithVault, binding the token to a listed lock vault.
+ * Listed last on each network, so it is never the target of a plain create; gang create --vault picks it.
+ */
+export const VAULT_GEN = '2.0-vault'
+
+/**
+ * GangLaunchpad generations on each network, newest first (2.0 金库版 aside: always last, see VAULT_GEN). A create goes to
+ * the first; a token already out stays on the pad that created it and is served with that generation's GangRouter,
+ * GangBond and module factories (each of them is bound to one pad). 2.0 (docs/SPEC-CURVE-CREATOR-FEE-2026-10-31.md) has
+ * the same V3 curves and 打新 sales, and keeps 70% of the 1% curve fee for the token's creator (creatorFeeOf /
+ * claimCreatorFee); a 1.0 pad has neither.
  */
 export const GANG_GENS = {
   mainnet: [
@@ -47,6 +54,14 @@ export const GANG_GENS = {
       splitFactory: '0x27e08271E52B2D129c824CD245e69471a8d3067c', lpFactory: '0xE0436867dAFcf42Ee1418083251a9B8B61F0C248',
       // combo-v1, 2026-10-31 (the Safe allowed it on GangHandlerAdmin at block 130811492)
       comboFactory: '0xd33C38BE3f8472b3013167830F0638C1704e1DBd',
+    },
+    // 2026-11-02, pad block 131081707: 2.0 金库版 (GangVaultLaunchpad; docs/MAINNET-GANG-VAULT-LAUNCHPAD-2026-11-02.md).
+    // The 2.0 curves, each bound at create to one vault the platform listed (createWithVault, by the wallet the Safe
+    // named for that vault: gang create --vault). Never the create target of a plain create. Its own GangRouter; no
+    // GangBond and no module factories (none is wired to it)
+    {
+      gen: VAULT_GEN, pad: '0xE90851A90C6278E3d6e4C24320101f8B13D90A11', router: '0xAcd4944A4090c13d9DACAe60f3019cef9d9bB1Ad',
+      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null,
     },
   ],
   testnet: [
@@ -75,9 +90,14 @@ export const GANG_GENS = {
       splitFactory: '0x5F7dC7502E945A860Cf49cca72dA8bD60Fb1567E', lpFactory: '0xA729C60FCa0Bd0D28a55E22126D3fE412AA41591',
       comboFactory: '0x52a8f90a92E5C1828b4436a0B99C6b293f7F4CFE',
     },
+    // 2026-11-01, pad block 140215635: 2.0 金库版, testnet v3 (docs/TESTNET-GANG-VAULT-LAUNCHPAD-2026-11-01.md)
+    {
+      gen: VAULT_GEN, pad: '0x9108e7b85e69060A5E626A04Ce6DEf323071C8a9', router: '0x9bF3E197a6719Af856a7c82d23CABFdBcc184f69',
+      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null,
+    },
   ],
 }
-// what a generation brings to a ctx (gen: '1.0' | '2.0', null for a pad named by the env that this CLI does not know)
+// what a generation brings to a ctx (gen: '1.0' | '2.0' | VAULT_GEN, null for a pad named by the env that this CLI does not know)
 const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory']
 // the env names of each field, per network (new name first; the old per-command names still work as aliases)
 const GEN_ENV = {
@@ -175,6 +195,9 @@ export function gangGens(testnet) {
   }
   return [first, ...list.filter((g) => !sameAddr(g.pad, first.pad))].map(genFields)
 }
+
+/** The 2.0 金库版 generation of `gens` (a ctx's gens or gangGens(testnet)), or null when the network has none. */
+export const vaultGenOf = (gens) => gens.find((g) => g.gen === VAULT_GEN) ?? null
 
 /** A generation's contracts as ctx fields (missing ones null). */
 export const genFields = (g) => Object.fromEntries(GEN_FIELDS.map((k) => [k, g?.[k] ?? null]))

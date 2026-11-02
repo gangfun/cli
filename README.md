@@ -18,6 +18,8 @@ Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve bu
 
 **GangLaunchpad 2.0, the creator fee and the graduation target (0.23.0+):** 2.0 is a new generation of the same pad (the same V3 curves and 打新 sales); of the 1% fee on every V3 curve buy and sell, 70% is kept on the pad for the token's creator, who claims it any time, before or after graduation: `gang creator-fee` lists a creator's 2.0 tokens and what each holds, `gang creator-fee --token <addr> --claim [--to <addr>]` claims it. It is the creator's own, never the tax recipient's or a buy-back / split / LP module's; 1.0 tokens and 打新 sales have none. 2.0 also lets the creator pick the V3 graduation target: `gang create --grad 6|9|12|15` (BNB raised, default 9; market cap at graduation ≈ 5×); `gang info` / `gang status` show each token's `graduationTargetBnb`. New tokens go to the newest generation built in for the network (`gang preflight` → `createPadGen`); a token keeps trading on its own generation's pad, GangRouter, GangBond and module factories, found by asking each pad's `kindOf`. On the BSC testnet 2.0 is live and the create target (pad `0xb14d415f70D7F99f0D93Bd3BF76e0D6b38b53B3E`, GangRouter `0x5a4FA2D91638a305EdF027894753c943f095dDAA`; the first testnet 2.0, `0x6381…39be`, no longer creates, and its tokens keep trading and claiming there). On BSC mainnet 2.0 is live and the create target since 2026-10-31 (pad `0x770331a9accdb53ACb4a45B6c5B7D151fADCe557`, GangRouter `0xa83209d6bfC2B220cD86410cCDDC71FEb354844a`); 1.0 tokens keep trading on 1.0 (pad `0x15CF…4365`).
 
+**2.0 金库版: tokens bound to a lock vault (0.27.0+):** a third pad next to 1.0 and 2.0 (GangVaultLaunchpad: the same 2.0 V3 curves, creator fee and `--grad`; no 打新). Each of its tokens is bound at create, for good, to one vault contract the platform listed, and only the wallet the platform named for that vault may create it, one token per naming: `gang create --vault <vault> --name <n> --symbol <s> [--buy-tax … --sell-tax …] [--grad …]` from that wallet. Until graduation the vault locks holders' tokens and releases them only through the pad, for the wallet that sends the tx and holds an Agent ID; locked tokens still count in the holder's 1% cap (`gang status` → `lockedInVault`, `gang info` → `vault`). After graduation it is a plain token. Buys and sells work as on 2.0 (`gang buy` / `gang sell` find the pad through `kindOf`). The pad has no GangBond and no buy-back / split / LP / combined module, so a `--vault` create takes none of `--dev-buy` / `--bond` / `--buyback` / `--split` / `--lp`: buy with `gang buy` once the create lands. A plain `gang create` never goes to this pad. Mainnet pad `0xE90851A90C6278E3d6e4C24320101f8B13D90A11` (GangRouter `0xAcd4944A4090c13d9DACAe60f3019cef9d9bB1Ad`); testnet `0x9108e7b85e69060A5E626A04Ce6DEf323071C8a9` (GangRouter `0x9bF3E197a6719Af856a7c82d23CABFdBcc184f69`).
+
 ## Install
 
 Node ≥ 18. Also install Binance Agentic Wallet CLI (`baw`):
@@ -81,7 +83,8 @@ gang release --token <addr>                  # V3: push a tax payment that faile
 gang follow <note tx> --amount <n> [--slippage 1] [--note …]   # buy the token a note is about, as a follow of it
 gang upload-logo (--file ./avatar.png | --url <image URL>)   # → ipfs://<cid> (view at https://cdn.gang.fun/ipfs/<cid>)
 # create: GangLaunchpad. A V3 token (own buy / sell tax 1–5%, pool only, paid to the creator itself or a whitelisted
-# recipient, in the quote; untaxed without --buy-tax / --sell-tax), or with --fair a 打新 (fair mint) sale on the same pad
+# recipient, in the quote; untaxed without --buy-tax / --sell-tax), or with --fair a 打新 (fair mint) sale on the same pad.
+# --vault <vault>: on the 2.0 金库版 pad, bound to that listed vault, from the wallet gang named for it (no --fair / launch flags)
 gang create --name <n> --symbol <s> [--buy-tax 2 --sell-tax 2 [--dividend 0] [--recipient 0x…]] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo …] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 #   --cap 0.25–1% of supply per wallet (1% → at least 50 wallets), --hold 60–90% (the hold line)
@@ -338,4 +341,4 @@ a background process, so a command never waits on it. `GANG_TELEMETRY=0` (or `DO
 
 ## Version
 
-`0.26.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.27.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

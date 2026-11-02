@@ -18,6 +18,8 @@
 
 **GangLaunchpad 2.0、creator 分成和毕业目标（0.23.0+）：** 2.0 是同一个内盘的新一代（V3 曲线和打新都一样）。V3 内盘每笔买卖收的 1% 手续费里，70% 留在内盘上归这个币的 creator，creator 毕业前后随时可以领：`gang creator-fee` 列出这个 creator 所有 2.0 币各自可领多少，`gang creator-fee --token <addr> --claim [--to <addr>]` 领取。这笔钱只归 creator 本人，不给税收接收地址，也不经过回购 / 分账 / 加池模块；1.0 的币和打新没有这项。2.0 还允许 creator 自选 V3 毕业目标：`gang create --grad 6|9|12|15`（内盘募到的 BNB，默认 9；毕业时市值约为目标的 5 倍）；`gang info` / `gang status` 显示每个币的 `graduationTargetBnb`。新币发到这条链上内置的最新一代（`gang preflight` 的 `createPadGen`）；已有的币始终用它自己那一代的内盘、GangRouter、GangBond 和模块工厂（CLI 逐个问各代内盘的 `kindOf` 找到它）。BSC 测试网上 2.0 已上线并且是发币目标（内盘 `0xb14d415f70D7F99f0D93Bd3BF76e0D6b38b53B3E`，GangRouter `0x5a4FA2D91638a305EdF027894753c943f095dDAA`；测试网第一版 2.0 `0x6381…39be` 不再发新币，上面的币照常交易和领取）。BSC 主网 2026-10-31 起 2.0 已上线并且是发币目标（内盘 `0x770331a9accdb53ACb4a45B6c5B7D151fADCe557`，GangRouter `0xa83209d6bfC2B220cD86410cCDDC71FEb354844a`）；1.0 的币照常在 1.0（内盘 `0x15CF…4365`）上交易。
 
+**2.0 金库版：绑定锁仓金库的币（0.27.0+）：** 和 1.0、2.0 并列的第三个内盘（GangVaultLaunchpad：V3 曲线、creator 分成和 `--grad` 都和 2.0 一样；没有打新）。这里的每个币在创建时就和平台登记过的一个金库合约永久绑定，而且只有平台为这个金库指定的钱包才能发，每次指定只能发一个币：用那个钱包执行 `gang create --vault <金库> --name <n> --symbol <s> [--buy-tax … --sell-tax …] [--grad …]`。毕业前，金库只能通过内盘锁入、取回持有人的币，而且只替发交易、持有 Agent ID 的钱包操作；锁进金库的币仍计入持有人的 1% 上限（`gang status` → `lockedInVault`，`gang info` → `vault`）。毕业后就是普通的币。买卖和 2.0 一样（`gang buy` / `gang sell` 通过 `kindOf` 找到这个内盘）。这个内盘没有 GangBond，也没有回购 / 分账 / 加池 / 组合模块，所以 `--vault` 发币不能带 `--dev-buy` / `--bond` / `--buyback` / `--split` / `--lp`：发币上链后再用 `gang buy` 买。普通的 `gang create` 不会发到这个内盘。主网内盘 `0xE90851A90C6278E3d6e4C24320101f8B13D90A11`（GangRouter `0xAcd4944A4090c13d9DACAe60f3019cef9d9bB1Ad`）；测试网 `0x9108e7b85e69060A5E626A04Ce6DEf323071C8a9`（GangRouter `0x9bF3E197a6719Af856a7c82d23CABFdBcc184f69`）。
+
 ## 安装
 
 Node ≥ 18。另需 `baw`：
@@ -71,7 +73,8 @@ gang release --token <addr>                  # V3：补转之前打款失败的�
 gang follow <附言 tx> --amount <n> [--slippage 1] [--note …]   # 跟单：买附言里的币，并标明跟的是哪条
 gang upload-logo (--file ./avatar.png | --url <图片地址>)
 # 建币：GangLaunchpad。默认是 V3 币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的
-# 合作方；不带 --buy-tax / --sell-tax 即无税）；加 --fair 是同一个内盘上的打新
+# 合作方；不带 --buy-tax / --sell-tax 即无税）；加 --fair 是同一个内盘上的打新。
+# --vault <金库>：发到 2.0 金库版内盘，绑定平台登记的这个金库，只能由平台为它指定的钱包发（不能带 --fair 和一键发射参数）
 gang create --name <n> --symbol <s> [--buy-tax 2 --sell-tax 2 [--dividend 0] [--recipient 0x…]] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo …] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
 #   --cap 单地址上限 0.25–1%（1% 时至少 50 个地址），--hold 出局线 60–90%
@@ -290,4 +293,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.26.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.27.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

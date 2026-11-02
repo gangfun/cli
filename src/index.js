@@ -327,8 +327,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 
   gang create --name <n> --symbol <s> [--buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] [--recipient <0x…>]]
-              [--grad 6|9|12|15] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL] [--website URL]
-              [--twitter @handle] [--description <text>] [--testnet]
+              [--grad 6|9|12|15] [--vault <0x…>] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL]
+              [--website URL] [--twitter @handle] [--description <text>] [--testnet]
                                          a V3 token on GangLaunchpad (LaunchpadV2 / Soft / U / S take no new tokens; --taxed,
                                          the old V2 track, is refused). No --buy-tax / --sell-tax: untaxed (no pool tax, no
                                          dividend, no recipient). Taxed: own buy / sell tax in % (fixed at create), only in the
@@ -338,6 +338,11 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          --grad (GangLaunchpad 2.0): the graduation target in BNB raised, 6 / 9 / 12 / 15
                                          (default 9; market cap at graduation ≈ 5×); 1.0 graduates every curve at 15 and
                                          refuses --grad. info / status show each token's graduationTargetBnb
+                                         --vault (2.0 金库版): create on the vault pad, the token bound for good to this
+                                         vault gang listed, from the wallet gang named for it (one token per naming). Until
+                                         graduation the vault locks / releases holders' tokens through the pad (locked
+                                         tokens count in the 1% cap: gang status → lockedInVault). Alone: no --fair / --fly,
+                                         no --dev-buy / --bond / --buyback / --split / --lp
   gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1]
               [--shares 1] [--quote 0x… --ref-pool 0x…] [--logo …] [--website URL] [--twitter @handle] [--description …]
                                          a 打新 (fair mint) sale: one price per share both ways, the last share launches on
@@ -1152,6 +1157,7 @@ function checkFlyCreate() {
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
+const VAULT_ALONE = 'a --vault create stands alone: the 2.0 金库版 pad has no GangBond and no buy-back / split / LP / combined module, and a dev buy is its own gang buy after the create lands'
 // --grad picks a V3 curve's graduation target (2.0); a 打新 / 铸币飞轮 sale ends at its own --raise
 const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0): ${what} fills at its --raise instead, so leave --grad out`
 function create() {
@@ -1272,6 +1278,13 @@ async function main() {
   if (flyCreate) {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${FLY_NO_BOND}`)
+  }
+  // --vault (2.0 金库版): a V3 create bound to a listed vault, alone: no 打新 / 铸币飞轮, no chained launch
+  if (flag('vault')) {
+    if (!tokenCreate || cmd === 'fair') fail('--vault only applies to a V3 create: gang create --vault <vault> …')
+    if (flyCreate || flag('fair')) fail(`--vault binds a V3 curve token to a listed vault: leave --${flyCreate ? 'fly' : 'fair'} out`)
+    const launch = LAUNCH_FLAGS.find((f) => flag(f))
+    if (launch) fail(`--${launch}: ${VAULT_ALONE}`)
   }
   for (const name of LINK_FLAGS) {
     if (!tokenCreate && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang create --fair\`, \`gang create --fly\`)`)
