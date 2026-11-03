@@ -106,7 +106,8 @@ gang v3 income --recipient 0x…               # a recipient's income per token 
 gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover 100) [--use-wbnb]  # creator, from create on (--cover once on the pair); WBNB quote: paid in BNB unless --use-wbnb
 gang bond topup --token <addr> (--amount <quote> | --cover <%>) | gang bond raise-hold --token <addr> --hold <tokens|N%>
 gang bond extend --token <addr> --days <n>                       # creator: bond only grows, X only rises, the commitment only gets longer
-gang bond status --token <addr>                                  # state, pending / running, X vs the creator's balance, coverage + tier, time left
+gang bond status --token <addr>                                  # state, pending / running, X vs the creator's balance, live coverage + tier, time left
+#   (0.29.0+: the tier is gang.fun's anchored one, so a price rise never lowers it; tierBasis anchor | live)
 gang bond start --token <addr>                                   # anyone, once graduated / launched: start the --days clock
 gang bond report --token <addr>                                  # anyone, below X: 1% to you, the rest buys back and burns
 gang bond settle --token <addr>                                  # anyone, after T while X is held: the bond goes back to the creator

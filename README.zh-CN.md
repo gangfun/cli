@@ -85,7 +85,8 @@ gang v3 income --recipient 0x…               # 接收地址按币统计的到�
 gang bond post --token <addr> --hold <枚数|N%> --days <7-90> (--amount <报价币数量> | --cover 100) [--use-wbnb]  # 创建者，发币后随时可押（--cover 要等开盘）；WBNB 报价默认付 BNB，--use-wbnb 付 WBNB
 gang bond topup --token <addr> (--amount <数量> | --cover <%>) | gang bond raise-hold --token <addr> --hold <枚数|N%>
 gang bond extend --token <addr> --days <天数>                    # 创建者：押金只能加、X 只能提高、承诺期只能变长
-gang bond status --token <addr>                                  # 状态（待开始 / 计时中）、X 和创建者余额、覆盖率和档位、剩余时间
+gang bond status --token <addr>                                  # 状态（待开始 / 计时中）、X 和创建者余额、现价覆盖率和档位、剩余时间
+#   （0.29.0 起档位按 gang.fun 的锚定价计算，币价上涨不降档；tierBasis anchor | live）
 gang bond start --token <addr>                                   # 任何人，毕业 / 开盘后开始计时
 gang bond report --token <addr>                                  # 任何人，余额低于 X 时举报：拿押金 1%，其余回购销毁
 gang bond settle --token <addr>                                  # 任何人，T 之后余额仍达标：押金退回创建者
