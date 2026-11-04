@@ -2,26 +2,35 @@ import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, forma
 import { defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, roomyGas, ROUTER_ABI, ROUTER_HINTS, step, swapBackState, units, GAS_RESERVE } from './steps.js'
 import { API, get as apiGet } from './discover.js'
 import { walletFor } from './fair.js'
-import { MERGED_ERRORS_ABI, MERGED_HINTS, padNets, rpcTransport } from './gangpad.js'
+import { MERGED_ERRORS_ABI, MERGED_HINTS, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
- * `gang fly …` — 铸币飞轮 (Mint Flywheel, track `fly`): GangFlywheelPad, its own pad (kind 3) beside GangLaunchpad.
+ * `gang fly …` — 铸币飞轮 (Mint Flywheel, track `fly`): kind 3, on GangLaunchpad 3.0 and on GangFlywheelPad V1 / V2.
  * Before launch: 10,000 shares at one price (sale.basePrice), a quota per wallet (baseQuota + invite bonus), sell-back
  * at the mint price less an exit fee. The sale fills (or the creator opens it early at ≥ 30%), then anyone launches it
  * `launchDelay` later: a PancakeSwap pool at the mint price, with a protection window (Agent ID + a per-wallet buy cap).
  * After launch (sale.postMint) minting goes on at the tier price: the money goes into the pool (part of it buys), the
  * tokens are minted. Pool tax: buy 1%, sell 1–2%; holders who minted share part of it (the hold line, `holdBps`).
  * No GangBond and no buy-back splitter on these tokens (phase 1).
- * Contracts: gang-launchpad src/flywheel (GangFlywheelPad, FlywheelTaxHandler, GangMintToken; issue #75).
- * Two pad versions: V1 (the first pad) and V2 (FlyConfig adds guardBps / twapWindow; post-launch mints check only the
- * TWAP guard and the price above the pool). New tokens go to V2 once it is listed here; every other command uses the
- * token's own pad (token.launchpad()). The tax handler, token and token deployer are the same code on both.
- * Env: GANG_FLY_PAD / GANG_TESTNET_FLY_PAD override V1, GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 V2; the RPCs and the
- * GangRouter (pool trades) are GangLaunchpad's.
+ * Contracts: gang-launchpad src/flywheel (GangFlywheelPad, FlywheelTaxHandler, GangMintToken; issue #75), src/gang
+ * Pad3FlyModule (docs/SPEC-GANG-LAUNCHPAD-3-2026-11-03.md §10).
+ * Three pad versions: V1 (the first pad), V2 (FlyConfig adds guardBps / twapWindow; post-launch mints check only the TWAP
+ * guard and the price above the pool) and 3 (GangLaunchpad 3.0's 铸币飞轮 mode: V2's rules and selectors at 3.0's address).
+ * New tokens go to 3.0; every other command uses the token's own pad. The tax handler, token and token deployer are the
+ * same code on all three. What differs on 3.0, which also holds curve and 打新 tokens:
+ * - kindOf(token) tells a fly token: its launchpad() does not (3.0's curve and 打新 tokens name 3.0 too), and allTokens /
+ *   tokenCount cover every kind (padOf, flyTokensOf);
+ * - taxHandler() is the curve / 打新 one: a fly token's is flyTaxHandler() (handlerOf). The holder-reward vault is the same,
+ *   but vault.launchpadOf(token) names 3.0's vault core, not 3.0, so nothing here reads it;
+ * - TOKENS_PER_SHARE() is 打新's 50,000: a fly share stays 100,000 (TOKENS_PER_SHARE below; shareSizeOf(token) on chain);
+ * - sales(token) has V2's shape only for a kind-3 token: read it after kindOf.
+ * Trades go direct to the pad (and the GangRouter's pool functions): GangGateway cannot mint or sell back 3.0's fly tokens.
+ * Env: GANG_FLY_PAD / GANG_TESTNET_FLY_PAD override V1, GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 V2; 3.0 and the RPCs are
+ * GangLaunchpad's (gangpad.js), and so is the GangRouter of pool trades.
  */
 export const FLY_PADS = {
-  // V2 deployed 2026-10-31; creates go there (it says so while its migrator is unset: no fallback to V1)
+  // V2 deployed 2026-10-31; its tokens stay there (creates go to 3.0: flyCtx)
   mainnet: { v1: '0x631e66560F4FAE4e486B65349edE48189E48B029', v2: '0x281889ad915c1A95ffc4922235c6314b3Cbd8a5a', startBlock: 130634782n },
   // V1: testnet set 2 (2026-10-30, after the pre-mainnet audit fixes); V2 from block 139842621 (2026-10-31)
   testnet: { v1: '0xD6482850aCAC74BA889804931Fc797294777951c', v2: '0x706973e4F08dBf1604Cf540d0168428521e0E3d6', startBlock: 139749672n },
@@ -55,6 +64,8 @@ export const FLY_PAD_ABI = parseAbi([
   'function isAgent(address account) view returns (bool)',
   'function migrator() view returns (address)',
   'function taxHandler() view returns (address)',
+  'function flyTaxHandler() view returns (address)',
+  'function tokenVersionOf(address token) view returns (uint8)',
   'function dividendVault() view returns (address)',
   'function agentGateEnabled() view returns (bool)',
   'function tokenCount() view returns (uint256)',
@@ -80,9 +91,10 @@ export const FLY_PAD_ABI = parseAbi([
   'event FeeOwed(address indexed quote, uint256 amount)',
   'event FeesFlushed(address indexed quote, uint256 amount)',
   'event ShareWriteFailed(address indexed token, address indexed user, uint256 share)',
+  'event TokenVersionSet(address indexed token, uint8 version)',
 ])
 const CFG_V2 = CFG.replace(/\)$/, ', uint16 guardBps, uint32 twapWindow)')
-/** What only the V2 pad has (everything else in FLY_PAD_ABI is the same on both). */
+/** What V1 does not have: V2's, and 3.0's with the same selectors (everything else in FLY_PAD_ABI is the same on all). */
 export const FLY_PAD_V2_ABI = parseAbi([
   `function create(string[4] text, address quote, address refPool, ${CFG_V2} cfg, uint256 devShares) returns (address token)`,
   `function checkConfig(${CFG_V2} cfg, uint256 devShares) view returns (bool ok, string reason)`,
@@ -145,7 +157,8 @@ const TIERS = ['flat', 'standard', 'linear']
 // can be the token's first pool touch in its block, which costs more than an estimate made against the block before.
 // Chapel fork: a pool buy at its bare estimate (431k) ran out of gas inside the holder-share sync and used 428k with
 // room; a sell that also sold a tax chunk ran out at 750k and used 661k with room (estimate 755k)
-const GAS_FLOOR = { buy: 750_000n, sell: 1_200_000n, mintPost: 900_000n, launch: 3_500_000n }
+// a launch on 3.0: 2.54M to 3.80M measured on forks
+const GAS_FLOOR = { buy: 750_000n, sell: 1_200_000n, mintPost: 900_000n, launch: 5_000_000n }
 const GAS_NOTE = 'gas limit set with room: a hot token\'s first trade in a block costs more than the estimate shows'
 
 const HINTS = {
@@ -171,7 +184,7 @@ const HINTS = {
   ProtectionNotAgent: 'launch protection: only Agent ID holders can buy from the pool until it ends (gang info: protection.until)',
   ProtectionCapExceeded: 'launch protection: this buy goes past the wallet\'s protected buy cap (gang status: protection.capLeftTokens)',
   VaultFloorTooHigh: 'the platform\'s dividend vault requires a larger holding than this pad allows, so no sale can be created right now; ask gang to fix the vault setting',
-  QuoteNotAllowed: '--quote must be WBNB or a listed 18-decimal ERC-20 (leave it out to use WBNB)',
+  QuoteNotAllowed: '--quote must be WBNB or a listed 18-decimal ERC-20, and not a token of GangLaunchpad 3.0 (leave it out to use WBNB)',
   RefPoolRequired: 'this quote needs --ref-pool (a Pancake pool pricing it)',
   PriceTooSmall: 'the raise in this quote is too small to split into 10,000 shares',
   FeeOnTransferQuote: 'the quote token takes a fee on transfer; it cannot be used',
@@ -181,13 +194,14 @@ const revertOf = (e) => revertIn(e, [FLY_PAD_ABI, FLY_HANDLER_ABI, TOKEN_ABI, RO
 
 /**
  * Network settings: GangLaunchpad's chain, RPCs, WBNB and GangRouter (pool trades), with the fly pads. ctx.pad /
- * ctx.version start as the create target (V2 when known, else V1); bindPad switches them to a token's own pad.
+ * ctx.version start as the create target (3.0); bindPad switches them to a token's own pad.
  */
 export function flyCtx(testnet) {
   const net = padNets('v3')[testnet ? 'testnet' : 'mainnet']
   const fly = FLY_PADS[testnet ? 'testnet' : 'mainnet']
   const env = (n) => process.env[testnet ? `GANG_TESTNET_${n}` : `GANG_${n}`]
   const pads = [
+    { address: net.gens.find((g) => g.gen === PAD3_GEN)?.pad, version: 3 },
     { address: env('FLY_PAD_V2') || fly.v2, version: 2 },
     { address: env('FLY_PAD') || fly.v1, version: 1 },
   ].filter((p) => p.address)
@@ -201,13 +215,14 @@ export function flyCtx(testnet) {
 }
 
 /**
- * The fly pad `token` belongs to, or null (not a fly token on these pads). A GangMintToken names its pad
- * (launchpad()); other tokens are asked of each pad's kindOf. Throws on an RPC error.
+ * The fly pad `token` belongs to, or null (not a fly token on these pads). A GangMintToken names its pad (launchpad()),
+ * and every token of V1 / V2 is a fly token; 3.0 also holds curve and 打新 tokens that name it, so only its kindOf counts.
+ * Other tokens are asked of each pad's kindOf. Throws on an RPC error.
  */
 async function padOf(ctx, token) {
   const named = await ctx.read(token, TOKEN_ABI, 'launchpad').catch(() => null)
   const known = named && ctx.pads.find((p) => same(p.address, named))
-  if (known) return known
+  if (known && known.version !== 3) return known
   for (const p of ctx.pads) {
     if (Number(await ctx.read(p.address, FLY_PAD_ABI, 'kindOf', [token])) === 3) return p
   }
@@ -223,7 +238,7 @@ export async function isFlyToken(ctx, token) {
   }
 }
 
-/** Point ctx at `token`'s own pad (V1 or V2); false when it is on neither. */
+/** Point ctx at `token`'s own pad (V1, V2 or 3.0); false when it is on none. */
 async function bindPad(ctx, token) {
   const p = await padOf(ctx, token)
   if (!p) return false
@@ -237,7 +252,7 @@ export async function padOpen(ctx) {
   return (await ctx.read(ctx.pad, FLY_PAD_ABI, 'migrator')) !== zeroAddress
 }
 /** The create target has no migrator yet: say which pad, and that existing tokens are not affected. */
-const closed = (ctx, testnet) => `the ${ctx.version === 2 ? 'V2 ' : ''}铸币飞轮 (Mint Flywheel) pad on BSC ${testnet ? 'testnet' : 'mainnet'} is not open yet (no migrator set), so it takes no creates right now; existing 铸币飞轮 tokens keep working${testnet ? '' : '. Use --testnet to try it there'}`
+const closed = (ctx, testnet) => `the ${{ 3: 'GangLaunchpad 3.0 ', 2: 'V2 ' }[ctx.version] ?? ''}铸币飞轮 (Mint Flywheel) pad on BSC ${testnet ? 'testnet' : 'mainnet'} is not open yet (no migrator set), so it takes no creates right now; existing 铸币飞轮 tokens keep working${testnet ? '' : '. Use --testnet to try it there'}`
 
 const symbolOf = async (ctx, token) => { try { return await ctx.read(token, TOKEN_ABI, 'symbol') } catch { return null } }
 const pct = (bps) => Number(bps) / 100
@@ -251,6 +266,25 @@ const iso = (t) => (t ? new Date(Number(t) * 1000).toISOString() : null)
 const q112 = (p) => formatUnits((p * 10n ** 18n) / Q112, 18)
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 const short = (e) => e?.shortMessage || String(e?.message || e).split('\n')[0]
+
+// 3.0's allTokens holds every kind: at most this many of its newest tokens are read, in multicall batches of FLY_BATCH
+const FLY_SCAN = 5000
+const FLY_BATCH = 400
+/** `pad` (3.0)'s 铸币飞轮 tokens, newest first. */
+async function flyTokensOf(ctx, pad, count) {
+  const take = Math.min(count, FLY_SCAN)
+  const multi = (functionName, args) => ctx.client.multicall({
+    allowFailure: false, batchSize: 0, contracts: args.map((a) => ({ address: pad, abi: FLY_PAD_ABI, functionName, args: [a] })),
+  })
+  const found = []
+  for (let from = 0; from < take; from += FLY_BATCH) {
+    const idx = Array.from({ length: Math.min(FLY_BATCH, take - from) }, (_, i) => BigInt(count - 1 - from - i))
+    const tokens = await multi('allTokens', idx)
+    const kinds = await multi('kindOf', tokens)
+    found.push(...tokens.filter((_, i) => Number(kinds[i]) === 3))
+  }
+  return found
+}
 
 /** The site's invite link for `token` (the site reads ?ref= and passes it to the wallet's first mint). */
 export const inviteLink = (token, referrer) => `https://gang.fun/token/${token}?ref=${referrer}`
@@ -524,25 +558,29 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (!sale) fail(`not a 铸币飞轮 (Mint Flywheel) token on this pad${testnet ? ' (BSC testnet)' : ''}`, { token, chainId, pad: ctx.pad })
     return sale
   }
-  const handlerOf = () => ctx.read(ctx.pad, FLY_PAD_ABI, 'taxHandler')
+  // on 3.0 taxHandler() is the curve / 打新 one
+  const handlerOf = () => ctx.read(ctx.pad, FLY_PAD_ABI, ctx.version === 3 ? 'flyTaxHandler' : 'taxHandler')
   const me = () => walletFor(ctx, opt('from'))
 
   if (sub === 'list') {
-    // on chain, newest first: the pad keeps every token it created
+    // on chain, newest first: the pad keeps every token it created (on 3.0, of every kind: its fly tokens are picked out)
     const limit = parseIntIn(fail, 'limit', opt('limit', '20'), 1, 200)
     const status = opt('status', 'all')
     if (!['all', 'minting', 'filled', 'launched'].includes(status)) fail('--status must be minting, filled, launched or all')
-    // newest pad first, each newest first (V2's tokens are the newer ones)
+    // newest pad first, each newest first
     const create = { pad: ctx.pad, version: ctx.version }
     const items = []
-    let total = 0
+    let total = 0, scanNote = null
     for (const p of ctx.pads) {
       ctx.pad = p.address
       ctx.version = p.version
       const count = Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'tokenCount'))
-      total += count
-      for (let i = count - 1; i >= 0 && items.length < limit; i--) {
-        const token = await ctx.read(ctx.pad, FLY_PAD_ABI, 'allTokens', [BigInt(i)])
+      const own = p.version === 3 ? await flyTokensOf(ctx, p.address, count) : null
+      if (own && count > FLY_SCAN) scanNote = `only the newest ${FLY_SCAN} tokens of GangLaunchpad 3.0 were read`
+      const n = own ? own.length : count
+      total += n
+      for (let i = 0; i < n && items.length < limit; i++) {
+        const token = own ? own[i] : await ctx.read(ctx.pad, FLY_PAD_ABI, 'allTokens', [BigInt(n - 1 - i)])
         const s = await saleOf(ctx, token)
         if (!s) continue
         const st = s.status === 'stalled' || s.status === 'refund' ? 'filled' : s.status
@@ -561,7 +599,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     ctx.version = create.version
     return out({
       success: true, chainId, createPad: ctx.pad, createPadVersion: ctx.version, pads: ctx.pads.map((p) => ({ version: p.version, pad: p.address })),
-      total, status, count: items.length, items, ...(!(await padOpen(ctx)) && { note: closed(ctx, testnet) }),
+      total, status, count: items.length, items, ...(scanNote && { scanNote }), ...(!(await padOpen(ctx)) && { note: closed(ctx, testnet) }),
     })
   }
 
@@ -594,6 +632,12 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       if (owedTax > 0n) extra.owedCreatorTax = await units(ctx, sale.quote, owedTax)
     }
     if (owed > 0n) extra.owedDevCut = await units(ctx, sale.quote, owed)
+    // 3.0: the rule set the sale was created under (fixed for good), as on its curve and 打新 tokens
+    if (ctx.version === 3) {
+      extra.padGen = PAD3_GEN
+      const tokenVersion = await ctx.read(ctx.pad, FLY_PAD_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null)
+      if (tokenVersion != null) extra.tokenVersion = tokenVersion
+    }
     if (extra.owedDevCut || extra.owedCreatorTax) extra.release = `gang release --token ${token}${net} (anyone; pays the creator)`
     return out({ success: true, chainId, kind: 'fly', ...pub(sale), ...extra, next: nextFor(sale, token, net, undefined, extra.postMint) })
   }
@@ -696,7 +740,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (!name || !symbol) fail('--name and --symbol are required')
     checkMeta()
     if (!(await padOpen(ctx))) fail(closed(ctx, testnet), { pad: ctx.pad, padVersion: ctx.version })
-    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0): a 铸币飞轮 sale fills at its --raise instead, so leave --grad out')
+    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): a 铸币飞轮 sale fills at its --raise instead, so leave --grad out')
     const presetName = opt('preset', 'j')
     const preset = FLY_PRESETS[presetName]
     if (!preset) fail(`--preset must be ${Object.keys(FLY_PRESETS).join(' or ')}`, { got: presetName })
@@ -712,8 +756,8 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (flag('post-mint') && flag('no-post-mint')) fail('give --post-mint or --no-post-mint, not both')
     if (flag('post-mint')) v.postMint = true
     if (flag('no-post-mint')) v.postMint = false
-    // V2's post-launch rules; a V1 create target has none, so the flags are refused there rather than ignored
-    const v2 = ctx.version === 2
+    // V2's post-launch rules (3.0 has them too); a V1 create target has none, so the flags are refused there rather than ignored
+    const v2 = ctx.version >= 2
     if (!v2 && (flag('guard') || flag('twap-window'))) fail('--guard / --twap-window are settings of the V2 Mint Flywheel pad, which is not live on this network yet: leave them out')
     if (flag('guard')) {
       v.guard = String(opt('guard'))
@@ -724,10 +768,10 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       if (!(v.twapWindow in TWAP_WINDOWS)) fail('--twap-window must be 15 or 30 (minutes)', { got: opt('twap-window') ?? null })
     }
     if (v2 && v.postMint && v.quota > MAX_POST_QUOTA) {
-      fail(`--quota must be 5-${MAX_POST_QUOTA} with post-launch minting on (the V2 pad's rule): lower --quota, or add --no-post-mint`, { quota: v.quota })
+      fail(`--quota must be 5-${MAX_POST_QUOTA} with post-launch minting on (the pad's rule): lower --quota, or add --no-post-mint`, { quota: v.quota })
     }
     if (v2 && v.postMint && v.invite > MAX_POST_INVITE) {
-      fail(`--invite-bonus must be 0-${MAX_POST_INVITE} with post-launch minting on (the V2 pad's rule): lower it, or add --no-post-mint`, { inviteBonus: v.invite })
+      fail(`--invite-bonus must be 0-${MAX_POST_INVITE} with post-launch minting on (the pad's rule): lower it, or add --no-post-mint`, { inviteBonus: v.invite })
     }
     // a pad without the Agent ID gate takes no dev cut (checkConfig refuses one): the preset's goes to 0 unless asked for
     const gated = await ctx.read(ctx.pad, FLY_PAD_ABI, 'agentGateEnabled')
@@ -757,6 +801,10 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const refPool = flag('ref-pool') ? opt('ref-pool') : (defaultRefPool(ctx.chainId, quote) ?? zeroAddress)
     if (!isAddress(quote ?? '') || !isAddress(refPool ?? '')) fail('--quote / --ref-pool must be 0x addresses')
     const quoteWbnb = same(quote, ctx.wbnb)
+    // said before a wrap or approve step: 3.0 takes none of its own tokens (of any kind) as a quote
+    if (ctx.version === 3 && !quoteWbnb && Number(await ctx.read(ctx.pad, FLY_PAD_ABI, 'kindOf', [quote])) !== 0) {
+      fail('--quote cannot be a token of GangLaunchpad 3.0 (the pad refuses it): use WBNB or another listed 18-decimal ERC-20', { quote })
+    }
     // the share price: raise / 10,000 in a WBNB sale; another quote is priced by the pad at create (its ref pool's
     // TWAP), so the dev's cost is estimated with GangLaunchpad's preview of the same conversion and approved with 2% room
     let price
@@ -784,7 +832,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
     return out(write({ from: who, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
-      step: 'create', kind: 'fly', padVersion: ctx.version, pad: ctx.pad, name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
+      step: 'create', kind: 'fly', padVersion: ctx.version, ...(ctx.version === 3 && { padGen: PAD3_GEN }), pad: ctx.pad, name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata, quote: sym || quote, preset: presetName, config: cfgView(cfg),
       sharePrice: await units(ctx, quote, quoteWbnb ? price : (price * 100n) / 102n), devShares, devCost: await units(ctx, quote, need),
       ...(v2 && v.postMint && {
@@ -818,7 +866,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       const minShares = flag('min-shares') ? parseIntIn(fail, 'min-shares', opt('min-shares'), 1, Number(accepted)) : Number(accepted)
       const need = cost + fee
       const fills = sale.sold + Number(accepted) === TOTAL_SHARES
-      // launchDelay 0: the mint that fills also launches (about 2.5M gas); near the end other mints landing first can make
+      // launchDelay 0: the mint that fills also launches (up to about 3.8M gas); near the end other mints landing first can make
       // this one that mint, so it gets a launch-sized gas limit
       const mayLaunch = sale.rules.launchDelaySec === 0 && sale.sharesLeft - Number(accepted) <= 10 * sale.rules.maxPerTx
       const extra = {
@@ -963,8 +1011,8 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     return out(write(tx, {
       step: sub, kind: 'fly', token, sold: sale.sold, ...(tx.gas && { gasLimit: tx.gas.toString() }),
       note: sub === 'launch'
-        ? `creates the PancakeSwap pool at the mint price (about 2.5M gas); protection runs ${sale.rules.protectionSec}s after it`
-        : sale.rules.launchDelaySec ? `stops the sale at ${sale.sold} shares; anyone can launch it ${sale.rules.launchDelaySec}s later (gang fly launch)` : `stops the sale at ${sale.sold} shares and launches in the same tx (about 2.5M gas)`,
+        ? `creates the PancakeSwap pool at the mint price (up to about 3.8M gas); protection runs ${sale.rules.protectionSec}s after it`
+        : sale.rules.launchDelaySec ? `stops the sale at ${sale.sold} shares; anyone can launch it ${sale.rules.launchDelaySec}s later (gang fly launch)` : `stops the sale at ${sale.sold} shares and launches in the same tx (up to about 3.8M gas)`,
     }))
   }
 

@@ -245,7 +245,7 @@ const followSkipped = (follow) =>
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
 One command per action, whatever pad the token is on: buy / sell / info / status / claim / mint / withdraw / release
-read the token's kind (GangLaunchpad kindOf: V3 curve or 打新 sale; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
+read the token's kind (GangLaunchpad kindOf: V3 curve, 打新 sale or 3.0's 铸币飞轮; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
 U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tokens carry kind: "v3" | "fair" | "fly". --testnet
 = BSC testnet (GangLaunchpad and GangFlywheelPad only); --calldata prints the raw tx instead of a baw preview; --from
 <addr> reads / builds for that wallet (V2 / Soft: graduated tokens only).
@@ -330,17 +330,18 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang create --name <n> --symbol <s> [--buy-tax <1-5> --sell-tax <1-5> [--dividend 0-100] [--recipient <0x…>]]
               [--grad 6|9|12|15] [--vault <0x…>] [--quote 0x… --ref-pool 0x…] [--logo <file> | --logo-uri URL]
               [--website URL] [--twitter @handle] [--description <text>] [--testnet]
-                                         a V3 token on GangLaunchpad (LaunchpadV2 / Soft / U / S take no new tokens; --taxed,
+                                         a V3 token on GangLaunchpad 3.0 (LaunchpadV2 / Soft / U / S take no new tokens; --taxed,
                                          the old V2 track, is refused). No --buy-tax / --sell-tax: untaxed (no pool tax, no
                                          dividend, no recipient). Taxed: own buy / sell tax in % (fixed at create), only in the
                                          pool after graduation: 0.5% of volume to the platform; of the rest --dividend % to
                                          holders, the remainder to --recipient (default: you, the creator; or a partner on the
                                          platform whitelist) in the quote. Curve trades pay only the 1% fee, no tax.
-                                         --grad (GangLaunchpad 2.0): the graduation target in BNB raised, 6 / 9 / 12 / 15
+                                         --grad (GangLaunchpad 2.0 / 3.0): the graduation target in BNB raised, 6 / 9 / 12 / 15
                                          (default 9; market cap at graduation ≈ 5×); 1.0 graduates every curve at 15 and
                                          refuses --grad. info / status show each token's graduationTargetBnb
-                                         --vault (2.0 金库版): create on the vault pad, the token bound for good to this
-                                         vault gang listed, from the wallet gang named for it (one token per naming). Until
+                                         --vault: the token bound for good to this vault gang listed, from the wallet gang
+                                         named for it (one token per naming); on 3.0 once its vault mode is live (asked of the
+                                         chain), else on the 2.0 金库版 pad. Until
                                          graduation the vault locks / releases holders' tokens through the pad (locked
                                          tokens count in the 1% cap: gang status → lockedInVault). Alone: no --fair / --fly,
                                          no --dev-buy / --bond / --buyback / --split / --lp
@@ -365,8 +366,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
               [--tier flat|standard|linear [--step-pct 0-10 --step-shares 100-100000 --max-mul 1-10]] [--supply-cap 10-500]
               [--guard off|15|20|30] [--twap-window 15|30] [--dev-shares <n>] [--quote 0x… --ref-pool 0x…] [--logo …]
               [--website URL] [--twitter @handle] [--description …]
-                                         a 铸币飞轮 (Mint Flywheel, GangFlywheelPad) sale (mainnet; --testnet = BSC testnet
-                                         set 2). 10,000 shares at raise / 10,000 each; a quota per wallet
+                                         a 铸币飞轮 (Mint Flywheel) sale on GangLaunchpad 3.0 (mainnet; --testnet = BSC
+                                         testnet). 10,000 shares at raise / 10,000 each; a quota per wallet
                                          (--quota + --invite-bonus per wallet it invites), --max-per-tx per mint, Agent ID
                                          only. Fills (or the creator opens early at ≥ 30%), launches --launch-delay s later
                                          (anyone; gang.fun's keeper too) into PancakeSwap at the mint price, then --window s
@@ -469,9 +470,9 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          past the deadline, --settle-first settles the bond before the sell (asks first;
                                          settles 1 hour later).
 
-CREATOR FEE (GangLaunchpad 2.0: of the 1% fee on every V3 curve buy and sell, 70% is kept on the pad for the token's
+CREATOR FEE (GangLaunchpad 2.0 / 3.0: of the 1% fee on every V3 curve buy and sell, 70% is kept on the pad for the token's
 creator, before and after graduation, no deadline; 1.0 tokens and 打新 sales have none):
-  gang creator-fee [--from <creator>]    every 2.0 V3 token this wallet created and what it can claim (read on chain), with
+  gang creator-fee [--from <creator>]    every 2.0 / 3.0 V3 token this wallet created and what it can claim (read on chain), with
                                          totals per quote
   gang creator-fee --token <addr>        one token: padGen, sharePct, claimable
   gang creator-fee --token <addr> --claim [--to <addr>]
@@ -486,7 +487,8 @@ BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND
                                          keeps at least --hold tokens (N% = of the 1B supply) from now on. The --days clock
                                          starts when the token graduates / launches (at once if it already has). --cover 100 =
                                          exactly what dumping X fetches now (only once on the pair). No early withdrawal;
-                                         below X anyone reports it, on the curve too
+                                         below X anyone reports it, on the curve too. A token bound to a lock vault
+                                         (gang create --vault) is refused: a lock takes tokens out of the wallet the bond watches
   gang bond topup --token <addr> (--amount <quote> | --cover <target %>) | gang bond raise-hold --token <addr> --hold <tokens|N%>
   gang bond extend --token <addr> --days <n>
                                          creator only: the bond only grows, X only rises, the commitment only gets longer (90
@@ -607,7 +609,7 @@ COMBO (a V3 token whose recipient is a combined recipient, combo-v1; GANG_COMBO_
   gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
                                          in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
-                                         打新, tax router, vaults), GangFlywheelPad (铸币飞轮 pad and tax handler), split modules,
+                                         打新, 铸币飞轮, tax routers, vaults), GangFlywheelPad (铸币飞轮 pads), split modules,
                                          LP splitters and combined recipients (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
@@ -634,13 +636,13 @@ GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes)
 GANG_PAD / GANG_TESTNET_PAD (the GangLaunchpad new tokens go to, behind both gang v3 and gang fair; old names GANG_V3_PAD /
 GANG_FAIR_PAD and GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD still work as aliases), GANG_TESTNET_RPC_URL (aliases
 GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET_ROUTER (alias GANG_ROUTER_TESTNET; GangRouter
-for BNB buys / mints and every pool trade). Built in: GangLaunchpad 1.0 on mainnet; 2.0 (where new tokens go) and 1.0
-on the testnet. A token is always served by its own generation's pad, router, GangBond and module factories; these
+for BNB buys / mints and every pool trade). Built in: GangLaunchpad 3.0 (where new tokens go), 2.0, 1.0 and 2.0 金库版 on
+mainnet and the testnet. A token is always served by its own generation's pad, router, GangBond and module factories; these
 variables (and GANG_BOND / GANG_*_FACTORY) set the create target's only,
 GANG_FLY_PAD / GANG_TESTNET_FLY_PAD (GangFlywheelPad V1; default: the built-in mainnet / testnet set 2 addresses),
-GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 (V2, where new tokens go; default: the built-in mainnet / testnet V2). --guard / --twap-window
-(V2 only): the guard is off by default (post-launch minting does not pause on a price drop; the quota cap of 10 per
-wallet bounds it); --guard 15|20|30 pauses mints while the pool is that % below its average over --twap-window (30)
+GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 (V2; default: the built-in mainnet / testnet V2); new 铸币飞轮 tokens go to the built-in
+GangLaunchpad 3.0. --guard / --twap-window (3.0 and V2): the guard is off by default (post-launch minting does not pause
+on a price drop; the quota cap of 10 per wallet bounds it); --guard 15|20|30 pauses mints while the pool is that % below its average over --twap-window (30)
 
 Private RPC: this CLI never broadcasts itself. Trades go out through the Agentic Wallet (gang execute), which picks its
 own RPC; a --calldata tx is sent by whatever signs it. To keep a large pool buy out of the public mempool (front-running),
@@ -1015,7 +1017,7 @@ const NOT_FOR = {
 }
 
 /**
- * 'v3' | 'fair' on GangLaunchpad, 'fly' on GangFlywheelPad (mainnet, or BSC testnet with --testnet); else 'legacy'
+ * 'v3' | 'fair' | 'fly' on GangLaunchpad, 'fly' on GangFlywheelPad (mainnet, or BSC testnet with --testnet); else 'legacy'
  * (mainnet V2 / Soft / U / S).
  * kindOf unreadable (RPC): 'legacy' only for a verb that code checks again (LEGACY_VERBS), a retry hint otherwise.
  */
@@ -1023,10 +1025,10 @@ async function padKind(token, verb) {
   const testnet = flag('testnet')
   let ctx
   try { ctx = v3Ctx(testnet) } catch (e) { fail(e.message) }
-  // every GangLaunchpad generation of this network (1.0, 2.0) is asked
+  // every GangLaunchpad generation of this network (3.0, 2.0, 1.0, 2.0 金库版) is asked
   const { kind } = await genOf(ctx, token)
-  if (kind === 'v3' || kind === 'fair') return kind
-  // not GangLaunchpad's: the 铸币飞轮 pad (GangFlywheelPad, kind 3) is asked next
+  if (kind === 'v3' || kind === 'fair' || kind === 'fly') return kind
+  // not GangLaunchpad's: the older 铸币飞轮 pads (GangFlywheelPad V1 / V2) are asked next
   const fly = await isFlyToken(flyCtx(testnet), token)
   if (fly) return 'fly'
   if (fly === null && (testnet || !LEGACY_VERBS.has(verb))) {
@@ -1159,9 +1161,9 @@ function checkFlyCreate() {
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
-const VAULT_ALONE = 'a --vault create stands alone: the 2.0 金库版 pad has no GangBond and no buy-back / split / LP / combined module, and a dev buy is its own gang buy after the create lands'
-// --grad picks a V3 curve's graduation target (2.0); a 打新 / 铸币飞轮 sale ends at its own --raise
-const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0): ${what} fills at its --raise instead, so leave --grad out`
+const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
+// --grad picks a V3 curve's graduation target (2.0 / 3.0); a 打新 / 铸币飞轮 sale ends at its own --raise
+const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): ${what} fills at its --raise instead, so leave --grad out`
 function create() {
   if (flag('grad') && (flag('fly') || flag('fair'))) fail(GRAD_ONLY_V3(flag('fly') ? 'a 铸币飞轮 sale' : 'a 打新 sale'))
   if (flag('fly')) {
@@ -1283,7 +1285,7 @@ async function main() {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${FLY_NO_BOND}`)
   }
-  // --vault (2.0 金库版): a V3 create bound to a listed vault, alone: no 打新 / 铸币飞轮, no chained launch
+  // --vault (3.0 vault mode / 2.0 金库版): a V3 create bound to a listed vault, alone: no 打新 / 铸币飞轮, no chained launch
   if (flag('vault')) {
     if (!tokenCreate || cmd === 'fair') fail('--vault only applies to a V3 create: gang create --vault <vault> …')
     if (flyCreate || flag('fair')) fail(`--vault binds a V3 curve token to a listed vault: leave --${flyCreate ? 'fly' : 'fair'} out`)

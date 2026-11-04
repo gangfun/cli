@@ -1,6 +1,6 @@
 import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
 import { decimalsOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, revertOf as revertIn, step, units, GAS_RESERVE } from './steps.js'
-import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport, tokenVaultOf, VAULT_NO_BOND } from './gangpad.js'
 import { bawAddress } from './baw.js'
 import { get as apiGet } from './discover.js'
 
@@ -364,6 +364,14 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
   if (!ctx.bond) return fail('this token\'s GangLaunchpad generation has no GangBond in this CLI version', { token, chainId, padGen: ctx.gen })
   const m = await marketOf(ctx, token)
   if (!m) return fail('not a GangLaunchpad token (V3 or 打新) on this network: bonds cover only those', { token, chainId })
+  // a token bound to a lock vault (3.0 --vault) takes no bond: a lock empties the wallet the bond watches
+  let vault = null
+  if (sub === 'post' || sub === 'status') {
+    try { vault = await tokenVaultOf(ctx, token) } catch (e) {
+      if (sub === 'post') return fail('could not read whether this token is bound to a lock vault (RPC error)', { token, detail: e.shortMessage || e.message.split('\n')[0], retry: 'same command again' })
+    }
+  }
+  if (vault && sub === 'post') return fail(VAULT_NO_BOND, { token, chainId, vault, padGen: ctx.gen })
   const view = await bondView(ctx, token, m, ['status', 'topup', 'raise-hold'].includes(sub))
   const { _raw: raw, ...pub } = view
   const b = raw.bond
@@ -375,9 +383,13 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
 
   if (sub === 'status') {
     // no bond yet on a token before its pair: say a bond can be posted now (the view's own notes win otherwise)
-    const before = view.state === 'none' && !m.live
+    const before = !vault && view.state === 'none' && !m.live
       && { note: `the token is not on PancakeSwap yet (${m.kind === 'v3' ? 'not graduated' : 'not launched'}): its creator can post a bond now; the --days clock starts when it ${m.kind === 'v3' ? 'graduates' : 'launches'}` }
-    return out({ success: true, chainId, bondContract: ctx.bond, ...pub, ...before })
+    // vault-bound: never suggest a bond; a bond that exists anyway (posted outside this CLI) is at risk from any lock
+    const vaultNote = vault && (view.state === 'none'
+      ? { vault, note: `no bond can be posted: ${VAULT_NO_BOND}` }
+      : { vault, warning: `${VAULT_NO_BOND}. Locking any of the promised holding into the vault before settle loses this bond` })
+    return out({ success: true, chainId, bondContract: ctx.bond, ...pub, ...before, ...vaultNote })
   }
 
   if (sub === 'report') {

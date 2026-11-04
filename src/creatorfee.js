@@ -128,8 +128,8 @@ export async function curveCreatorFee(ctx, token, { creator, quote }, net = '') 
 }
 
 /**
- * Every 2.0 curve token `creator` created on this network, newest first, with what it can claim: { tokens, totals,
- * scanned }. Read on chain (each 2.0 pad's allTokens, in multicall batches), so it works without gang.fun's index.
+ * Every 2.0 / 3.0 curve token `creator` created on this network, newest first, with what it can claim: { tokens, totals,
+ * scanned }. Read on chain (each such pad's allTokens, in multicall batches), so it works without gang.fun's index.
  */
 export async function creatorFeeList(ctx, creator) {
   const tokens = []
@@ -203,7 +203,7 @@ export async function runCreatorFee({ opt, flag, out, fail, summarize }) {
     return out({
       success: true, chainId, creator: me, ...r,
       ...(r.scanned.some((s) => s.read < s.tokens) && { scanNote: `only the newest ${MAX_SCAN} tokens of a pad were read` }),
-      note: 'GangLaunchpad 2.0 keeps 70% of the 1% curve fee of each curve buy and sell for the token\'s creator; 1.0 tokens and 打新 sales have none',
+      note: 'GangLaunchpad 2.0 and 3.0 keep 70% of the 1% curve fee of each curve buy and sell for the token\'s creator; 1.0 tokens and 打新 sales have none',
       ...(due.length && { next: due.map((x) => claimCmd(x.token, net)) }),
     })
   }
@@ -213,13 +213,14 @@ export async function runCreatorFee({ opt, flag, out, fail, summarize }) {
   const kind = await atTokenPad(ctx, token)
   if (kind === null) return fail('could not read the token\'s kind from GangLaunchpad (kindOf; RPC error)', { token, retry: 'same command again' })
   if (kind === 'none') return fail(`not a GangLaunchpad token on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}${testnet ? '' : ' (add --testnet for a testnet token)'}`, { token, chainId })
-  if (kind === 'fair') return fail('a 打新 (fair-mint) sale has no creator fee: only V3 curve trades on GangLaunchpad 2.0 pay one', { token, kind })
+  if (kind === 'fair') return fail('a 打新 (fair-mint) sale has no creator fee: only V3 curve trades on GangLaunchpad 2.0 / 3.0 pay one', { token, kind })
+  if (kind === 'fly') return fail('a 铸币飞轮 (Mint Flywheel) token has no creator fee: only V3 curve trades on GangLaunchpad 2.0 / 3.0 pay one (its creator gets the dev cut and a share of the pool tax: gang info)', { token, kind })
   const c = await ctx.read(ctx.pad, CURVES_ABI, 'curves', [token])
   const [creator, quote, , , , , graduated] = c
   const symbol = await ctx.read(token, SYMBOL_ABI, 'symbol').catch(() => null)
   const view = await curveCreatorFee(ctx, token, { creator, quote }, net)
   if (!view.creatorFee) {
-    return fail(`this token is on GangLaunchpad ${view.padGen}, which has no creator fee: its whole 1% curve fee goes to the platform (the creator fee is on tokens created on 2.0)`,
+    return fail(`this token is on GangLaunchpad ${view.padGen}, which has no creator fee: its whole 1% curve fee goes to the platform (the creator fee is on tokens created on 2.0 or 3.0)`,
       { token, padGen: view.padGen, pad: ctx.pad })
   }
   const base = { chainId, token, symbol, graduated, padGen: view.padGen, pad: ctx.pad, ...view.creatorFee }

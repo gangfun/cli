@@ -250,7 +250,7 @@ function creatorFeeRows(fees) {
     creatorFees: {
       tokens: due.map((x) => ({ token: x.token, symbol: x.symbol, quote: x.quoteSymbol, claimable: num(x.claimable), padGen: x.padGen, next: `gang creator-fee --token ${x.token} --claim` })),
       totals: fees.totals.filter((x) => num(x.claimable) > 0),
-      note: 'GangLaunchpad 2.0 keeps 70% of the 1% curve fee of your V3 tokens for you; gang creator-fee lists every one of them',
+      note: 'GangLaunchpad 2.0 / 3.0 keep 70% of the 1% curve fee of your V3 tokens for you; gang creator-fee lists every one of them',
     },
   }
 }

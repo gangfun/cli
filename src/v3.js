@@ -3,7 +3,7 @@ import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund,
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { atTokenPad, CREATOR_FEE_ABI, genFields, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport, VAULT_GEN, vaultGenOf } from './gangpad.js'
+import { atTokenPad, CREATOR_FEE_ABI, genFields, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, PAD3_GEN, padNets, rpcTransport, tokenVaultOf, VAULT_GEN, VAULT_NO_BOND, vaultGenOf, vaultModeOf } from './gangpad.js'
 import { createNote, curveCreatorFee } from './creatorfee.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
@@ -25,12 +25,15 @@ const TAX = '(uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address r
 const PAD_ABI = parseAbi([
   `function create(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, ${TAX} tax) returns (address)`,
   `function createWithGradTarget(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, ${TAX} tax, uint256 gradBnb) returns (address)`,
-  // 2.0 金库版 (GangVaultLaunchpad): its only create, binding the token to a listed vault for good
+  // 2.0 金库版 (GangVaultLaunchpad): its only create, binding the token to a listed vault for good; 3.0 has the same once
+  // an upgrade added its vault mode (vaultModeOf), beside its other creates
   `function createWithVault(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, ${TAX} tax, uint256 gradBnb, address vault) returns (address)`,
   'function isVault(address vault) view returns (bool)',
   'function vaultOf(address token) view returns (address)',
   'function vaultCreator(address vault) view returns (address)',
   'function lockedOf(address token, address user) view returns (uint256)',
+  // 3.0: the rule set the token was created under (0 = not this pad's token)
+  'function tokenVersionOf(address token) view returns (uint8)',
   'function buy(address token, uint256 quoteIn, uint256 minTokensOut) returns (uint256)',
   'function sell(address token, uint256 tokensIn, uint256 minQuoteOut) returns (uint256)',
   `function checkTaxConfig(${TAX} tax) view returns (bool ok, string reason)`,
@@ -66,6 +69,13 @@ const PAD_ABI = parseAbi([
   'event VaultReleased(address indexed token, address indexed vault, address indexed user, uint256 amount)',
   'event VaultSet(address indexed vault, bool enabled)',
   'event VaultCreatorSet(address indexed vault, address indexed creator)',
+  // 3.0, beside 2.0's events: the rule set at create, every curve trade's fee split and price, the aggregator entry
+  'event TokenVersionSet(address indexed token, uint8 version)',
+  'event TradeV1(address indexed token, address indexed trader, bool isBuy, uint256 quoteAmount, uint256 tokenAmount, uint256 protocolFee, uint256 creatorFee, uint256 postPrice, uint256 realQuote, uint256 sold)',
+  'event GatewayBuy(address indexed token, address indexed trader, address indexed caller, uint256 fundsUsed, uint256 amountOut)',
+  'event GatewaySell(address indexed token, address indexed trader, address indexed caller, uint256 amount, uint256 funds, uint256 fundsToSeller, uint256 routerFee, address feeRecipient)',
+  'event GatewaySellTo(address indexed token, address indexed trader, address indexed to, address caller, uint256 amount, uint256 funds)',
+  'event Routed(address indexed token, address indexed pad, address indexed trader, bool isBuy, uint256 quoteAmount, uint256 tokenAmount)',
 ])
 const TAX_ROUTER_ABI = parseAbi([
   'function owedOf(address token) view returns (uint256)',
@@ -110,8 +120,8 @@ const HINTS = {
   RouterNeedsGate: 'the router path is off while the Agent gate is off; re-run with --use-wbnb to buy directly',
   // not a create flag: the shared dividend vault's holding floor for this pad was raised above what V3 allows (10,000 tokens)
   VaultFloorTooHigh: 'the platform\'s dividend vault requires a larger holding than V3 dividends allow (10,000 tokens), so a dividend token can\'t be created right now; --dividend 0 still works, or ask gang to fix the vault setting',
-  // 2.0 金库版 (gang create --vault)
-  NotVault: '--vault is not a vault listed on the 2.0 金库版 pad: gang lists each vault before its token is created',
+  // the vault mode (gang create --vault): 3.0 once upgraded, or the 2.0 金库版 pad
+  NotVault: '--vault is not a vault listed on this pad: gang lists each vault before its token is created',
   NotVaultCreator: 'this wallet is not the one gang named for this vault (each named wallet creates one token): create from that wallet, or ask gang to name this one',
   UseVaultCreate: 'the 2.0 金库版 pad creates only tokens bound to a listed vault: gang create --vault <vault> …',
   VaultCannotTrade: 'a token\'s own vault never buys or sells it on the curve',
@@ -188,12 +198,17 @@ async function labelOf(ctx, registry, recipient) {
   try { return (await ctx.read(registry, REGISTRY_ABI, 'entries', [recipient]))[2] || null } catch { return null }
 }
 
-/** 2.0 金库版: the token's vault and what it means for holders (null on any other pad). */
-async function vaultView(ctx, token, c) {
-  if (ctx.gen !== VAULT_GEN) return null
-  const address = await ctx.read(ctx.pad, PAD_ABI, 'vaultOf', [token])
+const vaultOfToken = tokenVaultOf
+
+/** The token's vault and what it means for holders (2.0 金库版, or a 3.0 token created with --vault); null without one. */
+async function vaultView(ctx, token, c, net = '') {
+  let address
+  try { address = await vaultOfToken(ctx, token) } catch (e) {
+    return { error: `could not read the token's vault (${e.shortMessage || e.message.split('\n')[0]})`, retry: `gang info --token ${token}${net}` }
+  }
+  if (!address) return null
   return {
-    address, padGen: ctx.gen,
+    address, padGen: ctx.gen, bond: `none: ${VAULT_NO_BOND}`,
     note: c.graduated
       ? 'graduated: a plain token now, the vault moves it like any other contract'
       : 'until graduation the token moves only through the pad: this vault locks a holder\'s tokens (counted in the holder\'s 1% cap, see gang status → lockedInVault) and releases them, for the wallet that sends the tx and holds an Agent ID',
@@ -356,12 +371,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ? { warning: `this token pays its tax to the split module, but the module is bound to another token (${split.token}): the keeper never splits this token's tax (${c.quote}); it is split only by hand (gang split distribute --token ${token}${net} --asset ${c.quote})` } : null
     // 2.0: the creator's part of the curve fee, waiting on the pad
     const gen = await curveCreatorFee(ctx, token, c, net)
-    const vault = await vaultView(ctx, token, c)
+    const vault = await vaultView(ctx, token, c, net)
+    // 3.0: the rule set the token was created under (fixed for good; an upgrade adds rules for new tokens only)
+    const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, PAD_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
     const nonWbnb = c.quote.toLowerCase() !== String(ctx.wbnb).toLowerCase()
     const graduationNote = c.graduationTargetBnb != null && !c.graduated
       ? gradLine(c.graduationTargetBnb, nonWbnb ? `${c.graduationAt} ${c.quoteSymbol || 'of the quote'}` : null) : null
     return out({
-      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
     })
@@ -379,8 +396,8 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const q = c.graduated && c.pair && bal > 0n ? await poolSellQuote(ctx, c.taxHandler, token, bal) : null
     // the creator's own view also shows its creator fee (2.0)
     const { creatorFee } = me.toLowerCase() === c.creator.toLowerCase() ? await curveCreatorFee(ctx, token, c, net) : {}
-    // 2.0 金库版, before graduation: what this wallet has in the vault, counted in its 1% cap
-    const locked = ctx.gen === VAULT_GEN && !c.graduated ? await ctx.read(ctx.pad, PAD_ABI, 'lockedOf', [token, me]) : null
+    // a token with a vault (2.0 金库版, 3.0 --vault), before graduation: what this wallet has in it, counted in its 1% cap
+    const locked = !c.graduated && (await vaultOfToken(ctx, token).catch(() => null)) ? await ctx.read(ctx.pad, PAD_ABI, 'lockedOf', [token, me]) : null
     return out({
       success: true, chainId: Number(ctx.chainId), wallet: me, token, quote: c.quoteSymbol, graduated: c.graduated,
       balance: formatUnits(bal, 18), ...(locked !== null && { lockedInVault: formatUnits(locked, 18) }), dividendPct: c.dividendPct, ...(creatorFee && { creatorFee }),
@@ -437,7 +454,8 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (!(n >= 1 && n <= 5)) fail(`--${f} must be a number between 1 and 5 (in %); for an untaxed token leave out both tax flags (or give both as 0)`, { got: opt(f) ?? null })
       return n
     }
-    // --vault (2.0 金库版): the listed vault the token is bound to for good; the create goes to that pad (createWithVault)
+    // --vault: the listed vault the token is bound to for good (createWithVault): on the create target when it serves the
+    // vault mode (3.0 once upgraded), else on the 2.0 金库版 pad
     const vault = flag('vault') ? addrArg(opt, fail, 'vault', 'the vault gang listed for your token') : null
     // --grad: the graduation target in BNB raised, one of the pad's GRAD_BNB_TIERS (2.0); left out: the pad's default
     const grad = flag('grad') ? Number(opt('grad')) : null
@@ -447,12 +465,18 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const dividend = taxed ? parseNum(fail, 'dividend', opt('dividend', '0'), 0, 100) : 0
     const me = walletFor(ctx, opt('from'))
     if (vault) {
-      // the vault pad, whatever the create target is; its own router, tax handler and fees
-      const vg = vaultGenOf(ctx.gens ?? [])
-      if (!vg) fail(`--vault: this CLI version knows no 2.0 金库版 pad on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}`)
-      Object.assign(ctx, genFields(vg))
-      delete ctx._tax
-      delete ctx.fees
+      let here
+      try { here = await vaultModeOf(ctx) } catch (e) {
+        return fail(`could not read whether GangLaunchpad ${ctx.gen ?? ctx.pad} serves --vault (RPC error)`, { detail: e.shortMessage || e.message.split('\n')[0], retry: 'same command again' })
+      }
+      if (!here) {
+        // the vault pad, its own router, tax handler and fees
+        const vg = vaultGenOf(ctx.gens ?? [])
+        if (!vg) fail(`--vault: GangLaunchpad ${ctx.gen ?? ctx.pad} has no vault mode yet and this CLI version knows no 2.0 金库版 pad on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}`)
+        Object.assign(ctx, genFields(vg))
+        delete ctx._tax
+        delete ctx.fees
+      }
       // asked before any upload: the pad would refuse the create anyway (NotVault / NotVaultCreator)
       const [listed, named] = await Promise.all([ctx.read(ctx.pad, PAD_ABI, 'isVault', [vault]), ctx.read(ctx.pad, PAD_ABI, 'vaultCreator', [vault])])
       if (!listed) fail(HINTS.NotVault, { vault, pad: ctx.pad })
@@ -529,7 +553,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ...(creatorFee && { creatorFee }),
       ...(vault && {
         padGen: ctx.gen, pad: ctx.pad, vault,
-        vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming',
+        vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming. A vault-bound token takes no GangBond (gang bond post refuses it): a lock moves tokens out of the creator\'s wallet, which would forfeit a bond',
       }),
       note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang tx --hash …\`.`,
     }, 'create'))

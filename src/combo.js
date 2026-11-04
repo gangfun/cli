@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, maxUint128, maxUint256, parseUnits, zeroAddress } from 'viem'
-import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atPad, atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseNum, revertOf as revertIn, step } from './steps.js'
 import { parseSplitSpec } from './split.js'
@@ -76,6 +76,7 @@ export const COMBO_FACTORY_ABI = parseAbi([
 
 export const COMBO_ABI = parseAbi([
   'function moduleType() view returns (bytes32)',
+  'function pad() view returns (address)',
   'function dev() view returns (address)',
   'function token() view returns (address)',
   'function quote() view returns (address)',
@@ -414,11 +415,14 @@ export async function runCombo(sub, { opt, flag, out, fail, summarize }) {
   const chainId = Number(ctx.chainId)
   const tn = testnet ? ' --testnet' : ''
   if (flag('token') && flag('module')) fail('give --token (its tax recipient is the combined recipient) or --module, not both')
-  let token = null, module, tokenQuote = null
+  let token = null, module, tokenQuote = null, padKnown = true
   if (flag('module')) {
     if (sub === 'bind') fail('gang combo bind needs --token <the token> (it binds the token\'s own recipient)')
     module = opt('module')
     if (!isAddress(module ?? '')) fail('--module must be a combined recipient address (0x…)', { got: module ?? null })
+    // the module's own generation: any other pad answers curves() of its token with zeros, which reads as "not graduated"
+    const pad = await ctx.read(module, COMBO_ABI, 'pad').catch(() => null)
+    padKnown = !!pad && atPad(ctx, pad, testnet)
   } else {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
@@ -436,7 +440,7 @@ export async function runCombo(sub, { opt, flag, out, fail, summarize }) {
   // status --asset <addr>: read that asset too (a stray one the default list doesn't cover)
   const extra = sub === 'status' && flag('asset') && isAddress(opt('asset') ?? '') ? [getAddress(opt('asset'))] : []
   const s = await comboOf(ctx.read, module, {
-    wbnb: ctx.wbnb, pad: ctx.pad, extraAssets: [...(tokenQuote && tokenQuote !== zeroAddress ? [tokenQuote] : []), ...extra], ref,
+    wbnb: ctx.wbnb, pad: padKnown ? ctx.pad : null, extraAssets: [...(tokenQuote && tokenQuote !== zeroAddress ? [tokenQuote] : []), ...extra], ref,
   })
   if (!s) {
     return fail(token ? 'this token\'s tax recipient is not a combined recipient (combo-v1)' : 'not a combined recipient (combo-v1)',

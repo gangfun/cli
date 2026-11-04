@@ -3,7 +3,7 @@ import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
 import { UA } from './version.js'
-import { atTokenPad, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
 
@@ -15,6 +15,7 @@ import { bondGuard } from './bond.js'
  */
 export const FAIR_NETS = padNets('fair')
 
+const TOKEN_VERSION_ABI = parseAbi(['function tokenVersionOf(address token) view returns (uint8)'])
 const PAD_ABI = parseAbi([
   'function create(string name, string symbol, string logoURI, string metaURI, address quote, address refPool, (uint256 raiseBnb, uint16 capBps, uint16 holdBps, uint16 mintFeeBps, uint16 exitFeeBps) cfg, uint256 devShares) returns (address)',
   'function mint(address token, uint256 shares, uint256 minShares) returns (uint256)',
@@ -260,12 +261,15 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
   let ctx
   try { ctx = fairCtx(testnet) } catch (e) { return fail(e.message) }
   // a token is served by the GangLaunchpad generation that has it (its pad, router, GangBond); a create goes to the newest
-  if (sub !== 'create' && sub !== 'tx' && (await atTokenPad(ctx, opt('token'))) === null) return fail(KIND_UNREAD.error, { token: opt('token'), retry: KIND_UNREAD.retry })
+  const onPad = sub !== 'create' && sub !== 'tx' ? await atTokenPad(ctx, opt('token')) : undefined
+  if (onPad === null) return fail(KIND_UNREAD.error, { token: opt('token'), retry: KIND_UNREAD.retry })
   // not a sale on this pad: on the merged pad it may be a V3 token (kindOf), so point at `gang v3`
   const notFair = async (token) => {
     const { error, kind } = await notThisKind(ctx, token, 'fair', testnet ? ' --testnet' : '')
     return fail(error, { token, chainId: ctx.chainId, ...(kind && { kind }) })
   }
+  // 3.0's sales() answers a 铸币飞轮 token with another struct: never read it as a 打新 sale
+  if (onPad === 'fly') return notFair(opt('token'))
 
   if (sub === 'info' || sub === 'status') {
     const token = tokenArg(opt, fail)
@@ -277,7 +281,9 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
       const swapBack = sale.launched && sale.pair
         ? await swapBackState(ctx, await ctx.read(ctx.pad, PAD_ABI, 'taxHandler'), token, (await poolReserves(ctx, token, sale.pair))[0])
         : null
-      return out({ success: true, chainId: Number(ctx.chainId), ...pub, ...(ctx.gen && { padGen: ctx.gen }), ...(swapBack && { swapBack }) })
+      // 3.0: the rule set the sale was created under (fixed for good)
+      const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, TOKEN_VERSION_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
+      return out({ success: true, chainId: Number(ctx.chainId), ...pub, ...(ctx.gen && { padGen: ctx.gen }), ...(tokenVersion != null && { tokenVersion }), ...(swapBack && { swapBack }) })
     }
     const slippage = parseNum(fail, 'slippage', opt('slippage', '1'), 0, 50)
     const me = walletFor(ctx, opt('from'))
@@ -290,7 +296,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     checkMeta() // a bad --website / --twitter / --description fails here, before any wrap / approve round or upload
     const raise = parseNum(fail, 'raise', opt('raise', '15'), 5, 50)
     if (flag('hours')) fail('--hours was removed: a fair-mint sale has no deadline and stays open until it fills')
-    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0): a 打新 sale fills at its --raise instead, so leave --grad out')
+    if (flag('grad')) fail('--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): a 打新 sale fills at its --raise instead, so leave --grad out')
     const capPct = parseNum(fail, 'cap', opt('cap', '0.5'), 0.25, 1)
     const holdPct = parseNum(fail, 'hold', opt('hold', '60'), 60, 90)
     const mintFeePct = parseNum(fail, 'mint-fee', opt('mint-fee', '1'), 1, 3)
