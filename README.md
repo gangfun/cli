@@ -348,4 +348,4 @@ a background process, so a command never waits on it. `GANG_TELEMETRY=0` (or `DO
 
 ## Version
 
-`0.30.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.30.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

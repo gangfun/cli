@@ -1067,8 +1067,7 @@ const captured = (r) => {
 }
 async function portfolioStatus(kind, token, wallet, indexed) {
   if (kind === 'legacy') {
-    // an old token none of today's V2 / Soft / U / S reads know (GANG itself, launched on an early Soft pad): the
-    // balance alone, from the token
+    // an old token none of today's V2 / Soft / U / S reads know: the balance alone, from the token
     return tokenInfo(token, wallet).catch(async (e) => {
       if (!/not a Gang token/.test(e.message)) throw e
       return { graduated: indexed.status === 'graduated', myBalanceRaw: (await balanceOf(token, wallet)).toString() }
