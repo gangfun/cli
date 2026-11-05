@@ -6,6 +6,7 @@
  *   follow ref = "gang" 0x03 followed note tx hash (37 bytes), right before the note suffix (or last without one)
  *   token links (create) = "gang" 0x04 UTF-8(website "\n" twitter) uint16be(length), same place (see readTokenLinks; written by LaunchpadV2 creates before CLI 0.10)
  *   ref = "gang" 0x05 referrer address (25 bytes), right before the follow ref: [calldata][ref][follow][note] (see readRef)
+ *   tool = "gang" 0x06 tool id (17 bytes), right before the ref: [calldata][tool][ref][follow][note] (see readTool)
  * The text is sent after the tx lands (POST /api/notes), so anyone can check it was written before the trade.
  * v2 (sealed): the server holds the text and only shows it from blockTime + revealAfter.
  * Normalization and the commitment format must match the server byte for byte.
@@ -23,7 +24,8 @@ export const MAGIC = '67616e6701' // "gang" + version 1
 export const MAGIC_V2 = '67616e6702' // "gang" + version 2 (sealed)
 export const FOLLOW_MAGIC = '67616e6703' // "gang" + 03: follow ref
 export const LINKS_MAGIC = '67616e6704' // "gang" + 04: token links
-export const REF_MAGIC = '67616e6705' // "gang" + 05: who invited this wallet (01–05 are never reused)
+export const REF_MAGIC = '67616e6705' // "gang" + 05: who invited this wallet
+export const TOOL_MAGIC = '67616e6706' // "gang" + 06: which tool sent this tx (01–06 are never reused)
 const MAX_CP = 280
 const REVEAL_MIN_H = 1, REVEAL_MAX_H = 72
 const LINK = /https?:\/\/|www\.|t\.me\//i
@@ -145,6 +147,51 @@ export function readRef(input) {
   if (f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(`0x${f.slice(10)}`)) end -= 74
   const r = s.slice(Math.max(0, end - 50), end)
   return r.length === 50 && r.startsWith(REF_MAGIC) && /^[0-9a-f]{40}$/.test(r.slice(10)) ? `0x${r.slice(10)}` : null
+}
+
+/**
+ * Tool tag (same code as the server's indexer): which tool sent this tx, set by its builder with GANG_TOOL. The id is
+ * 2–12 of a-z 0-9 - (first not -), in ASCII, zero-padded to 12 bytes. "gang" 06 id (17 bytes), lower-case hex without
+ * 0x, right before the ref, the follow ref and the note suffix, if any: [calldata][tool][ref][follow][note]. Anyone can
+ * write any id: it is a usage count, not proof of who sent the tx.
+ */
+export const TOOL_ID = /^[a-z0-9][a-z0-9-]{1,11}$/
+export function toolSuffix(id) {
+  if (!TOOL_ID.test(String(id ?? ''))) throw new Error('bad tool id')
+  return `${TOOL_MAGIC}${Buffer.from(id, 'ascii').toString('hex').padEnd(24, '0')}`
+}
+
+/**
+ * The tool id a tx input names, or null. Only one place counts: the 17 bytes right before the ref (when the input has
+ * one), the follow ref and the note suffix, so one input names at most one tool.
+ */
+export function readTool(input) {
+  const s = String(input || '').toLowerCase()
+  const c = readNoteCommit(s)
+  let end = s.length - (c ? (c.version === 2 ? 82 : 74) : 0)
+  const f = s.slice(Math.max(0, end - 74), end)
+  if (f.length === 74 && f.startsWith(FOLLOW_MAGIC) && TX_RE.test(`0x${f.slice(10)}`)) end -= 74
+  const r = s.slice(Math.max(0, end - 50), end)
+  if (r.length === 50 && r.startsWith(REF_MAGIC) && /^[0-9a-f]{40}$/.test(r.slice(10))) end -= 50
+  const t = s.slice(Math.max(0, end - 34), end)
+  if (t.length !== 34 || !t.startsWith(TOOL_MAGIC) || !/^[0-9a-f]{24}$/.test(t.slice(10))) return null
+  const id = Buffer.from(t.slice(10), 'hex').toString('latin1').replace(/\0+$/, '')
+  return TOOL_ID.test(id) ? id : null
+}
+
+// what GANG_TOOL did on this run, shown on its result (only once a write step was built with it)
+let toolState = null
+export const toolInfo = () => toolState
+
+/** A write step's calldata with the GANG_TOOL tag. A bad id never fails the trade: it goes untagged and the result says so. */
+export function withTool(data, id = process.env.GANG_TOOL) {
+  if (!id) return data
+  if (!TOOL_ID.test(id)) {
+    toolState = { attached: false, reason: 'GANG_TOOL must be 2–12 of a-z 0-9 - (first not -): left out' }
+    return data
+  }
+  toolState = { attached: true, id }
+  return data + toolSuffix(id)
 }
 
 /*

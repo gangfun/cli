@@ -321,6 +321,8 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_NOTES_DIR` | Local note queue, one file per note: salt and send status, kept 24h (default `~/.gang/notes`); `previews/` in it records what each trade preview carried (note, follow) for `gang execute`, also kept 24h |
 | `GANG_STREAM` | `0`: `gang watch` market mode polls instead of using the server's stream (same as `--poll`) |
 | `GANG_TELEMETRY` | `0` turns off the anonymous usage counts (0.24.0+; `DO_NOT_TRACK=1` too). See [Telemetry](#telemetry) |
+| `GANG_CLIENT` | The agent host's name in the usage counts (0.31.0+). `gang mcp` fills it in from the MCP client unless you set it |
+| `GANG_TOOL` | Your tool's id, tagged on mainnet trades and creates (0.31.0+). See [Tool id](#tool-id) |
 | `GANG_UPDATE_CHECK` | `0` turns off the once-a-day check for a newer CLI on npm (cached in `~/.gang/update.json`) |
 | `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | The GangLaunchpad new tokens go to (mainnet / testnet), behind V3 and 打新. Defaults: mainnet 3.0 `0x2bEb…AB29` (2.0 `0x7703…E557` and 1.0 `0x15CF…4365` kept for their tokens); testnet 3.0 `0x0508…ceE2` (2.0 `0xb14d…3B3E`, the first 2.0 `0x6381…39be` and 1.0, set 10 `0xFebF…5BB1`, kept for their tokens). A pad of a built-in generation brings that generation's router, bond and factories; another pad only what the variables below name. Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
@@ -340,12 +342,24 @@ From 0.24.0 the CLI counts how it is used, anonymously, so gang.fun can see wher
 Each command adds one event:
 - the command name (and subcommand), the names of the flags given (never their values);
 - whether it succeeded, and if not, a short error code (`NO_AGENT_ID`, `DEV_MODE_OFF`, a Binance risk code, `USAGE`…);
-- for `gang preflight`, which checks passed.
+- for `gang preflight`, which checks passed;
+- the agent host's name, when known (0.31.0+): the MCP client's own name (such as `claude-code`), or `GANG_CLIENT`. Only a
+  short name made of letters, digits, spaces, `-` and `_` goes out; anything else is sent as `other`.
 
 The only id is a random one made on first use (`~/.gang/install-id`). No wallet address, token, amount, note text or
 error message is sent. Events queue in `~/.gang/events.ndjson` and are posted to `GANG_API` + `/t` at most once a minute by
 a background process, so a command never waits on it. `GANG_TELEMETRY=0` (or `DO_NOT_TRACK=1`) turns it off.
 
+## Tool id
+
+Building a tool on the CLI? Set `GANG_TOOL` (0.31.0+) to an id of 2–12 characters (`a-z`, `0-9`, `-`, not starting with
+`-`). Mainnet creates, curve trades, and 打新 and 铸币飞轮 mints and withdraws then carry `"gang" 06 + id` at the end of their calldata,
+in the same way as notes and invites; the contracts ignore it. The result shows `tool: { attached, id }`. A bad id never
+stops a trade: it goes untagged and `tool` says why.
+
+The tag is public and anyone can write any id, so it counts usage and proves nothing about who sent a trade. Leave
+`GANG_TOOL` unset and nothing is added.
+
 ## Version
 
-`0.30.1` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.31.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

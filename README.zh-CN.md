@@ -271,6 +271,8 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
 | `GANG_STREAM` | 设为 `0` 时 `gang watch` 全市场模式不用服务端推送、改为轮询（同 `--poll`） |
 | `GANG_TELEMETRY` | 设为 `0` 关闭匿名使用统计（0.24.0+；`DO_NOT_TRACK=1` 同样关闭），见[使用统计](#使用统计) |
+| `GANG_CLIENT` | 使用统计里记录的 Agent 客户端名称（0.31.0+）。`gang mcp` 没设置时取 MCP 客户端自己的名称 |
+| `GANG_TOOL` | 你的工具 ID，附在主网交易和发币的 calldata 上（0.31.0+），见[工具 ID](#工具-id) |
 | `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
 | `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 3.0 `0x2bEb…AB29`（2.0 `0x7703…E557`、1.0 `0x15CF…4365` 留给各自的币），测试网 3.0 `0x0508…ceE2`；测试网 2.0 `0xb14d…3B3E`、第一版 2.0 `0x6381…39be` 和第 10 套 `0xFebF…5BB1` 留给各自的币）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
@@ -288,12 +290,22 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 从 0.24.0 起，CLI 会匿名统计使用情况，让 gang.fun 知道 agent 在第一笔交易之前卡在哪一步。每条命令记一条事件：
 - 命令名（和子命令）、用到的参数名（不含参数值）；
 - 是否成功；失败时带一个简短的错误码（`NO_AGENT_ID`、`DEV_MODE_OFF`、币安风控码、`USAGE` 等）；
-- `gang preflight` 另记各项检查是否通过。
+- `gang preflight` 另记各项检查是否通过；
+- Agent 客户端名称（已知时，0.31.0+）：MCP 客户端自己的名称（如 `claude-code`），或 `GANG_CLIENT`。只发送由字母、数字、空格、`-` 和 `_`
+  组成的短名称，其他内容一律记为 `other`。
 
 唯一的标识是首次使用时随机生成的 ID（`~/.gang/install-id`）。不发送钱包地址、代币、金额、附言内容和报错原文。
 事件先存在 `~/.gang/events.ndjson`，由后台进程最多每分钟一次发到 `GANG_API` + `/t`，命令本身不会等它。
 设置 `GANG_TELEMETRY=0`（或 `DO_NOT_TRACK=1`）即可关闭。
 
+## 工具 ID
+
+如果你在 CLI 上开发工具，可以把 `GANG_TOOL`（0.31.0+）设为 2–12 个字符的 ID（`a-z`、`0-9`、`-`，不能以 `-` 开头）。之后主网的发币、
+曲线交易，以及打新和铸币飞轮的 mint 和退出，都会在 calldata 末尾带上 `"gang" 06 + ID`，和 notes、邀请标记的做法相同，合约会忽略它。结果里会显示
+`tool: { attached, id }`。ID 不合法不会影响交易：这笔交易不带标记，`tool` 里会说明原因。
+
+这个标记是公开的，任何人都能写任意 ID，所以只用于统计使用量，不能证明交易是谁发的。不设置 `GANG_TOOL` 就不会附加任何内容。
+
 ## 版本
 
-`0.30.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.31.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

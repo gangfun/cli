@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, join, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { clientOf } from './telemetry.js'
 import { VERSION } from './version.js'
 
 const CLI = fileURLToPath(new URL('./index.js', import.meta.url))
@@ -262,9 +263,9 @@ export function childEnv(env = process.env, cli = CLI) {
 }
 
 /** Run the CLI with args → { code, stdout, stderr }. onChild(child): to kill a read when its request is cancelled. */
-function runCli(args, ms, onChild = () => {}) {
+function runCli(args, ms, onChild = () => {}, env = childEnv()) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [CLI, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
     onChild(child)
     let stdout = '', stderr = ''
     child.stdout.on('data', (d) => { stdout += d })
@@ -322,6 +323,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, signals
   const write = (m) => output.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
   const reply = (id, result) => write({ id, result })
   const error = (id, code, message) => write({ id, error: { code, message } })
+  // the MCP client's name, for the children's usage counts (telemetry.js); a GANG_CLIENT the user set wins
+  let host = ''
   const pending = new Set()
   const running = new Map() // request id -> { child, read }: a read's child is killed when the request is cancelled
   const cancelled = new Set() // answered with nothing: the client stopped waiting
@@ -338,6 +341,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, signals
     switch (m.method) {
       case 'initialize': {
         const asked = m.params?.protocolVersion
+        host = clientOf(m.params?.clientInfo?.name)
         return reply(m.id, {
           protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
           capabilities: { tools: { listChanged: false } },
@@ -358,7 +362,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, signals
         const read = t.annotations.readOnlyHint === true
         const ms = t.name === 'gang_watch' ? (WATCH_MAX_SEC + 30) * 1000 : read ? RUN_MS : WRITE_MS
         const args = t.args(a)
-        const done = await runCli(args, ms, (child) => running.set(m.id, { child, read }))
+        const done = await runCli(args, ms, (child) => running.set(m.id, { child, read }), childEnv({ ...(host && { GANG_CLIENT: host }), ...process.env }))
         running.delete(m.id)
         // a cancelled request gets no answer (MCP: the client has stopped waiting for it)
         if (cancelled.delete(m.id)) return

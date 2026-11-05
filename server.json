@@ -8,12 +8,12 @@
     "url": "https://github.com/gangfun/cli",
     "source": "github"
   },
-  "version": "0.30.1",
+  "version": "0.31.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@gangfun/cli",
-      "version": "0.30.1",
+      "version": "0.31.0",
       "transport": {
         "type": "stdio"
       },
@@ -32,6 +32,11 @@
         {
           "name": "GANG_TELEMETRY",
           "description": "0 turns off the anonymous usage counts",
+          "format": "string"
+        },
+        {
+          "name": "GANG_TOOL",
+          "description": "A tool builder's id, tagged on mainnet trades and creates (usage count only)",
           "format": "string"
         }
       ]
