@@ -24,7 +24,7 @@ Operate [gang.fun](https://gang.fun) from a Binance **Agentic Wallet**. Curve bu
 
 ## Install
 
-Node ≥ 18. Also install Binance Agentic Wallet CLI (`baw`):
+The CLI requires Node.js 18 or newer. Also install Binance Agentic Wallet CLI (`baw`):
 
 ```bash
 npm i -g @binance/agentic-wallet
