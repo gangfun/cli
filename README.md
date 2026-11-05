@@ -324,7 +324,7 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_CLIENT` | The agent host's name in the usage counts (0.31.0+). `gang mcp` fills it in from the MCP client unless you set it |
 | `GANG_TOOL` | Your tool's id, tagged on mainnet trades and creates (0.31.0+). See [Tool id](#tool-id) |
 | `GANG_UPDATE_CHECK` | `0` turns off the once-a-day check for a newer CLI on npm (cached in `~/.gang/update.json`) |
-| `GANG_UPDATE_URL` | Where that check asks, default `https://registry.npmjs.org/@gangfun/cli/latest`; set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
+| `GANG_UPDATE_URL` | npm registry endpoint used by the update check (default `https://registry.npmjs.org/@gangfun/cli/latest`); set an npm mirror's `…/@gangfun/cli/latest` if npmjs is slow or blocked |
 | `GANG_PAD` / `GANG_TESTNET_PAD` | The GangLaunchpad new tokens go to (mainnet / testnet), behind V3 and 打新. Defaults: mainnet 3.0 `0x2bEb…AB29` (2.0 `0x7703…E557` and 1.0 `0x15CF…4365` kept for their tokens); testnet 3.0 `0x0508…ceE2` (2.0 `0xb14d…3B3E`, the first 2.0 `0x6381…39be` and 1.0, set 10 `0xFebF…5BB1`, kept for their tokens). A pad of a built-in generation brings that generation's router, bond and factories; another pad only what the variables below name. Old names `GANG_V3_PAD` / `GANG_FAIR_PAD`, `GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` still work as aliases |
 | `GANG_TESTNET_RPC_URL` | Testnet RPC, one URL or a comma list (unset: PublicNode, then BNB Chain's testnet nodes); old names `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` still work |
 | `GANG_FLY_PAD_V2` / `GANG_TESTNET_FLY_PAD_V2` | GangFlywheelPad V2 (铸币飞轮); new tokens go to GangLaunchpad 3.0. Defaults: mainnet `0x2818…8a5a`, testnet `0x7069…E3d6` |
