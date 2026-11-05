@@ -7,7 +7,7 @@ import { baw, bawAddress, bawError, bawFailed, bawSettings, bawStatus, bawPrevie
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
 import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
 import {
-  makeNote, withNote, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
+  makeNote, withNote, withTool, toolInfo, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
   refSuffix, readRef,
   readTokenLinks,
 } from './notes.js'
@@ -50,6 +50,8 @@ let refTag = '', refInfo = null
 // the first result of a run is also counted (anonymously, telemetry.js) unless GANG_TELEMETRY=0
 const out = (o) => {
   if (refInfo && o && typeof o === 'object' && !('ref' in o)) o = { ...o, ref: refInfo }
+  // a failed result built no tx, so it claims no tag; a bad id is always said
+  if (toolInfo() && o && typeof o === 'object' && !('tool' in o) && (o.success !== false || !toolInfo().attached)) o = { ...o, tool: toolInfo() }
   record(args, o)
   console.log(JSON.stringify(update ? { ...o, update } : o, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
 }
@@ -213,8 +215,8 @@ async function withUsd(follow, token, track, spent, decimals) {
   }
 }
 
-// [calldata][ref][follow][note]: the invite tag (only set on a buy / mint / follow with --ref) and the follow ref
-const withFollow = (data, follow) => data + refTag + (follow ? followSuffix(follow.noteTx) : '')
+// [calldata][tool][ref][follow][note]: the GANG_TOOL tag, the invite tag (only set on a buy / mint / follow with --ref) and the follow ref
+const withFollow = (data, follow) => withTool(data) + refTag + (follow ? followSuffix(follow.noteTx) : '')
 
 /**
  * --ref <addr|handle> on a buy / mint / follow: asks gang.fun whether the wallet has never traded on Gang and the
@@ -633,6 +635,7 @@ off, GANG_UPDATE_URL points it at an npm mirror).
 
 env: GANG_RPC_URL (one URL or a comma list; unset: five public BSC nodes, the next one tried when one fails),
 GANG_LOGO_API, GANG_API (default ${API}), GANG_NOTES_DIR (default ~/.gang/notes), GANG_UPDATE_CHECK, GANG_UPDATE_URL,
+GANG_CLIENT (the host's name in the usage counts), GANG_TOOL (a tool builder's id, tagged on mainnet trades and creates),
 GANG_PAD / GANG_TESTNET_PAD (the GangLaunchpad new tokens go to, behind both gang v3 and gang fair; old names GANG_V3_PAD /
 GANG_FAIR_PAD and GANG_V3_TESTNET_PAD / GANG_FAIR_TESTNET_PAD still work as aliases), GANG_TESTNET_RPC_URL (aliases
 GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET_ROUTER (alias GANG_ROUTER_TESTNET; GangRouter
@@ -961,13 +964,13 @@ async function legacySell(token) {
   const q = await quoteSell(token, amount)
   const minOut = (q.out * BigInt(Math.round((100 - slippage) * 100))) / 10000n
   if (pad.kind === 'soft') {
-    const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.softSell(token, amount, minOut), note) })
+    const p = bawPreview({ from: me, to: pad.address, data: withNote(withTool(calldata.softSell(token, amount, minOut)), note) })
     return out(summarizeWithNote(p, {
       step: 'sell', kind: 'soft', token, symbol: info.symbol, pad: pad.id,
       amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'BNB',
     }, note, 'sell'))
   }
-  const p = bawPreview({ from: me, to: pad.address, data: withNote(calldata.v2Sell(token, amount, minOut), note) })
+  const p = bawPreview({ from: me, to: pad.address, data: withNote(withTool(calldata.v2Sell(token, amount, minOut)), note) })
   return out(summarizeWithNote(p, {
     step: 'sell', kind: 'v2', token, symbol: info.symbol, pad: pad.id, quote: info.quote,
     amount: fmtTok(amount), expectOut: q.outFmt, fee: q.feeFmt, minOut: fmt(minOut), unit: 'quote', quotePath: q.quotePath, deterministic: q.deterministic || false,

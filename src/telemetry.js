@@ -1,9 +1,9 @@
 /**
  * Anonymous usage counts, on by default; GANG_TELEMETRY=0 (or DO_NOT_TRACK=1) turns them off.
  * One event per command: its name, the flag names (never their values), whether it succeeded and, when not, a short
- * error code. `gang preflight` adds which checks passed. The only id is a random one (~/.gang/install-id); no wallet,
- * address, amount, token, note text or flag value goes out. gang.fun uses it to see where agents get stuck before a
- * first trade.
+ * error code, and the host's name when known (`gang mcp`: the MCP client's own name; else GANG_CLIENT). `gang preflight`
+ * adds which checks passed. The only id is a random one (~/.gang/install-id); no wallet, address, amount, token, note text
+ * or flag value goes out. gang.fun uses it to see where agents get stuck before a first trade and which hosts they use.
  * Events queue in ~/.gang/events.ndjson and a detached child posts them to POST /api/t at most once a minute, so a
  * command never waits on the network; a failed post is dropped.
  */
@@ -71,6 +71,19 @@ export function codeOf(o = {}) {
   return 'ERROR'
 }
 
+/**
+ * A host's name as the events carry it: a slug of a-z 0-9 -, at most 24 characters. Only what looks like a product's name
+ * goes out: anything else (a full address, an email, a path, a dotted hostname, a long key: other characters, too long, a
+ * long hex run) is 'other', never a shortened copy. '' when there is no name. These rules can't tell a person's name from
+ * a product's: a host that sends one as its own name sends it here too.
+ */
+export function clientOf(raw = process.env.GANG_CLIENT) {
+  if (typeof raw !== 'string' || !raw.trim()) return ''
+  const s = raw.trim()
+  if (!/^[A-Za-z][A-Za-z0-9 _-]{0,23}$/.test(s) || /[0-9a-f]{12}/i.test(s)) return 'other'
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '')
+}
+
 /** The event for one command (argv after `gang`) and its JSON result. */
 export function eventOf(argv, o = {}) {
   const c = NAME.test(argv[0] ?? '') ? argv[0] : 'other'
@@ -80,7 +93,8 @@ export function eventOf(argv, o = {}) {
   const pf = c === 'preflight'
     ? { signedIn: o.status === 'CONNECTED', agent: o.isAgent ?? null, dev: o.devMode ?? null, all: o.tradeAllTokens ?? null }
     : null
-  return { t: Math.floor(Date.now() / 1000), c, s, f, ok, code: ok ? '' : codeOf(o), pf }
+  const cl = clientOf()
+  return { t: Math.floor(Date.now() / 1000), c, s, f, ok, code: ok ? '' : codeOf(o), pf, ...(cl && { cl }) }
 }
 
 let recorded = false

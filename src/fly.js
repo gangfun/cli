@@ -3,6 +3,7 @@ import { defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund, parseAmount
 import { API, get as apiGet } from './discover.js'
 import { walletFor } from './fair.js'
 import { MERGED_ERRORS_ABI, MERGED_HINTS, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
+import { withTool } from './notes.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 
 /**
@@ -544,6 +545,8 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
   const ctx = flyCtx(testnet)
   const chainId = Number(ctx.chainId)
   const write = (tx, extra) => step(ctx, tx, { chainId, ...extra }, rawOnly, summarize)
+  // the GANG_TOOL tag on a create / mint / withdraw (mainnet: gang.fun does not index testnet txs)
+  const tagged = (data) => (testnet ? data : withTool(data))
   if (flag('note')) fail('--note is not matched to 铸币飞轮 trades yet: leave it out')
 
   const tokenArg = () => {
@@ -824,9 +827,9 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const sym = await symbolOf(ctx, quote)
     const pre = await fund(ctx, { me: who, token: quote, need, spender: ctx.pad, sym }, rawOnly, summarize)
     if (pre) return out(pre)
-    const createData = (logoURI, metaURI) => encodeFunctionData({
+    const createData = (logoURI, metaURI) => tagged(encodeFunctionData({
       abi: padAbi, functionName: 'create', args: [[name, symbol, logoURI, metaURI], quote, refPool, cfg, BigInt(devShares)],
-    })
+    }))
     const dry = await dryRun(ctx, who, ctx.pad, createData('', ''))
     if (dry) return out({ success: false, step: 'create', ...dry })
     const logo = await resolveLogo()
@@ -879,7 +882,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       if (bnb) {
         const native = await ctx.client.getBalance({ address: who })
         if (native < need + GAS_RESERVE) fail('not enough BNB for this mint (native BNB must also cover gas)', { haveBnb: formatUnits(native, 18), needBnb: formatUnits(need, 18), hint: 'add --use-wbnb to pay from WBNB' })
-        const data = encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mintWithBnb', args: [token, accepted, BigInt(minShares), referrer] })
+        const data = tagged(encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mintWithBnb', args: [token, accepted, BigInt(minShares), referrer] }))
         const dry = await dryRun(ctx, who, ctx.pad, data, need)
         if (dry) return out({ success: false, ...extra, ...dry })
         const tx = { from: who, to: ctx.pad, data, value: need }
@@ -888,7 +891,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
       }
       const pre = await fund(ctx, { me: who, token: sale.quote, need, spender: ctx.pad, sym: sale.quoteSymbol }, rawOnly, summarize)
       if (pre) return out(pre)
-      const data = encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mint', args: [token, accepted, BigInt(minShares), referrer] })
+      const data = tagged(encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mint', args: [token, accepted, BigInt(minShares), referrer] }))
       const dry = await dryRun(ctx, who, ctx.pad, data)
       if (dry) return out({ success: false, ...extra, ...dry })
       const tx = { from: who, to: ctx.pad, data }
@@ -916,7 +919,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (accepted === 0n) fail('no shares available to this wallet now', quota)
     const minTokensOut = minOf(tokensOut, slippage)
     const maxSpent = paid + fee
-    const data = bnb
+    const call = bnb
       ? encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mintPostWithBnb', args: [token, accepted, minTokensOut, referrer] })
       : encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'mintPost', args: [token, accepted, minTokensOut, maxSpent, referrer] })
     const extra = {
@@ -930,7 +933,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (!ok) {
       // the preview says no: the same call, simulated, names the rule (a BNB sale: BNB lent for the simulation only). Only
       // a rule of the pad / handler / token counts: a quote-token revert (no allowance yet) says nothing about the rule
-      const dry = await dryRun(ctx, who, ctx.pad, data, bnb ? maxSpent : 0n, bnb)
+      const dry = await dryRun(ctx, who, ctx.pad, call, bnb ? maxSpent : 0n, bnb)
       const r = dry?.reverted && HINTS[dry.error] ? dry : null
       // no rule from the simulation (e.g. it stopped at the quote transfer): the pad's rules read as gang info does,
       // and what is left when none applies is this wallet's own pace
@@ -946,6 +949,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     if (bnb) {
       const native = await ctx.client.getBalance({ address: who })
       if (native < maxSpent + GAS_RESERVE) fail('not enough BNB for this mint (native BNB must also cover gas)', { haveBnb: formatUnits(native, 18), needBnb: formatUnits(maxSpent, 18), hint: 'add --use-wbnb to pay from WBNB' })
+      const data = tagged(call)
       const dry = await dryRun(ctx, who, ctx.pad, data, maxSpent)
       if (dry) return out({ success: false, ...extra, ...dry })
       const tx = { from: who, to: ctx.pad, data, value: maxSpent }
@@ -954,6 +958,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     }
     const pre = await fund(ctx, { me: who, token: sale.quote, need: maxSpent, spender: ctx.pad, sym: sale.quoteSymbol }, rawOnly, summarize)
     if (pre) return out(pre)
+    const data = tagged(call)
     const dry = await dryRun(ctx, who, ctx.pad, data)
     if (dry) return out({ success: false, ...extra, ...dry })
     const tx = { from: who, to: ctx.pad, data }
@@ -977,7 +982,7 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const shares = flag('all') ? held : parseIntIn(fail, 'shares', opt('shares'), 1, held)
     const [payout, fee] = await ctx.read(ctx.pad, FLY_PAD_ABI, 'previewWithdraw', [token, who, BigInt(shares)])
     const minPayout = (payout * (10_000n - WITHDRAW_TOLERANCE_BPS)) / 10_000n
-    const data = encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'withdraw', args: [token, BigInt(shares), minPayout] })
+    const data = tagged(encodeFunctionData({ abi: FLY_PAD_ABI, functionName: 'withdraw', args: [token, BigInt(shares), minPayout] }))
     const dry = await dryRun(ctx, who, ctx.pad, data)
     if (dry) return out({ success: false, step: 'withdraw', ...dry })
     return out(write({ from: who, to: ctx.pad, data }, {
