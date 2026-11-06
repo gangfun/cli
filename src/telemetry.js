@@ -63,11 +63,12 @@ export function codeOf(o = {}) {
   if (/^[a-z][a-z_]{1,31}$/.test(String(o.reason ?? ''))) return o.reason
   const baw = msg.match(/\(code (\d{1,10})\)/)
   if (baw) return baw[1]
-  if (/Agent ID/i.test(msg)) return 'NO_AGENT_ID'
+  if (/^this wallet holds no Agent ID/i.test(msg)) return 'NO_AGENT_ID' // this wallet's: an inviter's is a usage matter
   if (/baw auth signin|not signed in/i.test(msg)) return 'NOT_SIGNED_IN'
-  if (/unreachable|timed out|fetch failed|ECONN|ENOTFOUND|API 5\d\d/i.test(msg)) return 'NETWORK'
+  if (/unreachable|timed out|fetch failed|ECONN|ENOTFOUND|API 5\d\d|RPC error|data unavailable/i.test(msg)) return 'NETWORK'
   if (/revert/i.test(msg)) return 'REVERT'
-  if (/^--|must be|needs|only applies|unknown|usage/i.test(msg)) return 'USAGE'
+  // the command itself is wrong: a flag named, or a form the CLI asks for. State errors ("needs at least 3000 shares") are not
+  if (/^--|^usage|^pass |^give |^use either |^unknown |^gang .*\b(needs|takes)\b|--[a-z][a-z-]+ must|must be (a|an|one|between) /i.test(msg)) return 'USAGE'
   return 'ERROR'
 }
 

@@ -360,6 +360,10 @@ stops a trade: it goes untagged and `tool` says why.
 The tag is public and anyone can write any id, so it counts usage and proves nothing about who sent a trade. Leave
 `GANG_TOOL` unset and nothing is added.
 
+## Building on Gang
+
+[DEVELOPERS.md](DEVELOPERS.md) has a first testnet trade, the JSON and failure-code contract, and safety rules. `gang capabilities` (0.33.0+) lists every tool and command as JSON. [`examples/`](https://github.com/gangfun/cli/tree/main/examples) has programs to copy.
+
 ## Version
 
-`0.31.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.33.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

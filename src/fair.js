@@ -283,7 +283,9 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
         : null
       // 3.0: the rule set the sale was created under (fixed for good)
       const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, TOKEN_VERSION_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
-      return out({ success: true, chainId: Number(ctx.chainId), ...pub, ...(ctx.gen && { padGen: ctx.gen }), ...(tokenVersion != null && { tokenVersion }), ...(swapBack && { swapBack }) })
+      // the pool tax a launched token pays (fixed on the token); before launch there's no pool to tax
+      const tax = sale.launched ? await Promise.all([ctx.read(token, TAX_ABI, 'buyTaxBps'), ctx.read(token, TAX_ABI, 'sellTaxBps')]).catch(() => null) : null
+      return out({ success: true, chainId: Number(ctx.chainId), pad: ctx.pad, ...pub, ...(tax && { buyTaxPct: Number(tax[0]) / 100, sellTaxPct: Number(tax[1]) / 100 }), ...(ctx.gen && { padGen: ctx.gen }), ...(tokenVersion != null && { tokenVersion }), ...(swapBack && { swapBack }) })
     }
     const slippage = parseNum(fail, 'slippage', opt('slippage', '1'), 0, 50)
     const me = walletFor(ctx, opt('from'))

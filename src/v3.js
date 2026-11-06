@@ -243,7 +243,7 @@ export async function curveOf(ctx, token) {
     reserveTokenRaw = rT
   }
   return {
-    token, creator, quote, quoteSymbol: await symbolOf(ctx, quote), taxHandler: handler, router, registry,
+    token, pad: ctx.pad, creator, quote, quoteSymbol: await symbolOf(ctx, quote), taxHandler: handler, router, registry,
     graduated, pair: pair === zeroAddress ? null : pair,
     buyTaxPct: pct(buyTaxBps), sellTaxPct: pct(sellTaxBps), dividendPct: pct(dividendBps), recipient, recipientLabel: label,
     ...(recipientIsCreator && { recipientIsCreator: true, recipientNote: 'the recipient is the creator itself, not reviewed by the platform' }),

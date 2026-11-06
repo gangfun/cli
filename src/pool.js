@@ -276,7 +276,7 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
       const { noPool: _n, ...f } = e.fields
       return failOut({
         step: `pool-${side}`, error: e.message, ...f,
-        ...(bnbLeg && { hint: `no WBNB/${quoteSymbol} pool to route through: ${side === 'buy' ? 'drop --pay-bnb to pay with the quote' : 'drop --to-bnb to receive the quote'}` }),
+        ...(bnbLeg && { hint: `no WBNB/quote pool to route through: ${side === 'buy' ? 'drop --pay-bnb to pay with the quote' : 'drop --to-bnb to receive the quote'}` }),
       })
     }
     throw e

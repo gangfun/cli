@@ -33,7 +33,7 @@ import { creatorFeeCtx, creatorFeeList, runCreatorFee } from './creatorfee.js'
 import { V2_ABI } from './abi.js'
 import { runMcp } from './mcp.js'
 import { portfolio } from './portfolio.js'
-import { record } from './telemetry.js'
+import { codeOf, record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { shareFor } from './share.js'
 import { CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
@@ -49,6 +49,11 @@ let update = null
 let refTag = '', refInfo = null
 // the first result of a run is also counted (anonymously, telemetry.js) unless GANG_TELEMETRY=0
 const out = (o) => {
+  // a program branches on code; error is for people and its wording can change
+  if (o && typeof o === 'object' && o.success === false) {
+    process.exitCode = 1 // fail() exits 1 too: a refused send can't look like a success to a script
+    if (!o.code) o = { ...o, code: codeOf(o) }
+  }
   if (refInfo && o && typeof o === 'object' && !('ref' in o)) o = { ...o, ref: refInfo }
   // a failed result built no tx, so it claims no tag; a bad id is always said
   if (toolInfo() && o && typeof o === 'object' && !('tool' in o) && (o.success !== false || !toolInfo().attached)) o = { ...o, tool: toolInfo() }
@@ -59,7 +64,7 @@ const out = (o) => {
 const fail = (msg, extra = {}) => {
   if (cmd === 'watch') {
     record(args, { success: false, error: msg, ...extra })
-    console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, ...extra }))
+    console.log(JSON.stringify({ event: 'error', fatal: true, success: false, error: msg, code: codeOf({ error: msg, ...extra }), ...extra }))
   } else out({ success: false, error: msg, ...extra })
   process.exit(1)
 }
@@ -253,6 +258,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
 <addr> reads / builds for that wallet (V2 / Soft: graduated tokens only).
 
   gang version                           this CLI's version (also --version, -v); no wallet needed
+  gang capabilities                      every MCP tool and command as JSON: inputs, read or write, risk, whether it needs the user's yes
   gang mcp                               serve these commands as an MCP server on stdio (Claude Desktop / Code, Cursor, …):
                                          gang_help (this text + the rules), reads, watch, buy / sell / follow previews,
                                          execute, and gang_cli for every other command
@@ -1338,6 +1344,8 @@ async function main() {
     case 'combo':
       await refuseFly('a combined recipient')
       return runCombo(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'capabilities':
+      return out((await import('./capabilities.js')).capabilities())
     case 'version':
     case '--version':
     case '-v':
@@ -1663,7 +1671,7 @@ async function main() {
         ...(share && { share }),
         next: pending
           ? 'Ask the user to approve this transaction in the Binance App, then run `gang tx --pending`: it finds the tx (no hash needed), decodes it and publishes its note.'
-          : (d.txHash ? `gang tx --hash ${d.txHash}` : undefined),
+          : (d.txHash ? `gang tx --hash ${d.txHash}` : 'No tx hash and nothing pending: do not count this as sent. Read status, and check the balance before trying again.'),
       })
     }
     case 'tx': {
@@ -1685,7 +1693,7 @@ async function main() {
       return out(await txReport(hash))
     }
     default:
-      console.log(HELP); process.exit(cmd ? 1 : 0)
+      console.log(HELP); process.exit(!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help' ? 0 : 1)
   }
 }
 

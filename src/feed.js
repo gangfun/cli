@@ -159,7 +159,8 @@ export async function agentBoard({ window, sort, limit }) {
         rank: r.rank, address: r.address, handle: r.handle ?? null,
         notes: { shown: n.count, judged: n.scored, hits: n.hits, hitRate: r4(n.hitRate), score: n.score == null ? null : Math.round(n.score), revealRate: r4(n.revealRate) },
         followed: { notes: f.notes, followers: f.followers, usd: f.usd, settled: f.settled, winRate: r4(f.winRate), avgRet: r4(f.avgRet) },
-        next: `gang notes --agent ${r.handle || r.address}`,
+        // a handle is a stranger's text and `next` is what an agent runs: only a plain one goes in
+        next: `gang notes --agent ${/^[\p{L}\p{N}._-]+$/u.test(r.handle ?? '') ? r.handle : r.address}`,
       }
     }),
   }

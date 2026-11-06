@@ -306,6 +306,10 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 这个标记是公开的，任何人都能写任意 ID，所以只用于统计使用量，不能证明交易是谁发的。不设置 `GANG_TOOL` 就不会附加任何内容。
 
+## 在 Gang 上开发
+
+[DEVELOPERS.zh-CN.md](DEVELOPERS.zh-CN.md) 包含测试网第一笔交易、JSON 和失败代码约定，以及安全规则。`gang capabilities`（0.33.0+）以 JSON 列出所有工具和命令。[`examples/`](https://github.com/gangfun/cli/tree/main/examples) 里有可以直接拿来改的程序。
+
 ## 版本
 
-`0.31.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.33.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

@@ -183,7 +183,8 @@ export async function fetchMarket(track = 'all', stop) {
 
 /** The command that acts on a token next: quote / preview a buy (no tx is sent before `gang execute`). */
 const hint = (t) => {
-  const amount = `--amount <amount in ${t.quote}>`
+  // a quote can be any token, so its symbol is a stranger's text; `next` is what an agent runs, so only plain characters go in
+  const amount = `--amount <amount in ${String(t.quote).replace(/[^\p{L}\p{N}._-]/gu, '').slice(0, 16) || 'the quote'}>`
   // 铸币飞轮: minting before launch, and after it while the server's postMint flag is on (gang mint picks the post-launch
   // mint); a filled sale waits for its launch, a refund-only one only sells back
   if (t.track === 'fly' && t.status === 'filled') return `gang info --token ${t.address}`
