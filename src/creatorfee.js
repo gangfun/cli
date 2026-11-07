@@ -2,13 +2,15 @@ import { createPublicClient, encodeFunctionData, hexToString, isAddress, parseAb
 import { revertOf as revertIn, step, units } from './steps.js'
 import { atTokenPad, CREATOR_FEE_ABI, creatorFeeShareOf, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
+import { promoteTermsOf } from './promote.js'
 
 /**
  * `gang creator-fee` — the GangLaunchpad 2.0 creator fee (docs/SPEC-CURVE-CREATOR-FEE-2026-10-31.md): of the 1% fee on
  * each V3 curve buy and sell, 70% is kept on the pad for the token's creator (`creatorFeeOf`), the rest goes to the
  * platform. The creator claims it with `claimCreatorFee(token, to)`, to any address, before or after graduation, with no
  * deadline. It is the creating wallet's own: it never goes to the tax recipient, a buy-back splitter, a split module or
- * an LP splitter. 打新 sales and 1.0 pads have none (on 1.0 the whole curve fee is the platform's).
+ * an LP splitter. 打新 sales and 1.0 pads have none (on 1.0 the whole curve fee is the platform's). A token made with
+ * promoter terms (gang create --promote) pays part of it to the promoter of each bound wallet: creatorFeeOf is already net of that.
  */
 
 const CURVES_ABI = parseAbi([
@@ -117,10 +119,11 @@ export async function curveCreatorFee(ctx, token, { creator, quote }, net = '') 
   }
   const padGen = ctx.gen ?? (share == null ? '1.0' : '2.0')
   if (share == null) return { padGen, creatorFee: null }
+  const terms = await promoteTermsOf(ctx, token).catch(() => null)
   return {
     padGen,
     creatorFee: {
-      sharePct: pctOf(share), creator, claimable: await units(ctx, quote, owed), claimableRaw: owed.toString(),
+      sharePct: pctOf(share), creator, ...(terms?.shareBps > 0 && { promoterSharePct: terms.sharePct, promoterNote: `on trades of wallets bound to a promoter, ${terms.sharePct}% of this goes to the promoter; claimable is what is left for the creator` }), claimable: await units(ctx, quote, owed), claimableRaw: owed.toString(),
       ...(owed > 0n && { claim: `${claimCmd(token, net)} (the creator only)` }),
       note: `${pctOf(share)}% of the 1% curve fee of each curve buy and sell is kept for the creator, apart from the pool tax and its recipient; the creator claims it any time`,
     },
@@ -203,7 +206,7 @@ export async function runCreatorFee({ opt, flag, out, fail, summarize }) {
     return out({
       success: true, chainId, creator: me, ...r,
       ...(r.scanned.some((s) => s.read < s.tokens) && { scanNote: `only the newest ${MAX_SCAN} tokens of a pad were read` }),
-      note: 'GangLaunchpad 2.0 and 3.0 keep 70% of the 1% curve fee of each curve buy and sell for the token\'s creator; 1.0 tokens and 打新 sales have none',
+      note: 'GangLaunchpad 2.0 and 3.0 keep 70% of the 1% curve fee of each curve buy and sell for the token\'s creator, less the share of any promoter the creator set (gang create --promote); 1.0 tokens and 打新 sales have none',
       ...(due.length && { next: due.map((x) => claimCmd(x.token, net)) }),
     })
   }

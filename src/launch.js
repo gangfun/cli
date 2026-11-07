@@ -8,6 +8,7 @@ import { bondAddress, BOND_ABI } from './bond.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseIntIn, step } from './steps.js'
 import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, splitterFactoryAddress, splitterOf } from './buyback.js'
+import { parsePromote, poolFactoryAddress, poolNotDeployed, poolOf, POOL_ABI, POOL_FACTORY_ABI, PROMOTE_PAD_ABI, revertOf as promoteRevertOf, simulatePool, wantsPoolModule } from './promote.js'
 import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFactoryAddress, splitLine, splitNotDeployed, splitOf } from './split.js'
 import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf, simulateLp } from './lp.js'
 import { claimCmd, notThroughModule } from './creatorfee.js'
@@ -47,7 +48,7 @@ import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotD
  */
 
 // the dev's recipient modules by flag, as the creator-fee note names them
-const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient' }
+const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', promote: 'promoter pool module' }
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
 const TTL_MS = 7 * 24 * 3600_000
 const PAD_ABI = parseAbi([
@@ -86,6 +87,10 @@ const UNTRUSTED = {
     why: '--lp needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: the keeper adds liquidity only over those quotes, and an unlisted quote may tax or block the transfers into the pair every chunk makes',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --lp',
   },
+  promote: {
+    why: '--promote on a taxed token makes the recipient a promoter pool module, which needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its escrow counts on the quote arriving in full, and the keeper splits only those quotes',
+    hint: 'drop --quote (WBNB), use a listed quote, or name a recipient with --recipient (the share then stays on the curve)',
+  },
   combo: {
     why: 'a combined recipient (more than one of --buyback / --lp / --split) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its buy-backs and liquidity adds price on what the pair receives (a quote that taxes transfers into the pair fails every chunk), the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --buyback / --lp / --split',
@@ -114,11 +119,11 @@ const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: use --shares <n> (not --dev-buy)'
 
 /** The run asks for a chained launch (`kind` 'v3' | 'fair'). */
-export const isLaunch = (kind, flag) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && flag('dev-buy'))
+export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && flag('dev-buy')) || wantsPoolModule(kind, flag, opt)
 /** The recipient modules a launch can clone (their flags): one alone clones its own module, several a combined one. */
 const MODULE_FLAGS = ['buyback', 'split', 'lp']
 /** How a module's flags read in a message. */
-const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split' }
+const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', promote: '--promote on a taxed token' }
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -276,7 +281,28 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     lp = { bps: lpBpsOf(fail, opt('lp')), factory, payee }
   }
-  const mod = comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : null
+  // --promote on a taxed token with no recipient named: its recipient is the dev's promoter pool module
+  if (flag('promote')) {
+    const terms = parsePromote(opt('promote'), opt('promote-days'))
+    if (terms.error) {
+      const { error, ...extra } = terms
+      fail(error, extra)
+    }
+  } else if (flag('promote-days')) fail('--promote-days goes with --promote <pct>')
+  let poolMod = null
+  if (wantsPoolModule(kind, flag, opt)) {
+    const factory = poolFactoryAddress(testnet)
+    if (!factory) fail(poolNotDeployed(testnet))
+    // what the create would refuse, said before a module is cloned for it
+    const inRange = (f) => flag(f) && Number(opt(f)) >= 1 && Number(opt(f)) <= 5
+    if (!inRange('buy-tax') || !inRange('sell-tax')) {
+      fail('--promote on a taxed token needs both --buy-tax and --sell-tax, each 1–5 (in %): the pool share is paid from the tax. For an untaxed token leave them out', { buyTax: opt('buy-tax') ?? null, sellTax: opt('sell-tax') ?? null })
+    }
+    const div = Number(opt('dividend', '0'))
+    if (!(div >= 0 && div <= 100)) fail('--dividend must be a number between 0 and 100 (in %)', { got: opt('dividend') })
+    poolMod = { factory }
+  }
+  const mod = comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : poolMod ? 'promote' : null
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
@@ -287,7 +313,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!tiers.includes(Number(opt('grad')))) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') ?? null })
   }
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
-  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module' }[mod]
+  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', promote: 'promote-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
     ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
   const rerun = 're-run this same command after executing it'
@@ -316,8 +342,8 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
   const created = plan?.startCount !== undefined
   // the module this plan cloned: 'split' / 'lp' / 'combo' when it says so, else a --buyback splitter (plans from before --split)
-  const planMod = plan?.salt ? (['split', 'lp', 'combo'].includes(plan.module) ? plan.module : 'buyback') : null
-  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient' }
+  const planMod = plan?.salt ? (['split', 'lp', 'combo', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
+  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', promote: 'promoter pool module' }
   if (mod && created && !plan.splitter) {
     return fail(`this launch was created without ${MOD_FLAG[mod]} (its recipient is fixed): run it again without ${mod === 'combo' ? '--buyback / --lp / --split' : MOD_FLAG[mod]}, or add --restart for a new token`)
   }
@@ -507,12 +533,51 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // ---- promoter pool module: cloned for the dev before the create, at predict(dev, plan.salt)
+  if (poolMod && !created) {
+    if (!plan?.salt) {
+      const refused = await untrustedBuybackQuote(read, net, flag('quote') ? opt('quote') : net.wbnb, 'promote')
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
+      if ((await client.getCode({ address: poolMod.factory }) ?? '0x') === '0x') {
+        return fail(`GangPromotePoolModuleFactory has no code at ${poolMod.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}: name a recipient with --recipient for now (the share then stays on the curve)`)
+      }
+      const salt = `0x${randomBytes(32).toString('hex')}`
+      const at = await read(poolMod.factory, POOL_FACTORY_ABI, 'predict', [me, salt])
+      const sim = await simulatePool(client, me, poolMod.factory, POOL_FACTORY_ABI, 'create', [salt])
+      if (sim.failed) return out({ success: false, step: 'promote-module', factory: poolMod.factory, ...tag('promote-module'), ...sim.failed })
+      writePlan(key, { ...base, salt, splitter: at, factory: poolMod.factory, module: 'promote' })
+      const data = encodeFunctionData({ abi: POOL_FACTORY_ABI, functionName: 'create', args: [salt] })
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: poolMod.factory, data }, {
+          step: 'promote-module', chainId: Number(net.chainId), factory: poolMod.factory, module: at,
+          note: 'clones your promoter pool module (listed as a tax recipient in the same tx). The token\'s promoter terms, set at the create, decide how much of the recipient\'s part it escrows for promoters; the rest is pushed to you. PERMANENT once the token names it: a token has one recipient',
+        }, flag('calldata'), io.summarize),
+        ...tag('promote-module', { module: at, next: `${rerun}: it then builds the create with the module as the recipient` }),
+      })
+    }
+    if ((await client.getCode({ address: plan.splitter }) ?? '0x') === '0x') {
+      return out({
+        success: false, ...tag('promote-module', { module: plan.splitter }), error: 'the promoter pool module is not on chain yet',
+        hint: `if the clone was executed, wait for it to land and ${rerun.replace(' after executing it', '')}; if it was not, add --restart to build it again`,
+      })
+    }
+    const s = await poolOf(read, (a) => client.getCode({ address: a }), plan.splitter, plan.factory)
+    if (!s || s.dev.toLowerCase() !== me.toLowerCase() || s.token) {
+      return fail('the module at this launch\'s address is not an unbound promoter pool module of this wallet: add --restart', { module: plan.splitter })
+    }
+  }
+
   // ---- create
   if (!created) {
     const startCount = (await read(net.pad, PAD_ABI, 'tokenCount')).toString()
     const createIo = {
       ...io,
       ...argsWith(io, plan?.splitter ? { recipient: plan.splitter } : {}, LAUNCH_FLAGS),
+      // the module this launch cloned and will bind: runV3 tells it from a --recipient someone typed
+      ...(plan?.module === 'promote' && { launchPoolModule: plan.splitter }),
       out: (o) => {
         // the plan starts with the create tx itself: a wrap / approve step before it (or a failed preview) leaves none,
         // so the next run builds the create again
@@ -522,7 +587,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
         return out({
           ...o,
           // 2.0: the creator fee is the dev's own, not the module's
-          ...(o.creatorFee && mod && { creatorFee: `${o.creatorFee} ${notThroughModule(MODULE_NAMES[mod], { at: plan?.splitter, net: testnet ? ' --testnet' : '', kind: mod })}` }),
+          ...(o.creatorFee && mod && { creatorFee: `${o.creatorFee} ${notThroughModule(MODULE_NAMES[mod], { at: mod === 'promote' ? undefined : plan?.splitter, net: testnet ? ' --testnet' : '', kind: mod })}` }),
           ...tag('create', built ? { next: `${rerun}: it finds the new token and continues with ${after ?? 'nothing'}` } : o.success ? { next: `${rerun}: it then builds the create` } : {}),
         })
       },
@@ -554,13 +619,27 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     })
   }
 
+  // a launch keeps the terms it began with: the create is never redone by a changed flag
+  if (flag('promote') && kind === 'v3') {
+    const want = parsePromote(opt('promote'), opt('promote-days'))
+    // only a revert means no terms: after an RPC error, "add --restart" would make a second token for nothing
+    const [share, window] = await read(net.pad, PROMOTE_PAD_ABI, 'promoteOf', [token]).catch((e) => {
+      if (promoteRevertOf(e)) return [0, 0]
+      return fail('could not read this launch\'s promoter terms (RPC error)', { token, retry: 'same command again' })
+    })
+    if (Number(share) !== want.shareBps || Number(window) !== want.window) {
+      return fail(`this launch's token has ${Number(share) ? `a ${Number(share) / 100}% promoter share for ${Number(window) / 86_400} days` : 'no promoter terms'}, fixed at its create: run it again without changing them, or add --restart for a new token`, { token })
+    }
+  }
+
   // later steps carry no note (it went on the create) and take the token from the plan
   const stepIo = (over) => ({ ...io, ...argsWith(io, { ...over, token }, [...LAUNCH_FLAGS, ...NOTE_FLAGS, 'name', 'symbol']) })
   const bal = await read(token, ERC20_ABI, 'balanceOf', [me])
   const isSplit = plan.module === 'split'
   const isLp = plan.module === 'lp'
   const isCombo = plan.module === 'combo'
-  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo ? splitterOf(read, plan.splitter) : null)
+  const isPromote = plan.module === 'promote'
+  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo && !isPromote ? splitterOf(read, plan.splitter) : null)
   const comboState = () => (plan.splitter && isCombo ? comboOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const lpState = () => (plan.splitter && isLp ? lpOf(read, plan.splitter, { pad: net.pad }) : null)
   const splitState = () => (plan.splitter && isSplit ? splitOf(read, plan.splitter, { wbnb: net.wbnb, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
@@ -579,10 +658,12 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (lps) done.lp = lps
     const cs = await comboState()
     if (cs) done.combo = cs
+    if (plan.splitter && isPromote) done.promote = { module: plan.splitter, next: `gang promote status --token ${token}${testnet ? ' --testnet' : ''}`, note: `your part of the pool tax comes two ways: pushed to you at once, and what the escrow holds for trades with no promoter, which stays in the module until you claim it: gang promote claim-pool --token ${token}${testnet ? ' --testnet' : ''}` }
     // 2.0: where the creator fee of a V3 token is claimed (and that a module does not get it)
     const share = kind === 'v3' ? await creatorFeeShareOf({ chainId: net.chainId, pad: net.pad, read }).catch(() => null) : null
     if (share != null) {
-      done.creatorFee = `${share / 100}% of the 1% curve fee is kept for you, the creator: ${claimCmd(token, testnet ? ' --testnet' : '')}${plan.splitter ? `. ${notThroughModule(MODULE_NAMES[planMod], { token, at: plan.splitter, net: testnet ? ' --testnet' : '', kind: planMod })}` : ''}`
+      const [promoterShare] = await read(net.pad, PROMOTE_PAD_ABI, 'promoteOf', [token]).catch(() => [0])
+      done.creatorFee = `${share / 100}% of the 1% curve fee is kept for you, the creator${Number(promoterShare) ? `, less the ${Number(promoterShare) / 100}% of it you gave promoters on their bound wallets' trades` : ''}: ${claimCmd(token, testnet ? ' --testnet' : '')}${plan.splitter ? `. ${notThroughModule(MODULE_NAMES[planMod], { token, at: isPromote ? undefined : plan.splitter, net: testnet ? ' --testnet' : '', kind: planMod })}` : ''}`
     }
     if (!bond) return out({ ...done, note: `launched: gang ${kind} info --token ${token}${testnet ? ' --testnet' : ''}` })
     return runBond('status', { ...stepIo({}), out: (o) => out({ ...done, bondStatus: o, note: `launched and bonded: gang bond status --token ${token}${testnet ? ' --testnet' : ''}` }) })
@@ -591,16 +672,18 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- bind the splitter / split module / LP splitter / combined recipient to the token (anyone may; the launch does it right after the create)
   if (plan.splitter) {
-    const abi = isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
+    const abi = isPromote ? POOL_ABI : isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
     const bound = await read(plan.splitter, abi, 'token')
     if (bound === zeroAddress) {
-      const sim = await (isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
+      const sim = await (isPromote ? simulatePool : isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
       if (sim.failed) return out({ success: false, step: 'bind', ...tag('bind', { token }), ...sim.failed })
       const data = encodeFunctionData({ abi, functionName: 'bind', args: [token] })
       return out({
         ...step({ chainId: net.chainId }, { from: me, to: plan.splitter, data }, {
-          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo ? { module: plan.splitter } : { splitter: plan.splitter }),
-          note: isCombo
+          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo || isPromote ? { module: plan.splitter } : { splitter: plan.splitter }),
+          note: isPromote
+            ? 'ties the promoter pool module to this token for good, reading its promoter terms. It must happen before graduation: a token bound later has no pool share'
+            : isCombo
             ? 'ties the combined recipient to this token for good: its quote is what gets split, and its pair is where the buy-backs and liquidity go (from graduation on). Nothing is split before this'
             : isSplit
             ? 'ties the split module to this token for good: the keeper then splits its quote among the payees'
@@ -612,7 +695,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       })
     }
     if (bound.toLowerCase() !== token.toLowerCase()) {
-      return out({ success: false, ...tag('bind', { token }), error: `the ${isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
+      return out({ success: false, ...tag('bind', { token }), error: `the ${isPromote ? 'promoter pool module' : isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo || isPromote ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
     }
   }
 

@@ -62,6 +62,9 @@ gang info --token <addr>                     # 任意内盘的一个币（gang t
 gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
 gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金；creator 分成（2.0 / 3.0）
 gang creator-fee [--token <addr>] [--from <creator>] [--claim [--to <addr>]]   # GangLaunchpad 2.0 / 3.0：内盘 1% 手续费的 70% 归 creator
+gang create … --promote 20 [--promote-days 30]   # 3.0 的 V3（0.34.0+）：绑定钱包在有效期内的内盘交易，creator 分成的 20% 归它的推广人。带税且没指定接收方时，这些钱包的池子税里，接收方那部分也按这个比例分给推广人（外盘分成模块，按 Merkle root 结算）。发币后不能改
+gang promote buy --token 0x… --amount <n> --promoter 0x…   # 把这个钱包绑定到推广人：只在它第一次交易这个币时绑定，只限内盘，必须由钱包直接发送。价格和手续费不变。和 --ref（gang.fun 的邀请记录）不是一回事。在 0.34.0+ 上等同于 gang buy --promoter，但旧版 CLI 对它只打印帮助，而 gang buy --promoter 在旧版上会变成一笔再也无法绑定的普通买入
+gang promote status|earnings|claim|claim-pool|activate|work|sweep|bind|reclaim|release-dev --token 0x…（或 --module 0x…）   # 条款、绑定、可领金额；claim-pool 会用链上的 root 核对 gang.fun 给的证明。reclaim（dev，结算方沉默 30 天后）会永久关闭模块
 gang quote --token <addr> --amount <n>       # 只算 V2 / Soft / U / S 内盘（Soft：BNB；V2：报价币 ERC-20）
 gang buy --token <addr> --amount <n> [--slippage 1] [--follow <附言 tx>] [--note "<理由>" [--conf 0-100] [--reveal-after 1-72h]]
 #   --amount 是要花的报价币数量（--bnb 是旧名）。V3：含内盘 1% 手续费（内盘不收税；WBNB 报价经 GangRouter 直接付 BNB）。
@@ -281,6 +284,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad V1（铸币飞轮）。默认：主网 `0x631e…B029`（2026-10-30 起开放），测试网第 2 套 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | 发币目标那一代的 GangBond（押金承诺，`gang bond`；已有的币用它自己那一代的）。默认：主网 3.0 `0x830b…E9D6`（2.0 `0x2313…E0D8`，1.0 `0xe92d…14E4`，2026-10-29 起，CLI 0.16.2+），测试网 3.0 `0xa877…9fc1`（2.0 `0x3974…51F9`，第一版 2.0 `0x9139…F97f`，1.0 `0xd6a8…1086`） |
 | `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | 发币目标那一代的 GangSplitModuleFactory（`--split`）。默认：主网 3.0 `0x904D…71f2`（2.0 `0xa73d…ec59`，1.0 `0x27e0…067c`，2026-10-30 起，CLI 0.19.0+），测试网 3.0 `0xf8d4…06dc`（2.0 `0xb9ab…3513`，第一版 2.0 `0x860D…0879`，1.0 `0x5F7d…567E`） |
+| `GANG_PROMOTE_POOL_FACTORY` / `GANG_TESTNET_PROMOTE_POOL_FACTORY` | 发币目标那一代的 GangPromotePoolModuleFactory（带税币的 `--promote`）。默认：主网 `0xA633…167A`，测试网 `0x7a68…F1c2` |
 | `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | 发币目标那一代的 GangLiquiditySplitterFactory（`--lp`）。默认（CLI 0.20.0+）：主网 3.0 `0x98C5…1752`（2.0 `0x8ac8…c0E4`，1.0 `0xE043…C248`，2026-10-31 起），测试网 3.0 `0x4A3a…6B07`（2.0 `0xAEec…36E4`，第一版 2.0 `0x4f15…1619`，1.0 `0xA729…1591`） |
 | `GANG_COMBO_FACTORY` / `GANG_TESTNET_COMBO_FACTORY` | 发币目标那一代的 GangComboSplitterFactory（同时给 `--buyback` / `--lp` / `--split` 中的几个；已有的币用它自己那一代的）。默认（CLI 0.22.0+）：主网 3.0 `0x2018…eA39`（2.0 `0xcCeA…98Be`，1.0 `0xd33C…1DBd`，2026-10-31 起），测试网 3.0 `0xdc16…543C`（2.0 `0x312c…84BD`，1.0 `0x52a8…4CFE`；第一版 2.0 没有） |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | 发币目标那一代的 GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖；已有的币用它自己那一代的）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 3.0 `0xec97…61e7`（2.0 `0xa832…844a`，1.0 `0xE040…79C4`），测试网 3.0 `0x0954…87b9`（2.0 `0x5a4F…dDAA`，第一版 2.0 `0xb218…FC08`，1.0 `0x6bB6…C9F6`） |
@@ -312,4 +316,4 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.33.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.34.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

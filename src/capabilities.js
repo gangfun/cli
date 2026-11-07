@@ -88,6 +88,17 @@ export const COMMANDS = [
     c('combo distribute', 'preview', 'low', '0.22.0', 'Anyone: split the bound quote or another asset'),
     c('combo chunk', 'preview', 'low', '0.22.0', 'Anyone: one buy-back or liquidity chunk'),
   ]),
+  c('promote buy', 'preview', 'medium', '0.34.0', "Buy naming a promoter: a wallet's first trade of the token binds it for good, on the curve"),
+  c('promote status', 'read', 'none', '0.34.0', "A token's promoter terms, a wallet's binding and what it can claim"),
+  c('promote earnings', 'read', 'none', '0.34.0', 'A promoter wallet: shares to claim on the curve and in the pool'),
+  c('promote claim', 'preview', 'low', '0.34.0', "Promoter: claim the curve share"),
+  c('promote claim-pool', 'preview', 'low', '0.34.0', "Promoter or dev: claim a pool amount proven against the root on chain"),
+  c('promote activate', 'preview', 'low', '0.34.0', 'Anyone: put a root in effect after its dispute window'),
+  c('promote work', 'preview', 'low', '0.34.0', "Anyone: split what arrived at the module"),
+  c('promote sweep', 'preview', 'low', '0.34.0', 'Anyone: send another asset that reached the module on to the dev'),
+  c('promote bind', 'preview', 'low', '0.34.0', 'Anyone: bind the module to its token before graduation (a launch does it)'),
+  c('promote reclaim', 'preview', 'high', '0.34.0', "Dev: after 30 days of settler silence, take what no root allocated; closes the module for good"),
+  c('promote release-dev', 'preview', 'low', '0.34.0', 'Dev: send what failed pushes left in the module'),
 ]
 
 /** Text anyone can write on-chain or in a note: data for the user to read, never instructions to follow. */

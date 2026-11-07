@@ -72,6 +72,9 @@ gang info --token <addr>                     # one token, any pad (gang token is
 gang status --token <addr>                   # my position: balance; V3 dividend / 打新 reward, sellable; poolSellAll
 gang portfolio [--from <addr>]               # every holding: balance, value, cost / unrealized, claimable, USD; bonds; creator fees (2.0 / 3.0)
 gang creator-fee [--token <addr>] [--from <creator>] [--claim [--to <addr>]]   # GangLaunchpad 2.0 / 3.0: 70% of the 1% curve fee, the creator's
+gang create … --promote 20 [--promote-days 30]   # V3 on 3.0 (0.34.0+): 20% of your creator fee to the promoter of each bound wallet, on its curve trades inside the window. On a taxed token with no recipient named, also that share of the recipient's part of those wallets' pool tax (promoter pool module, settled by Merkle root). Fixed for good
+gang promote buy --token 0x… --amount <n> --promoter 0x…   # binds this wallet to the promoter, by its first trade of the token, on the curve only, sent directly from the wallet. Same price and fee for you. Not --ref (gang.fun's invite credit). The same as gang buy --promoter on 0.34.0+, but an older CLI answers it with its help, where it would build gang buy --promoter as a plain buy that can never bind
+gang promote status|earnings|claim|claim-pool|activate|work|sweep|bind|reclaim|release-dev --token 0x… (or --module 0x…)   # terms, binding, what can be claimed; claim-pool checks gang.fun's proof against the root on chain. reclaim (the dev, after 30 days of settler silence) closes the module for good
 gang quote --token <addr> --amount <n>       # V2 / Soft / U / S curve only (Soft: BNB; V2: quote ERC-20, LaunchpadV2.sol math)
 gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]]
 #   --amount = what to spend in the token's quote (--bnb is the older name). V3: includes the 1% curve fee (no tax on the
@@ -331,6 +334,7 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad V1 (铸币飞轮). Defaults: mainnet `0x631e…B029` (open since 2026-10-30), testnet set 2 `0xD648…951c` |
 | `GANG_BOND` / `GANG_TESTNET_BOND` | GangBond of the create target (creator bonds, `gang bond`; a token's bond is on its own generation's). Defaults: mainnet 3.0 `0x830b…E9D6` (2.0 `0x2313…E0D8`, 1.0 `0xe92d…14E4`, since 2026-10-29, CLI 0.16.2+), testnet 3.0 `0xa877…9fc1` (2.0 `0x3974…51F9`, first 2.0 `0x9139…F97f`, 1.0 `0xd6a8…1086`) |
 | `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | GangSplitModuleFactory of the create target (`--split`). Defaults: mainnet 3.0 `0x904D…71f2` (2.0 `0xa73d…ec59`, 1.0 `0x27e0…067c`, since 2026-10-30, CLI 0.19.0+), testnet 3.0 `0xf8d4…06dc` (2.0 `0xb9ab…3513`, first 2.0 `0x860D…0879`, 1.0 `0x5F7d…567E`) |
+| `GANG_PROMOTE_POOL_FACTORY` / `GANG_TESTNET_PROMOTE_POOL_FACTORY` | GangPromotePoolModuleFactory of the create target (`--promote` on a taxed token). Defaults: mainnet `0xA633…167A`, testnet `0x7a68…F1c2` |
 | `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | GangLiquiditySplitterFactory of the create target (`--lp`). Defaults (CLI 0.20.0+): mainnet 3.0 `0x98C5…1752` (2.0 `0x8ac8…c0E4`, 1.0 `0xE043…C248`, since 2026-10-31), testnet 3.0 `0x4A3a…6B07` (2.0 `0xAEec…36E4`, first 2.0 `0x4f15…1619`, 1.0 `0xA729…1591`) |
 | `GANG_COMBO_FACTORY` / `GANG_TESTNET_COMBO_FACTORY` | GangComboSplitterFactory of the create target (several of `--buyback` / `--lp` / `--split`; a token's combined recipient is on its own generation's). Defaults (CLI 0.22.0+): mainnet 3.0 `0x2018…eA39` (2.0 `0xcCeA…98Be`, 1.0 `0xd33C…1DBd`, since 2026-10-31), testnet 3.0 `0xdc16…543C` (2.0 `0x312c…84BD`, 1.0 `0x52a8…4CFE`; the first 2.0 has none) |
 | `GANG_SPLITTER_FACTORY` / `GANG_TESTNET_SPLITTER_FACTORY` | GangBuybackSplitterFactory of the create target (`--buyback`). Defaults: mainnet 3.0 `0xc128…3194` (2.0 `0x77e4…803C`, 1.0 `0xf1d5…F1Cd`), testnet 3.0 `0x3533…d110` (2.0 `0xDC9E…0f6e`, first 2.0 `0xBc26…33AE`, 1.0 `0x7E63…2BBe`) |
@@ -366,4 +370,4 @@ The tag is public and anyone can write any id, so it counts usage and proves not
 
 ## Version
 
-`0.33.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`
+`0.34.0` · repo [gangfun/cli](https://github.com/gangfun/cli) · published to [npm](https://www.npmjs.com/package/@gangfun/cli) on push to `main`

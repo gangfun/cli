@@ -22,6 +22,7 @@ import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
 import { runBond } from './bond.js'
 import { runBuyback } from './buyback.js'
 import { runSplit, SPLIT_EVENT_ABIS } from './split.js'
+import { runPromote, PROMOTE_EVENT_ABIS } from './promote.js'
 import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
@@ -36,7 +37,7 @@ import { portfolio } from './portfolio.js'
 import { codeOf, record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { shareFor } from './share.js'
-import { CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
+import { BUY_ACCEPTS, CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, suggestFlag, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
 import { parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -249,6 +250,27 @@ async function resolveRef(me) {
 const followSkipped = (follow) =>
   follow ? { follow: { ...follow, attached: false, reason: 'this setup step carries no follow ref; re-run the same command' } } : {}
 
+/**
+ * A misspelled --promoter on a buy must not fall through to a plain first buy: that buy uses up the wallet's only chance
+ * to bind, for good.
+ */
+function checkPromoterTypo() {
+  const argv = process.argv.slice(2)
+  for (const [i, a] of argv.entries()) {
+    // -promoter, —promoter (phones and chat apps turn -- into a dash), promoter: no flag parser sees these, so they'd drop silently
+    // argv[0] is the command itself: gang promote buy
+    if (i > 0 && !/^--[A-Za-z]/.test(a) && !['--note', '--ref', '--promoter'].includes(argv[i - 1]) && (/^[-\u2010-\u2015\u2212]+[A-Za-z]/.test(a) || /^promot/i.test(a))) {
+      fail(`${a} is not a flag: flags start with two plain hyphens, like --promoter <addr>. Nothing was built: a first buy without a promoter can never bind later`)
+    }
+    if (!/^--[A-Za-z]/.test(a) || a === '--promoter') continue
+    const name = a.slice(2).split('=')[0]
+    if (a.startsWith('--promoter=') || suggestFlag(name, ['promoter']) === 'promoter' || /promo|referr/i.test(name)) {
+      fail(`${a}: did you mean --promoter <addr>, with the address after a space? Nothing was built: a first buy without a promoter can never bind later`)
+    }
+    if (!BUY_ACCEPTS.has(name)) fail(`--${name} is not a flag of a buy: see gang help. Nothing was built`)
+  }
+}
+
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
 One command per action, whatever pad the token is on: buy / sell / info / status / claim / mint / withdraw / release
@@ -303,7 +325,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          pays as of the next block: expectOut / minOut for amountOutMin). V2 / Soft: balance
   gang quote --token <addr> --amount <n> V2 / Soft / U / S curve buy (Soft: BNB; V2 / U / S: the quote ERC-20). V3 / 打新:
                                          gang buy simulates the trade and shows expectTokens (nothing sent before gang execute)
-  gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]] [--ref <inviter>]
+  gang buy --token <addr> --amount <n> [--slippage 1] [--follow <note tx>] [--note "<why>" [--conf 0-100] [--reveal-after 1-72h]] [--ref <inviter>] [--promoter <addr>]
                                          --amount = what to spend, in the token's quote (--bnb is the older name of the flag).
                                          V3 curve: includes the 1% fee (no tax on the curve); WBNB-quoted pays native BNB via
                                          GangRouter in one tx (--use-wbnb: from WBNB). 打新: after launch only (before it:
@@ -328,6 +350,11 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          --ref (buy / mint / follow, 0.26.0+): who invited this wallet (address or .ai handle,
                                          from the invite link the user gave). Attached only when this is the wallet's first
                                          Gang trade; the result's ref says whether it was. 铸币飞轮: the mint's own inviter
+                                         --promoter (buy, V3 curve on 3.0, 0.34.0+): the promoter of a token made with --promote. In anything passed on to
+                                         others write gang promote buy: an older CLI answers that with its help, but builds gang buy --promoter as a plain buy.
+                                         It binds this wallet for good, by its first trade of the token, and only on a buy
+                                         sent directly from the wallet. Same price and fee for you; refused when it can't bind.
+                                         Not --ref: --ref is gang.fun's invite credit, --promoter a share on chain
   gang invite [--token <addr>] [--who <addr|handle>]
                                          my invite link (https://gang.fun/start?ref=…[&token=…]) and how many new agents it
                                          brought (invited / qualified: traded again a day later within 7 days), this week and
@@ -479,7 +506,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          settles 1 hour later).
 
 CREATOR FEE (GangLaunchpad 2.0 / 3.0: of the 1% fee on every V3 curve buy and sell, 70% is kept on the pad for the token's
-creator, before and after graduation, no deadline; 1.0 tokens and 打新 sales have none):
+creator, less any promoter share the creator set, before and after graduation, no deadline; 1.0 tokens and 打新 sales have none):
   gang creator-fee [--from <creator>]    every 2.0 / 3.0 V3 token this wallet created and what it can claim (read on chain), with
                                          totals per quote
   gang creator-fee --token <addr>        one token: padGen, sharePct, claimable
@@ -487,6 +514,32 @@ creator, before and after graduation, no deadline; 1.0 tokens and 打新 sales h
                                          claim all of it (the creator only), to this wallet or --to (not 0x0 or the pad).
                                          The fee is the creator's own: never the tax recipient's or a buy-back / split / LP
                                          module's. gang info / status (the creator's) and gang portfolio show it too
+
+PROMOTER SHARE (GangLaunchpad 3.0, 0.34.0+; GANG_PROMOTE_POOL_FACTORY / GANG_TESTNET_PROMOTE_POOL_FACTORY):
+  gang create … --promote <0.01-50> [--promote-days <7-90, default 30>]
+                                         that % of your creator fee goes to the promoter of each bound wallet, on its curve
+                                         trades inside the window; fixed for good. On a taxed token with no --recipient,
+                                         --buyback, --lp or --split, the launch also makes the recipient a promoter pool
+                                         module (clone, create, bind: re-run after each): the same % of the recipient's part
+                                         of those wallets' pool tax. Name a recipient to keep the share on the curve
+  gang promote buy --token <addr> --amount <n> --promoter <addr>
+                                         gang buy --promoter, in the form an older CLI refuses instead of buying without binding
+  gang promote status --token <addr> [--wallet <addr>]
+                                         terms, the wallet's binding and curve share, the pool module, roots, what it can claim
+  gang promote earnings [--from <addr>]  every 3.0 token with a curve share to claim (read on chain) and pool income (gang.fun)
+  gang promote claim --token <addr> [--to <addr>]
+                                         claim the curve share, in the token's quote
+  gang promote claim-pool (--token <addr> | --module <addr>) [--to <addr>] [--cumulative <wei> --proof <hash,hash>]
+                                         claim pool income against the root in effect. The proof comes from gang.fun and is
+                                         checked against the root on chain; or give your own, recomputed from chain logs
+                                         (scripts/promote-settle in gang-launchpad). A root takes effect 2 days after it is posted
+  gang promote activate | gang promote work | gang promote sweep (--token <addr> | --module <addr>) [--asset <addr>]
+                                         anyone: put a root in effect once its window is over / split what arrived (the wallet
+                                         must estimate the gas) / send another asset's balance to the dev
+  gang promote bind --token <addr>       anyone, once, before graduation (the launch does it)
+  gang promote reclaim | gang promote release-dev (--token <addr> | --module <addr>) [--to <addr>]
+                                         the dev: reclaim what no root allocated, after 30 days of settler silence once the token
+                                         has graduated, which closes the module FOR GOOD / send what a failed push left
 
 BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND / GANG_TESTNET_BOND = its address):
   gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover <coverage %>) [--use-wbnb]
@@ -1102,13 +1155,16 @@ const tokenArg = () => {
 /** gang <verb> --token <addr>: the kind's code for it, or why it does not apply. */
 async function routed(verb) {
   const token = tokenArg()
+  if (verb === 'buy') checkPromoterTypo()
   // refused before any RPC: both --amount and --bnb, a malformed --note / --conf / --reveal-after, a bad --follow (the
   // note itself is built again by the kind's code)
   if (verb === 'buy') spendArg()
   parseNote()
   parseFollow()
   if (flag('ref') && !(verb === 'buy' || verb === 'mint')) fail('--ref (an inviter) applies to gang buy / mint / follow only', { token })
+  if (flag('promoter') && verb !== 'buy') fail('--promoter applies to gang buy only: a wallet binds by its first buy', { token })
   const kind = await padKind(token, verb)
+  if (flag('promoter') && kind !== 'v3') fail('--promoter is for V3 curve tokens on GangLaunchpad 3.0', { token, kind })
   // 铸币飞轮 mints name the inviter in the contract call (fly.js); every other buy / mint carries the invite tag
   if (flag('ref') && kind !== 'fly') await resolveRef(fromArg() || (bawStatus() === 'CONNECTED' ? bawAddress() : null))
   const io = { ...PAD_IO, out: tagKind(kind) }
@@ -1161,10 +1217,11 @@ const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, sp
 /** The flags a 铸币飞轮 create refuses (gang create --fly and gang fly create alike). */
 function checkFlyCreate() {
   if (flag('fair')) fail('give --fly (铸币飞轮) or --fair (打新), not both')
-  const wrong = ['buy-tax', 'dividend', 'recipient', 'cap', 'shares'].find(flag)
+  const wrong = ['buy-tax', 'dividend', 'recipient', 'cap', 'shares', 'promote', 'promote-days'].find(flag)
     if (wrong) {
       fail(wrong === 'buy-tax' ? '--buy-tax: a 铸币飞轮 token\'s buy tax is fixed at 1% (--sell-tax 1-2 sets the sell tax)'
         : wrong === 'shares' ? '--shares is 打新\'s: a 铸币飞轮 creator mints with --dev-shares <n>'
+          : wrong.startsWith('promote') ? `--${wrong} is for V3 curve tokens: a 铸币飞轮 sale has its own invite bonus (--invite-bonus)`
           : wrong === 'cap' ? '--cap is 打新\'s: a 铸币飞轮 sale has a quota per wallet, --quota <5-100> (+ --invite-bonus)'
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
@@ -1182,13 +1239,13 @@ function create() {
   if (flyOnly) fail(`--${flyOnly} is a 铸币飞轮 (Mint Flywheel) setting: add --fly to create one (gang create --fly …)`)
   if (flag('fair')) {
     const wrong = V3_CREATE_FLAGS.find(flag)
-    if (wrong) fail(`--${wrong} is a V3 tax setting; a 打新 sale's pool tax is fixed (1%): leave it out, or drop --fair for a V3 token`)
-    if (isLaunch('fair', flag)) return runLaunch('fair', LAUNCH_DEPS)
+    if (wrong) fail(wrong.startsWith('promote') ? `--${wrong} is for V3 curve tokens: a 打新 sale has no creator fee to share. Leave it out, or drop --fair` : `--${wrong} is a V3 tax setting; a 打新 sale's pool tax is fixed (1%): leave it out, or drop --fair for a V3 token`)
+    if (isLaunch('fair', flag, opt)) return runLaunch('fair', LAUNCH_DEPS)
     return runFair('create', { ...PAD_IO, notes: padNotes('fair', 'create') })
   }
   const wrong = FAIR_CREATE_FLAGS.find(flag)
   if (wrong) fail(`--${wrong} is a 打新 (fair-mint) setting: add --fair to create a sale (gang create --fair …)`)
-  if (isLaunch('v3', flag)) return runLaunch('v3', LAUNCH_DEPS)
+  if (isLaunch('v3', flag, opt)) return runLaunch('v3', LAUNCH_DEPS)
   return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
 }
 
@@ -1203,9 +1260,9 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'fly', 'creator-fee'])
+  'buyback', 'split', 'lp', 'combo', 'fly', 'creator-fee', 'promote'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...PROMOTE_EVENT_ABIS]
 
 /** gang bond / gang buyback / gang split / gang lp / gang combo on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
@@ -1309,7 +1366,7 @@ async function main() {
   // --bond-hold / --bond-days / --restart only mean something in a chained launch (--dev-buy / --bond); never drop them silently
   // gang fair create and gang create --fair are 打新 creates; the rest V3
   const launchKind = cmd === 'fair' || (cmd === 'create' && flag('fair')) ? 'fair' : 'v3'
-  if (tokenCreate && !flyCreate && !isLaunch(launchKind, flag)) {
+  if (tokenCreate && !flyCreate && !isLaunch(launchKind, flag, opt)) {
     // a 打新 dev buys with --shares in the create itself: say so here, not "add --bond" (which would only lead to that)
     if (launchKind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
     const lone = LAUNCH_FLAGS.find((f) => flag(f))
@@ -1317,16 +1374,26 @@ async function main() {
   }
   switch (cmd) {
     case 'fair':
-      if (args[1] === 'create' && isLaunch('fair', flag)) return runLaunch('fair', LAUNCH_DEPS)
+      if (args[1] === 'create' && (flag('promote') || flag('promote-days'))) fail('--promote is for V3 curve tokens: a 打新 sale has no creator fee to share')
+      if (args[1] === 'create' && isLaunch('fair', flag, opt)) return runLaunch('fair', LAUNCH_DEPS)
       return runFair(args[1], alias('fair', args[1]))
     case 'v3':
-      if (args[1] === 'create' && isLaunch('v3', flag)) return runLaunch('v3', LAUNCH_DEPS)
+      if (args[1] === 'buy') checkPromoterTypo()
+      if (args[1] === 'create' && isLaunch('v3', flag, opt)) return runLaunch('v3', LAUNCH_DEPS)
       return runV3(args[1], alias('v3', args[1]))
     case 'fly':
       if (args[1] === 'create') checkFlyCreate()
       return runFly(args[1], alias('fly', args[1]))
     case 'mcp':
       return runMcp()
+    case 'promote':
+      // gang buy with --promoter required. Links and docs give this form: a CLI older than the promoter share refuses it,
+      // while it would ignore --promoter on gang buy and spend the wallet's only chance to bind on a plain first buy
+      if (args[1] === 'buy') {
+        if (!flag('promoter')) fail('gang promote buy needs --promoter <addr>; a buy with no promoter is gang buy')
+        return routed('buy')
+      }
+      return runPromote(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'creator-fee':
       return runCreatorFee({ opt, flag, out, fail, summarize: summarizePreview })
     case 'bond':
@@ -1601,6 +1668,8 @@ async function main() {
       if (!NOTE_TX.test(noteTx ?? '')) fail('usage: gang follow <note tx> --amount <n> (the note tx is 0x + 64 hex)', { got: noteTx })
       if (flag('token')) fail('gang follow takes the token from the note; to name it yourself use `gang buy --token … --amount … --follow <note tx>`')
       if (flag('follow')) fail('give the note tx once: `gang follow <note tx> --amount <n>`')
+      checkPromoterTypo()
+      if (flag('promoter')) fail('--promoter applies to gang buy only: a wallet binds by its first buy, named on gang buy', { noteTx })
       const bnb = spendArg(); if (!bnb) fail('--amount required (the amount to buy, in the token\'s quote unit; --bnb is the older name)')
       const note = parseNote() // a bad --note fails before any API call, as on buy
       // checked without a token: gang.fun answers with the note's token, and buy() reuses this check. The wallet is the
