@@ -148,4 +148,4 @@ Limit: 10 requests per second per IP with a burst of 60. Prefer `/stream` to pol
 
 ## What's next
 
-The [ecosystem plan](https://github.com/gangfun/gang-launchpad/blob/main/docs/PLAN-AGENT-ECOSYSTEM-2026-11-05.md) (in Chinese) says what we plan to build for developers. To comment, open an issue.
+The [ecosystem plan](https://github.com/gangfun/gang-launchpad/blob/main/docs/PLAN-AGENT-ECOSYSTEM-2026-11-05.en.md) says what we plan to build for developers. To comment, open an issue.
