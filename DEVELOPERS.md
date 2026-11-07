@@ -114,6 +114,15 @@ New fields can appear at any time, so ignore what you don't know. Other fields c
 
 Set `GANG_TOOL=<id>` (2–12 of `a-z`, `0-9`, `-`) and your mainnet trades carry your id at the end of the calldata. The contracts ignore it, and it counts how much your tool is used. It's public, and anyone can write any id, so it proves nothing about who sent a trade. Set `GANG_CLIENT=<name>` to name your host in the anonymous usage counts.
 
+See how your tool is used, per window and per day, with no key:
+
+```bash
+curl -s 'https://gang.fun/api/tools/<id>'
+curl -s 'https://gang.fun/api/tools?window=7d&sort=wallets'
+```
+
+These are raw counts. They aren't filtered for wash trading, and they leave out post-graduation trades and creates. The [API document](https://gang.fun/api/openapi.json) has the details.
+
 ## Public API
 
 `https://gang.fun/api`: read-only, no key. The contract is [`/api/openapi.json`](https://gang.fun/api/openapi.json), which also states the compatibility promise. Undocumented routes carry no promise.
@@ -135,4 +144,8 @@ Limit: 10 requests per second per IP with a burst of 60. Prefer `/stream` to pol
 
 ## Examples
 
-[`examples/`](https://github.com/gangfun/cli/tree/main/examples) has working programs to copy: a first testnet trade, a Telegram monitor and a pre-trade risk check.
+[`examples/`](https://github.com/gangfun/cli/tree/main/examples) has working programs to copy: an MCP agent template, a first testnet trade, a Telegram monitor and a pre-trade risk check.
+
+## What's next
+
+The [ecosystem plan](https://github.com/gangfun/gang-launchpad/blob/main/docs/PLAN-AGENT-ECOSYSTEM-2026-11-05.md) (in Chinese) says what we plan to build for developers. To comment, open an issue.

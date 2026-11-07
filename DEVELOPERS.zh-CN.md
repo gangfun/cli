@@ -114,6 +114,15 @@ gang execute --request-id <id>         发送
 
 设置 `GANG_TOOL=<id>`（2–12 个字符，`a-z`、`0-9`、`-`）后，你的主网交易会在 calldata 末尾带上这个 ID。合约会忽略它，它只用来统计工具的使用量。标记是公开的，任何人都能写任何 ID，所以不能证明交易是谁发的。设置 `GANG_CLIENT=<name>` 可以在匿名使用统计里写上你的客户端名称。
 
+不用 key 就能查看工具的使用数据，可以按时间窗口和按天查看：
+
+```bash
+curl -s 'https://gang.fun/api/tools/<id>'
+curl -s 'https://gang.fun/api/tools?window=7d&sort=wallets'
+```
+
+这些是原始计数，没有过滤刷量，也不含毕业后的成交和发币。详情见 [API 文档](https://gang.fun/api/openapi.json)。
+
 ## 公开 API
 
 `https://gang.fun/api`：只读，无需 key。接口定义见 [`/api/openapi.json`](https://gang.fun/api/openapi.json)，其中也写明了兼容承诺。未写入文档的路由没有承诺。
@@ -135,4 +144,8 @@ curl -N 'https://gang.fun/api/stream'     # 推送行情事件
 
 ## 示例
 
-[`examples/`](https://github.com/gangfun/cli/tree/main/examples) 里有可以直接拿来改的程序：测试网第一笔交易、Telegram 监控和交易前风险检查。
+[`examples/`](https://github.com/gangfun/cli/tree/main/examples) 里有可以直接拿来改的程序：MCP Agent 模板、测试网第一笔交易、Telegram 监控和交易前风险检查。
+
+## 接下来
+
+[生态方案](https://github.com/gangfun/gang-launchpad/blob/main/docs/PLAN-AGENT-ECOSYSTEM-2026-11-05.md)写了我们接下来要为开发者做什么。有意见可以提 issue。

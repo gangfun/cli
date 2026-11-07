@@ -1,0 +1,17 @@
+{
+  "name": "gang-example-mcp-agent",
+  "private": true,
+  "type": "module",
+  "description": "A trading assistant template: Claude, gang mcp, and a person who approves every send.",
+  "scripts": {
+    "start": "node agent.mjs",
+    "test": "node test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  }
+}
