@@ -31,7 +31,7 @@ const NAME = /^[a-z0-9-]{1,24}$/
 const CODE = /^[A-Za-z0-9_.:-]{1,48}$/
 const MAX_FLAGS = 16
 // commands whose second word is a subcommand (gang fly mint, gang bond create, …)
-const WITH_SUB = new Set(['fair', 'v3', 'fly', 'bond', 'buyback', 'split', 'lp', 'combo', 'creator-fee'])
+const WITH_SUB = new Set(['fair', 'v3', 'fly', 'bond', 'buyback', 'split', 'lp', 'combo', 'capped', 'creator-fee'])
 
 export const enabled = () => process.env.GANG_TELEMETRY !== '0' && process.env.DO_NOT_TRACK !== '1'
 

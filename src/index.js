@@ -25,8 +25,9 @@ import { runSplit, SPLIT_EVENT_ABIS } from './split.js'
 import { runPromote, PROMOTE_EVENT_ABIS } from './promote.js'
 import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
+import { runCapped, CAPPED_EVENT_ABIS } from './capped.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
-import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch } from './launch.js'
+import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch, TAX_CAP_ALONE } from './launch.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
 import { MERGED_ERRORS_ABI, genOf, padNets } from './gangpad.js'
@@ -476,6 +477,28 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          Steps: clone your combined recipient (GangComboSplitterFactory; listed in the same tx)
                                          → create → bind → the rest of the launch. Quote: WBNB (default), GANG or one listed
                                          in the pad's QuoteRegistry only
+  gang create … --buy-tax <1-5> --sell-tax <1-5> --tax-cap <amount> [--tax-cap-share <0.01-100>] [--split <addr>:<pct>[,…]]
+                                         [--after-cap buyback:<pct>,lp:<pct>] [--dev-buy …]
+                                         V3, taxed, capped recipient (GangCappedSplitter, capped-v1; 0.35.0+): --tax-cap-share %
+                                         (default 100) of the recipient's part goes to the --split payees (shares of that part,
+                                         adding up to 100; default: all to you) until they have been credited --tax-cap in all
+                                         (in the launch's quote, its own decimals: WBNB for a BNB launch, else --quote;
+                                         counted when split, pushed or owed alike; the split that crosses it pays exactly what
+                                         is left). The rest, and after the cap all of it, is bought back and burned / added
+                                         as liquidity (LP to 0xdead) as --after-cap says (parts adding up to 100; default
+                                         buyback:100), e.g. --tax-cap 20 --tax-cap-share 50 --split self:70,0xKol…:30
+                                         --after-cap buyback:70,lp:30. The preview shows the rough pool volume that reaches
+                                         the cap. The cap covers only this recipient's part of the pool tax: not your creator
+                                         fee (gang creator-fee), not your own tokens (you can still sell), not the holders'
+                                         dividend.
+                                         PERMANENT: the cap, its quote, the ratios, payees and shares can never change; a payee
+                                         can only move its own slot (gang capped set-payee). Any other asset sent to it goes
+                                         to 0xdead in full when distributed (one that can't be sent there stays in the
+                                         module). Not with --buyback / --lp / --buyback-to / --lp-to / --recipient;
+                                         with --promote the promoter share stays on the curve. Steps: clone your capped
+                                         recipient (GangCappedSplitterFactory; listed in the same tx) → create → bind → the
+                                         rest of the launch. Quote: WBNB (default), GANG or one listed in the pad's
+                                         QuoteRegistry only.
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
                                          打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
                                          chain (a token this wallet created with this symbol since the plan); a run that finds
@@ -666,12 +689,35 @@ COMBO (a V3 token whose recipient is a combined recipient, combo-v1; GANG_COMBO_
                                          CLI never sets a gas limit; let the wallet estimate it (a chunk ~0.55–0.75M; each
                                          payee push needs ~365k left before it, up to 10: a lower limit reverts PushStarved).
                                          --testnet, --calldata, --from as in gang v3
+CAPPED (a V3 token whose recipient is a capped recipient, capped-v1, 0.35.0+; GANG_CAPPED_FACTORY / GANG_TESTNET_CAPPED_FACTORY):
+  gang capped status --token <addr> [--asset <addr>]
+                                         the cap (amount, quote, paid, left, progress %, reached), pay % until the cap, the
+                                         after-cap buy-back / LP split (all fixed for good), payees and shares, set aside for
+                                         buy-back (buybackLeft) and liquidity (lpLeft), not split yet (unsplit) and where it
+                                         would go, what each slot is owed, the next chunk, the keeper (planned action decoded
+                                         from previewWork), next commands, what the cap covers, and a warning when the module
+                                         is bound to another token than the one paying it
+  gang capped distribute --token <addr> [--asset <addr>|wbnb]
+                                         anyone, once bound: the bound quote (default) is split as the tax is (the payees'
+                                         part never above what is left of the cap); any other asset goes to 0xdead in full
+                                         (BURNED, paid to nobody; one that can't be sent there stays in the module)
+  gang capped release --token <addr> [--index <i>] [--max <amount>]
+                                         anyone: push a slot what a failed push left owed (bound quote only; --index = the
+                                         contract's 0-based slot, default your own slot or the only one owed)
+  gang capped set-payee --token <addr> --to <addr> [--index <i>]
+                                         only the slot's current payee (--index default: your wallet's slot): moves the slot
+                                         to --to at once; the share and the cap stay
+  gang capped bind --token <addr>        anyone: bind the module to its token (the launch does it; the token's quote must be
+                                         the cap's)
+  gang capped chunk --token <addr> [--slippage 1]
+                                         anyone: one chunk now, as gang combo chunk. --module <addr> instead of --token names
+                                         a module directly (not for bind). Gas, --testnet, --calldata, --from as gang combo
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
                                          in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
                                          打新, 铸币飞轮, tax routers, vaults), GangFlywheelPad (铸币飞轮 pads), split modules,
-                                         LP splitters and combined recipients (publishes a queued --note; mainnet). GangLaunchpad events
+                                         LP splitters, combined and capped recipients (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
@@ -1213,7 +1259,7 @@ function alias(kind, sub) {
 
 // 铸币飞轮 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
 const FLY_ONLY_FLAGS = FLY_CREATE_FLAGS.filter((f) => !['raise', 'hold', 'mint-fee', 'exit-fee', 'sell-tax'].includes(f))
-const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter, combined recipient or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
+const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter, combined recipient, capped recipient or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
 /** The flags a 铸币飞轮 create refuses (gang create --fly and gang fly create alike). */
 function checkFlyCreate() {
   if (flag('fair')) fail('give --fly (铸币飞轮) or --fair (打新), not both')
@@ -1226,7 +1272,7 @@ function checkFlyCreate() {
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
-const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
+const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined / capped recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
 // --grad picks a V3 curve's graduation target (2.0 / 3.0); a 打新 / 铸币飞轮 sale ends at its own --raise
 const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): ${what} fills at its --raise instead, so leave --grad out`
 function create() {
@@ -1244,7 +1290,7 @@ function create() {
     return runFair('create', { ...PAD_IO, notes: padNotes('fair', 'create') })
   }
   const wrong = FAIR_CREATE_FLAGS.find(flag)
-  if (wrong) fail(`--${wrong} is a 打新 (fair-mint) setting: add --fair to create a sale (gang create --fair …)`)
+  if (wrong) fail(`--${wrong} is a 打新 (fair-mint) setting: add --fair to create a sale (gang create --fair …)`, wrong === 'cap' ? { hint: 'to cap what the payees take from a V3 token\'s tax, use --tax-cap <amount> (a capped recipient)' } : {})
   if (isLaunch('v3', flag, opt)) return runLaunch('v3', LAUNCH_DEPS)
   return runV3('create', { ...PAD_IO, notes: padNotes('v3', 'create') })
 }
@@ -1260,11 +1306,11 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'fly', 'creator-fee', 'promote'])
+  'buyback', 'split', 'lp', 'combo', 'capped', 'fly', 'creator-fee', 'promote'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...PROMOTE_EVENT_ABIS]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...PROMOTE_EVENT_ABIS]
 
-/** gang bond / gang buyback / gang split / gang lp / gang combo on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
+/** gang bond / gang buyback / gang split / gang lp / gang combo / gang capped on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
   const token = opt('token')
   if (!isAddress(token ?? '')) return
@@ -1369,8 +1415,11 @@ async function main() {
   if (tokenCreate && !flyCreate && !isLaunch(launchKind, flag, opt)) {
     // a 打新 dev buys with --shares in the create itself: say so here, not "add --bond" (which would only lead to that)
     if (launchKind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
+    const capFlag = ['tax-cap', 'tax-cap-share', 'after-cap'].find((f) => flag(f))
+    if (capFlag && launchKind === 'fair') fail(`--${capFlag} is for V3 tokens: it makes the tax recipient a capped recipient, and a 打新 token has no recipient`)
+    if (capFlag) fail(TAX_CAP_ALONE)
     const lone = LAUNCH_FLAGS.find((f) => flag(f))
-    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,… / --lp <pct>)'}`)
+    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,… / --lp <pct> / --tax-cap <amount>)'}`)
   }
   switch (cmd) {
     case 'fair':
@@ -1411,6 +1460,9 @@ async function main() {
     case 'combo':
       await refuseFly('a combined recipient')
       return runCombo(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'capped':
+      await refuseFly('a capped recipient')
+      return runCapped(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'capabilities':
       return out((await import('./capabilities.js')).capabilities())
     case 'version':

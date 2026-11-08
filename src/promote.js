@@ -185,7 +185,7 @@ export function parsePromote(raw, daysRaw) {
 /** Does this create's flags ask for the pool module? --promote on a taxed V3 token with no recipient or other module named. Pure. */
 export function wantsPoolModule(kind, flag, opt) {
   if (kind !== 'v3' || !flag('promote') || flag('recipient') || flag('vault')) return false
-  if (flag('buyback') || flag('split') || flag('lp')) return false
+  if (flag('buyback') || flag('split') || flag('lp') || flag('tax-cap')) return false
   const zero = (f) => !flag(f) || /^0*(\.0*)?$/.test(opt(f) ?? '')
   if (zero('buy-tax') && zero('sell-tax')) return false
   return !/^0*100(\.0+)?$/.test(opt('dividend', '0'))
@@ -197,10 +197,10 @@ export function promoteLine({ shareBps, windowDays, pool, taxed, dividendPct = 0
   const curve = `${pct}% of your creator fee goes to the promoter of each bound wallet, on that wallet's curve trades for ${windowDays} days after it binds; you keep the rest. Fixed for good. A wallet binds only by its first buy, sent directly with gang promote buy --promoter (never through a router or aggregator)`
   if (pool) {
     const onTax = (pct * (100 - dividendPct)) / 100
-    return `${curve}. After graduation the promoter also earns ${pct}% of the recipient's part of those wallets' pool tax (about ${onTax}% of the tax left after the platform's part): the module escrows ${pct}% of each arrival and pushes the rest to you, and a settler posts who gets what, with a 2-day dispute window. What the escrow holds for trades with no promoter is yours too, but only once you claim it: gang promote claim-pool. A trade counts for the promoter only if the bound wallet itself moves the tokens, or calls a listed router directly: tokens moved to another address first, or sold through an unlisted contract, don't count; nor does tax still unsold when escrow ends. Escrow ends about ${windowDays + 7} days after graduation (counted from the first split that sees it). If the settler is silent for 30 days after graduation you can reclaim what no root allocated, which closes the module. The module can't be combined with --buyback / --lp / --split`
+    return `${curve}. After graduation the promoter also earns ${pct}% of the recipient's part of those wallets' pool tax (about ${onTax}% of the tax left after the platform's part): the module escrows ${pct}% of each arrival and pushes the rest to you, and a settler posts who gets what, with a 2-day dispute window. What the escrow holds for trades with no promoter is yours too, but only once you claim it: gang promote claim-pool. A trade counts for the promoter only if the bound wallet itself moves the tokens, or calls a listed router directly: tokens moved to another address first, or sold through an unlisted contract, don't count; nor does tax still unsold when escrow ends. Escrow ends about ${windowDays + 7} days after graduation (counted from the first split that sees it). If the settler is silent for 30 days after graduation you can reclaim what no root allocated, which closes the module. The module can't be combined with --buyback / --lp / --split / --tax-cap`
   }
   if (taxed && dividendPct === 100) return `${curve}. Curve only: all of this token's tax goes to holders, so there is no recipient's part to share`
-  return `${curve}. Curve only: ${taxed ? 'this token\'s tax goes to another recipient, so promoters earn nothing from its pool tax (a token has one recipient: to share it, launch with no --recipient, --buyback, --lp or --split)' : 'an untaxed token has no pool tax to share'}`
+  return `${curve}. Curve only: ${taxed ? 'this token\'s tax goes to another recipient, so promoters earn nothing from its pool tax (a token has one recipient: to share it, launch with no --recipient, --buyback, --lp, --split or --tax-cap)' : 'an untaxed token has no pool tax to share'}`
 }
 
 // --- the Merkle tree the settler posts: OpenZeppelin StandardMerkleTree leaves and sorted pairs

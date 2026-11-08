@@ -55,6 +55,9 @@ export const GANG_GENS = {
       bond: '0x830b38F695Ca1bCbdD313CD5AA5943e2125Be9D6', splitterFactory: '0xc1282e7Fd3DFa5e00e74E9EbF8c54fFfB5763194',
       splitFactory: '0x904D4498a9257E4d7638afEbB95A1162cB2171f2', lpFactory: '0x98C506F0F4762F9d1Ec96C27499CE8B7e5981752',
       comboFactory: '0x20188054dE31De844df205712768852BdeD3eA39',
+      // capped-v1, 2026-11-08, block 132418984; the Safe allowed it on GangHandlerAdmin at block 132420220
+      // (docs/MAINNET-CAPPED-MODULE-2026-11-08.md)
+      cappedFactory: '0x294E901ecb66af280C1cDD26fD871601d89a2Dca',
       // the pool side of the promoter share, 2026-11-07, block 132218466; the Safe allowed it on GangHandlerAdmin at block
       // 132219892 (docs/MAINNET-GANG-LAUNCHPAD-3-PROMOTE-2026-11-07.md)
       promotePoolFactory: '0xA633e499ADcD69A4F91dc83587096b2c1903167A',
@@ -68,6 +71,7 @@ export const GANG_GENS = {
       bond: '0x231339463d04A2127E6dD5756756Dd56853AE0D8', splitterFactory: '0x77e499c892e5E6B3eEe1721e6821e9DA1293803C',
       splitFactory: '0xa73dC3d63AAf72E70b1cb012e5f3A541360Bec59', lpFactory: '0x8ac85f150f87B536fb05eA163908b1077D95c0E4',
       comboFactory: '0xcCeA388DbC0Edb206eC25C9715546d57029198Be',
+      cappedFactory: null,
     },
     // 2026-10-27, pad block 130104322. router = the GangRouter proxy: BNB buys and every PancakeSwap trade of a graduated
     // token (V3, 打新 and V2 / Soft / U / S alike). GangBond 2026-10-29 with the re-review L-1 fix; it replaces 0xf26F…C817
@@ -80,6 +84,7 @@ export const GANG_GENS = {
       splitFactory: '0x27e08271E52B2D129c824CD245e69471a8d3067c', lpFactory: '0xE0436867dAFcf42Ee1418083251a9B8B61F0C248',
       // combo-v1, 2026-10-31 (the Safe allowed it on GangHandlerAdmin at block 130811492)
       comboFactory: '0xd33C38BE3f8472b3013167830F0638C1704e1DBd',
+      cappedFactory: null,
     },
     // 2026-11-02, pad block 131081707: 2.0 金库版 (GangVaultLaunchpad; docs/MAINNET-GANG-VAULT-LAUNCHPAD-2026-11-02.md).
     // The 2.0 curves, each bound at create to one vault the platform listed (createWithVault, by the wallet the Safe
@@ -87,7 +92,7 @@ export const GANG_GENS = {
     // GangBond and no module factories (none is wired to it)
     {
       gen: VAULT_GEN, pad: '0xE90851A90C6278E3d6e4C24320101f8B13D90A11', router: '0xAcd4944A4090c13d9DACAe60f3019cef9d9bB1Ad',
-      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null,
+      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null, cappedFactory: null,
     },
   ],
   testnet: [
@@ -99,6 +104,8 @@ export const GANG_GENS = {
       bond: '0xa87727dc3CC28a44709649A22aDbD77287B99fc1', splitterFactory: '0x3533E63EF0386adfBC96227C50f1b82EEA18d110',
       splitFactory: '0xf8d4FA57FD65Bf16427Eef653518811fFa2606dc', lpFactory: '0x4A3aC160eAF4A2747046b119631988D5D8056B07',
       comboFactory: '0xdc1687961c8aAf5A0340c1A73b604cf3a2be543C',
+      // capped-v1, 2026-11-08 (deployed at block 141527185, allowed on the GangHandlerAdmin at block 141527190)
+      cappedFactory: '0xe3f61865d98993dd39c136Af19651C6F6686498A',
       // the pool side of the promoter share, 2026-11-05 (docs/TESTNET-GANG-LAUNCHPAD-3-2026-11-03.md)
       promotePoolFactory: '0x7a68A65d27591a21C44f91015F930422BA79F1c2',
     },
@@ -110,6 +117,7 @@ export const GANG_GENS = {
       bond: '0x39749B59066d9cd1c55E2Fc48B31a3978C9951F9', splitterFactory: '0xDC9EdA9a29F4Ff66E7dAb6E5A2142df5a7aC0f6e',
       splitFactory: '0xb9ab949C717a4F7f05c7B003C612C437280C3513', lpFactory: '0xAEec7e7948FfDb7a212E14c0b9cc1DA2922436E4',
       comboFactory: '0x312c86F7139b3e3a75ee66b4D5Bfdbe5077584BD',
+      cappedFactory: null,
     },
     // 2026-10-31, pad block 139866088: the first 2.0 (creator fee, no graduation pick), no longer creating; its tokens trade
     // and claim here. Its modules from the same scripts as 1.0's (docs/TESTNET-GANGLAUNCHPAD2-2026-10-31.md)
@@ -118,6 +126,7 @@ export const GANG_GENS = {
       bond: '0x913966122b9f8CC00C0d81000988A483c6B7F97f', splitterFactory: '0xBc26A6585B3Dc2Cbf1522475fB5b18df6C1033AE',
       splitFactory: '0x860D51808E9FBB4f887FC7d0Aa9e1F8E19E00879', lpFactory: '0x4f1544e4e8853fC62088f0A4eCbEF409D2e11619',
       comboFactory: null, // none: its tokens can't have a combined recipient
+      cappedFactory: null,
     },
     // set 10 (2026-10-27: §23 aggregator entries). GangBond 2026-10-29, block 139463214 — the audited version (earlier:
     // 0x587f…5d7E, 0x5a99…d716, 0xB034…EBE3; docs/TESTNET-GANG-BOND-2026-10-28.md); split and LP factories
@@ -127,27 +136,29 @@ export const GANG_GENS = {
       bond: '0xd6a8dd5d1E6641a34A255f25Db2B3ED397CB1086', splitterFactory: '0x7E63fF8A9FB9Ab1BE4e2128e9f6C8D1054292BBe',
       splitFactory: '0x5F7dC7502E945A860Cf49cca72dA8bD60Fb1567E', lpFactory: '0xA729C60FCa0Bd0D28a55E22126D3fE412AA41591',
       comboFactory: '0x52a8f90a92E5C1828b4436a0B99C6b293f7F4CFE',
+      cappedFactory: null,
     },
     // 2026-11-01, pad block 140215635: 2.0 金库版, testnet v3 (docs/TESTNET-GANG-VAULT-LAUNCHPAD-2026-11-01.md)
     {
       gen: VAULT_GEN, pad: '0x9108e7b85e69060A5E626A04Ce6DEf323071C8a9', router: '0x9bF3E197a6719Af856a7c82d23CABFdBcc184f69',
-      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null,
+      bond: null, splitterFactory: null, splitFactory: null, lpFactory: null, comboFactory: null, cappedFactory: null,
     },
   ],
 }
 // what a generation brings to a ctx (gen: '1.0' | '2.0' | PAD3_GEN | VAULT_GEN, null for a pad named by the env that this CLI does not know)
-const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'promotePoolFactory']
+const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'cappedFactory', 'promotePoolFactory']
 // the env names of each field, per network (new name first; the old per-command names still work as aliases)
 const GEN_ENV = {
   mainnet: {
     pad: ['GANG_PAD', 'GANG_V3_PAD', 'GANG_FAIR_PAD'], router: ['GANG_ROUTER'], bond: ['GANG_BOND'],
     splitterFactory: ['GANG_SPLITTER_FACTORY'], splitFactory: ['GANG_SPLIT_FACTORY'], lpFactory: ['GANG_LP_FACTORY'],
-    comboFactory: ['GANG_COMBO_FACTORY'], promotePoolFactory: ['GANG_PROMOTE_POOL_FACTORY'],
+    comboFactory: ['GANG_COMBO_FACTORY'], cappedFactory: ['GANG_CAPPED_FACTORY'], promotePoolFactory: ['GANG_PROMOTE_POOL_FACTORY'],
   },
   testnet: {
     pad: ['GANG_TESTNET_PAD', 'GANG_V3_TESTNET_PAD', 'GANG_FAIR_TESTNET_PAD'], router: ['GANG_TESTNET_ROUTER', 'GANG_ROUTER_TESTNET'],
     bond: ['GANG_TESTNET_BOND'], splitterFactory: ['GANG_TESTNET_SPLITTER_FACTORY'], splitFactory: ['GANG_TESTNET_SPLIT_FACTORY'],
-    lpFactory: ['GANG_TESTNET_LP_FACTORY'], comboFactory: ['GANG_TESTNET_COMBO_FACTORY'], promotePoolFactory: ['GANG_TESTNET_PROMOTE_POOL_FACTORY'],
+    lpFactory: ['GANG_TESTNET_LP_FACTORY'], comboFactory: ['GANG_TESTNET_COMBO_FACTORY'], cappedFactory: ['GANG_TESTNET_CAPPED_FACTORY'],
+    promotePoolFactory: ['GANG_TESTNET_PROMOTE_POOL_FACTORY'],
   },
 }
 

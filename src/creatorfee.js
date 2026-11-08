@@ -23,6 +23,7 @@ const CURVES_ABI = parseAbi([
 const SYMBOL_ABI = parseAbi(['function symbol() view returns (string)'])
 const MODULE_TYPE_ABI = parseAbi(['function moduleType() view returns (bytes32)'])
 const QUOTE_ABI = parseAbi(['function quote() view returns (address)'])
+const CAP_QUOTE_ABI = parseAbi(['function capQuote() view returns (address)'])
 const ABIS = [CREATOR_FEE_ABI, CURVES_ABI]
 const HINTS = {
   NotCreator: 'only the token\'s creator (the wallet that created it) can claim its creator fee; pass that wallet with --from',
@@ -61,15 +62,21 @@ export async function createNote(ctx, net = '') {
 /**
  * What pays out a fee claimed into a module, by its moduleType(): the buy-back and LP splitters pay their payee only
  * when they split (the keeper's chunks do it after graduation), the split module and the combined recipient on
- * distribute. null: not one of these.
+ * distribute. The capped recipient splits its own quote as the tax (the payees' part counted against the cap) and
+ * burns any other asset. null: not one of these.
  */
 export function payOutCmd(moduleType, at, net = '', { asset, assetSymbol } = {}) {
   const t = String(moduleType ?? '')
   const base = t.startsWith('buyback-burn-') ? 'gang buyback' : t === 'lp-burn-v1' ? 'gang lp'
-    : t === 'split-v1' ? 'gang split' : t === 'combo-v1' ? 'gang combo' : null
+    : t === 'split-v1' ? 'gang split' : t === 'combo-v1' ? 'gang combo' : t === 'capped-v1' ? 'gang capped' : null
   if (!base) return null
   const splitter = base === 'gang buyback' || base === 'gang lp'
   const m = `--module ${at ?? '<module>'}`
+  if (base === 'gang capped') {
+    return asset
+      ? `${base} distribute ${m} --asset ${asset}${net} (anyone) sends ALL of it to 0xdead: ${assetSymbol ?? 'this asset'} is not the module's quote, so it is burned, paid to nobody`
+      : `${base} distribute ${m}${net} (anyone) then splits it as the tax: the payees' part is pushed and counted against the cap (so it only uses the cap up sooner), the rest set aside for buy-back and liquidity`
+  }
   // a fee in another quote than the module's own: split / distribute of the bound quote never moves it
   if (asset) {
     return splitter
@@ -84,11 +91,18 @@ export function payOutCmd(moduleType, at, net = '', { asset, assetSymbol } = {})
  * The claim's --to note when --to is a module (pure: unit-tested): `bound` is its quote() (zero: not bound yet),
  * `quote` the token's. { payOut, warning }: a fee in another quote is not moved by split / distribute.
  */
-export function claimToModule({ moduleType, at, net = '', bound, quote, quoteSymbol, boundSymbol }) {
+export function claimToModule({ moduleType, at, net = '', bound, quote, quoteSymbol, boundSymbol, capQuote, capSymbol }) {
   const other = !!bound && !!quote && bound.toLowerCase() !== quote.toLowerCase()
   const unbound = !bound || /^0x0{40}$/.test(bound)
-  const payOut = payOutCmd(moduleType, at, net, other && !unbound ? { asset: quote, assetSymbol: quoteSymbol } : {})
+  // a capped recipient burns every asset but its quote: unbound, its quote is already fixed (capQuote)
+  const burned = moduleType === 'capped-v1' && !!quote && (unbound ? !!capQuote && capQuote.toLowerCase() !== quote.toLowerCase() : other)
+  const payOut = payOutCmd(moduleType, at, net, (other && !unbound) || burned ? { asset: quote, assetSymbol: quoteSymbol } : {})
   if (!payOut) return { payOut: null, warning: null }
+  if (burned) return { payOut, warning: `the capped recipient's quote is ${(unbound ? capSymbol : boundSymbol) ?? (unbound ? capQuote : bound)}, this fee is in ${quoteSymbol ?? quote}: it sends any other asset to 0xdead in full, so a fee claimed there is burned` }
+  // its quote unknown (capQuote() unread): never stay silent about a burn that may follow
+  if (moduleType === 'capped-v1' && unbound && !capQuote) {
+    return { payOut, warning: `could not read the capped recipient's quote (capQuote): if it is not ${quoteSymbol ?? quote}, this fee's quote, a fee claimed there is burned (it sends any other asset to 0xdead in full). Check gang capped status --module ${at ?? '<module>'}${net} first` }
+  }
   if (unbound) return { payOut, warning: 'the module is not bound to a token yet: it pays this out only once it is bound (its launch binds it)' }
   if (!other) return { payOut, warning: null }
   return {
@@ -96,11 +110,13 @@ export function claimToModule({ moduleType, at, net = '', bound, quote, quoteSym
     warning: `the module's own quote is ${boundSymbol ?? bound}, this fee is in ${quoteSymbol ?? quote}: split / distribute of the module's quote leave it where it is`,
   }
 }
-const LAUNCH_TYPES = { buyback: 'buyback-burn-v4', lp: 'lp-burn-v1', split: 'split-v1', combo: 'combo-v1' }
+const LAUNCH_TYPES = { buyback: 'buyback-burn-v4', lp: 'lp-burn-v1', split: 'split-v1', combo: 'combo-v1', capped: 'capped-v1' }
 
-/** Added to the create's note when the tax recipient is one of the dev's modules (`module`: its name; `kind`: buyback | lp | split | combo). */
+/** Added to the create's note when the tax recipient is one of the dev's modules (`module`: its name; `kind`: buyback | lp | split | combo | capped). */
 export const notThroughModule = (module, { token, at, net = '', kind } = {}) =>
   `This creator fee is yours, the creating wallet's: it does not go through the ${module}, which gets only the recipient's part of the pool tax after graduation.`
+  // capped: the fee kept (or claimed anywhere else) is never limited by the cap; claimed into the module it is split as tax
+  + (kind === 'capped' ? ' The cap never limits it: it covers only the recipient\'s part of the pool tax.' : '')
   + (at ? ` To put it into the ${module} anyway, claim it there: gang creator-fee --token ${token ?? '<token>'}${net} --claim --to ${at}` : '')
   + (at && kind && LAUNCH_TYPES[kind] ? `; ${payOutCmd(LAUNCH_TYPES[kind], at, net)}` : '')
 
@@ -250,9 +266,10 @@ export async function runCreatorFee({ opt, flag, out, fail, summarize }) {
   let toModule = { payOut: null, warning: null }
   if (toType && payOutCmd(toType, to)) {
     const bound = await ctx.read(to, QUOTE_ABI, 'quote').catch(() => null)
+    const capQuote = toType === 'capped-v1' ? await ctx.read(to, CAP_QUOTE_ABI, 'capQuote').catch(() => null) : null
     const sym = (a) => (a && !/^0x0{40}$/.test(a) ? ctx.read(a, SYMBOL_ABI, 'symbol').catch(() => null) : null)
-    const [quoteSymbol, boundSymbol] = await Promise.all([sym(quote), sym(bound)])
-    toModule = claimToModule({ moduleType: toType, at: to, net, bound, quote, quoteSymbol, boundSymbol })
+    const [quoteSymbol, boundSymbol, capSymbol] = await Promise.all([sym(quote), sym(bound), sym(capQuote)])
+    toModule = claimToModule({ moduleType: toType, at: to, net, bound, quote, quoteSymbol, boundSymbol, capQuote, capSymbol })
   }
   const { payOut, warning } = toModule
   return out(step(ctx, { from: me, to: ctx.pad, data }, {

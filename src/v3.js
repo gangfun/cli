@@ -12,6 +12,7 @@ import { splitterOf } from './buyback.js'
 import { splitOf } from './split.js'
 import { lpOf } from './lp.js'
 import { comboOf, decoyWarning } from './combo.js'
+import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -367,6 +368,10 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const combo = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp
       ? await comboOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, pad: ctx.pad, extraAssets: [c.quote], ref: comboRef }) : null
     const comboWarning = combo ? decoyWarning(combo, token, c.quote, comboRef) : null
+    // or the dev's capped recipient (capped-v1): payees up to a fixed cap, then buy-back + LP; the cap's progress
+    const capped = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp && !combo
+      ? await cappedOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, pad: ctx.pad, extraAssets: [c.quote], ref: comboRef }) : null
+    const cappedWarning = capped ? cappedDecoyWarning(capped, token, c.quote, comboRef) : null
     const lpWarn = lp && lp.token && lp.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
@@ -384,6 +389,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
+      ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
     })
   }
 

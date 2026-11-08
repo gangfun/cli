@@ -233,7 +233,7 @@ const iso = (s) => (Number(s) > 0 ? new Date(Number(s) * 1000).toISOString() : n
 const q18 = (x) => formatUnits(x, 18)
 
 /** _kindOf: the larger set-aside part (a buy-back on a tie); a liquidity part under 2 wei has no half. */
-function kindOf(bb, lp) {
+export function kindOf(bb, lp) {
   const canBurn = bb !== 0n, canAdd = lp / 2n !== 0n
   if (!canBurn && !canAdd) return null
   if (!canAdd) return 'buy-back'

@@ -13,6 +13,7 @@ import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFacto
 import { LP_ABI, LP_FACTORY_ABI, lpBpsOf, lpFactoryAddress, lpNotDeployed, lpOf, simulateLp } from './lp.js'
 import { claimCmd, notThroughModule } from './creatorfee.js'
 import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotDeployed, comboOf, comboParts, parseComboSpec, PERMANENT_NOTE, simulateCombo } from './combo.js'
+import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappedNotDeployed, cappedOf, cappedParts, capUnits, capVolume, COVERAGE_NOTE, OTHER_ASSETS_NOTE, parseCappedSpec, PERMANENT_NOTE as CAPPED_PERMANENT_NOTE, quoteUnits, simulateCapped, splitPcts } from './capped.js'
 
 /**
  * One command for a launch: `gang create … [--buyback <pct>] [--dev-buy <quote> [--bond <quote> [--bond-hold <tokens|N%|all>]
@@ -45,10 +46,16 @@ import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotD
  * rest pushed to the --split payees, or to the dev alone without --split) is cloned at predict(dev, salt), named as the
  * recipient, then bound (`module: 'combo'`). Everything in it is fixed for good, so a re-run with other ratios or payees
  * is refused rather than starting over. --buyback-to / --lp-to don't apply (the payees are --split's).
+ * --tax-cap <amount> [--tax-cap-share <pct>] [--split …] [--after-cap buyback:<pct>,lp:<pct>] (taxed V3): the same three steps with
+ * GangCappedSplitterFactory — the dev's capped recipient (capped-v1: --tax-cap-share % of the recipient's part to the --split
+ * payees, or to the dev alone, until they have been credited --tax-cap of the launch's quote in all; the rest, and after the
+ * cap all of it, bought back and burned / added as liquidity as --after-cap says) is cloned at predict(dev, salt) with the
+ * launch's quote as its capQuote, named as the recipient, then bound (`module: 'capped'`). Fixed for good like combo;
+ * --buyback / --lp / --buyback-to / --lp-to / --recipient don't go with it.
  */
 
 // the dev's recipient modules by flag, as the creator-fee note names them
-const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', promote: 'promoter pool module' }
+const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', promote: 'promoter pool module' }
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
 const TTL_MS = 7 * 24 * 3600_000
 const PAD_ABI = parseAbi([
@@ -57,6 +64,7 @@ const PAD_ABI = parseAbi([
   'function kindOf(address token) view returns (uint8)',
   'function curves(address token) view returns (address creator, address quote, uint128 realQuote, uint128 sold, uint128 gradAmt, uint128 virtualQuote, bool graduated, uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address pair, address refPair)',
   'function sales(address token) view returns (address creator, uint64 progressAt, uint16 capShares, uint16 holdBps, address quote, uint16 sold, bool launched, uint16 mintFeeBps, uint16 exitFeeBps, address gate, uint128 sharePrice, address pair, address refPool, uint16 markSold)',
+  'function PLATFORM_TAX_BPS() view returns (uint256)',
 ])
 const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)', 'function symbol() view returns (string)'])
 /** Flags only the chain reads; everything else goes to the step's own command. */
@@ -95,6 +103,10 @@ const UNTRUSTED = {
     why: 'a combined recipient (more than one of --buyback / --lp / --split) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its buy-backs and liquidity adds price on what the pair receives (a quote that taxes transfers into the pair fails every chunk), the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --buyback / --lp / --split',
   },
+  capped: {
+    why: '--tax-cap (a capped recipient) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its buy-backs and liquidity adds price on what the pair receives (a quote that taxes transfers into the pair fails every chunk), the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
+    hint: 'drop --quote (WBNB), use a listed quote, or launch without --tax-cap',
+  },
 }
 export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') {
   if (!isAddress(quote ?? '')) return { error: '--quote must be a 0x address', got: quote ?? null }
@@ -107,23 +119,25 @@ export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') 
   if (listed) return null
   return {
     error: listed === null
-      ? `could not read the pad's QuoteRegistry to check the --${mode} quote: try again`
+      ? `could not read the pad's QuoteRegistry to check the ${{ combo: '--buyback / --lp / --split', capped: '--tax-cap', promote: '--promote' }[mode] ?? `--${mode}`} quote: try again`
       : UNTRUSTED[mode].why,
     quote, hint: UNTRUSTED[mode].hint,
   }
 }
 
-export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'lp', 'lp-to', 'restart']
+export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'lp', 'lp-to', 'tax-cap', 'tax-cap-share', 'after-cap', 'restart']
 const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 /** `gang fair create --dev-buy`, with or without --bond (index.js stops the lone flag, runLaunch the chained one). */
+/** --tax-cap-share / --after-cap without --tax-cap (index.js stops the lone flags, runLaunch the chained ones). */
+export const TAX_CAP_ALONE = '--tax-cap-share / --after-cap go with --tax-cap <amount>: they set what the capped recipient pays its payees and sets aside'
 export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: use --shares <n> (not --dev-buy)'
 
 /** The run asks for a chained launch (`kind` 'v3' | 'fair'). */
-export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && flag('dev-buy')) || wantsPoolModule(kind, flag, opt)
+export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && (flag('dev-buy') || flag('tax-cap'))) || wantsPoolModule(kind, flag, opt)
 /** The recipient modules a launch can clone (their flags): one alone clones its own module, several a combined one. */
 const MODULE_FLAGS = ['buyback', 'split', 'lp']
 /** How a module's flags read in a message. */
-const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', promote: '--promote on a taxed token' }
+const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', capped: '--tax-cap', promote: '--promote on a taxed token' }
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -170,8 +184,15 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (kind === 'fair' && flag('split')) fail('--split is for V3 tokens: it makes the tax recipient a split module, and a 打新 token has no recipient')
   if (kind === 'fair' && flag('lp')) fail('--lp is for V3 tokens: it makes the tax recipient an LP splitter, and a 打新 token has no recipient')
   const mods = MODULE_FLAGS.filter((f) => flag(f))
-  // more than one: one combined recipient (GangComboSplitter) does them all
-  const combo = mods.length > 1
+  // --tax-cap: the capped recipient (GangCappedSplitter) of a V3 launch
+  if (kind === 'fair') {
+    const f = ['tax-cap', 'tax-cap-share', 'after-cap'].find((x) => flag(x))
+    if (f) fail(`--${f} is for V3 tokens: it makes the tax recipient a capped recipient, and a 打新 token has no recipient`)
+  }
+  const capped = kind === 'v3' && flag('tax-cap')
+  if (!capped && (flag('tax-cap-share') || flag('after-cap'))) fail(TAX_CAP_ALONE)
+  // more than one: one combined recipient (GangComboSplitter) does them all; with --tax-cap, --split names the capped payees
+  const combo = !capped && mods.length > 1
 
   // everything checked before the create, so a launch never stops half way on a bad flag
   const devBuy = kind === 'v3' && flag('dev-buy') ? parseAmount(fail, 'dev-buy', opt('dev-buy')) : null
@@ -204,6 +225,30 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     if (flag('recipient')) fail(`${names} makes the recipient your combined recipient: leave --recipient out`)
     if (/^0*100(\.0+)?$/.test(opt('dividend', '0'))) fail(`--dividend 100 leaves nothing for the recipient: lower it or drop ${names}`)
+  }
+
+  // --tax-cap: a taxed V3 token whose recipient is the dev's capped recipient (payees up to a fixed cap, then buy-back + LP)
+  let cappedFactory = null
+  if (capped) {
+    for (const f of ['buyback', 'lp', 'buyback-to', 'lp-to']) {
+      if (flag(f)) fail(`--${f} does not go with --tax-cap: the capped recipient sets aside what the payees don't get (and after the cap all of it) for buy-back and liquidity — split that with --after-cap buyback:<pct>,lp:<pct> (left out: all to the buy-back); --split names the payees`)
+    }
+    if (flag('recipient')) fail('--tax-cap makes the recipient your capped recipient: leave --recipient out')
+    const inRange = (f) => flag(f) && Number(opt(f)) >= 1 && Number(opt(f)) <= 5
+    if (!inRange('buy-tax') || !inRange('sell-tax')) {
+      fail('--tax-cap (a capped tax recipient) needs a taxed token: add --buy-tax and --sell-tax, each 1–5 (in %); the payees are paid from the tax', { buyTax: opt('buy-tax') ?? null, sellTax: opt('sell-tax') ?? null })
+    }
+    const div = Number(opt('dividend', '0'))
+    if (div === 100) fail('--dividend 100 leaves nothing for the recipient: lower it or drop --tax-cap')
+    if (!(div >= 0 && div < 100)) fail('--dividend must be a number between 0 and 100 (in %)', { got: opt('dividend') })
+    // the amount's form now; its decimals (the quote's own) once the quote is read
+    const pre = capUnits(opt('tax-cap'))
+    if (pre.error) {
+      const { error, ...extra } = pre
+      fail(error, extra)
+    }
+    cappedFactory = cappedFactoryAddress(testnet)
+    if (!cappedFactory) fail(cappedNotDeployed(testnet))
   }
 
   // --buyback: a taxed V3 token whose recipient (the part left after holders) is the dev's splitter
@@ -243,9 +288,24 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     comboSpec = { ...spec, factory: comboFactory }
   }
 
+  // the capped recipient's share, payees and after-cap split, checked as its initialize checks them
+  let cappedSpec = null
+  if (capped) {
+    const spec = parseCappedSpec({
+      capShare: flag('tax-cap-share') ? (opt('tax-cap-share') ?? '') : undefined,
+      split: flag('split') ? (opt('split') ?? '') : undefined,
+      after: flag('after-cap') ? (opt('after-cap') ?? '') : undefined,
+    }, me)
+    if (spec.error) {
+      const { error, ...extra } = spec
+      fail(error, extra)
+    }
+    cappedSpec = { ...spec, factory: cappedFactory }
+  }
+
   // --split: a taxed V3 token whose recipient is the dev's split module (fixed payees and shares)
   let split = null
-  if (flag('split') && !combo) {
+  if (flag('split') && !combo && !capped) {
     const zero = (f) => /^0+(\.0+)?$/.test(opt(f) ?? '')
     if (!flag('buy-tax') || !flag('sell-tax') || (zero('buy-tax') && zero('sell-tax'))) {
       fail('--split needs a taxed token: add --buy-tax and --sell-tax (each 1–5, in %); the split is paid from the tax')
@@ -302,7 +362,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!(div >= 0 && div <= 100)) fail('--dividend must be a number between 0 and 100 (in %)', { got: opt('dividend') })
     poolMod = { factory }
   }
-  const mod = comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : poolMod ? 'promote' : null
+  const mod = cappedSpec ? 'capped' : comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : poolMod ? 'promote' : null
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
@@ -313,7 +373,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!tiers.includes(Number(opt('grad')))) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') ?? null })
   }
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
-  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', promote: 'promote-module' }[mod]
+  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', capped: 'capped-module', promote: 'promote-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
     ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
   const rerun = 're-run this same command after executing it'
@@ -341,14 +401,14 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
   const created = plan?.startCount !== undefined
-  // the module this plan cloned: 'split' / 'lp' / 'combo' when it says so, else a --buyback splitter (plans from before --split)
-  const planMod = plan?.salt ? (['split', 'lp', 'combo', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
-  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', promote: 'promoter pool module' }
+  // the module this plan cloned: 'split' / 'lp' / 'combo' / 'capped' when it says so, else a --buyback splitter (plans from before --split)
+  const planMod = plan?.salt ? (['split', 'lp', 'combo', 'capped', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
+  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', promote: 'promoter pool module' }
   if (mod && created && !plan.splitter) {
     return fail(`this launch was created without ${MOD_FLAG[mod]} (its recipient is fixed): run it again without ${mod === 'combo' ? '--buyback / --lp / --split' : MOD_FLAG[mod]}, or add --restart for a new token`)
   }
   if (planMod && mod !== planMod && (!created || mod)) {
-    const again = planMod === 'combo' ? 'the same --buyback / --lp / --split as before' : MOD_FLAG[planMod]
+    const again = planMod === 'combo' ? 'the same --buyback / --lp / --split as before' : planMod === 'capped' ? 'the same --tax-cap / --tax-cap-share / --split / --after-cap as before' : MOD_FLAG[planMod]
     return fail(`this launch began with ${MOD_FLAG[planMod]} (its ${modNoun[planMod]} is cloned or on the way): run it again with ${again}${mod ? ` instead of ${MOD_FLAG[mod]}` : ''}, or add --restart${mod ? '' : ' without it'}`)
   }
 
@@ -533,6 +593,96 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // the capped recipient's terms on chain against --tax-cap / --tax-cap-share / --split / --after-cap, before the create and
+  // after it: the cap compared in raw units, read straight from the module (L-2); a failed read is retried, never --restart
+  const checkCapped = async (s, quote) => {
+    const capQuote = s.cap.quote
+    if (quote && capQuote.toLowerCase() !== quote.toLowerCase()) {
+      const named = (await quoteUnits(read, quote)).symbol || quote
+      return { failed: fail(`this launch's capped recipient counts its cap in ${s.cap.symbol ?? capQuote}, not in ${named}: run it again with ${capQuote.toLowerCase() === String(net.wbnb).toLowerCase() ? 'no --quote' : `--quote ${capQuote}`}, or add --restart for a new one (its quote can never change)`, { module: s.module, capQuote }) }
+    }
+    const [units, capRaw] = await Promise.all([quoteUnits(read, capQuote), read(s.module, CAPPED_ABI, 'capAmount').catch(() => null)])
+    if (units.decimals === null || capRaw === null) return { failed: fail('could not read the capped recipient\'s cap or its quote\'s decimals (RPC error?)', { module: s.module, capQuote, retry: 'same command again' }) }
+    const cap = capUnits(opt('tax-cap'), units.decimals, units.symbol)
+    if (cap.error) {
+      const { error, ...extra } = cap
+      return { failed: fail(error, extra) }
+    }
+    const same = capRaw === cap.amount && s.payBps === cappedSpec.payBps && s.buybackOfRestBps === cappedSpec.buybackOfRestBps
+      && s.payees.length === cappedSpec.payees.length
+      && s.payees.every((p, i) => p.payee.toLowerCase() === cappedSpec.payees[i].toLowerCase() && p.bps === cappedSpec.shares[i])
+    if (!same) {
+      return { failed: fail(`this launch's capped recipient pays ${cappedLine({ cap: formatUnits(capRaw, units.decimals), symbol: units.symbol || capQuote, payBps: s.payBps, buybackOfRestBps: s.buybackOfRestBps, payees: s.payees.map((p) => p.payee), shares: s.payees.map((p) => p.bps) })} — not what --tax-cap / --tax-cap-share / --split / --after-cap say: run it again with those, or add --restart for a new one (nothing in it can change after the clone)`, { module: s.module }) }
+    }
+    return { units, cap }
+  }
+
+  // ---- capped recipient: cloned for the dev before the create, at predict(dev, plan.salt), its cap in the launch's quote
+  if (cappedSpec && !created) {
+    const quote = flag('quote') ? opt('quote') : net.wbnb
+    if (!isAddress(quote ?? '')) return fail('--quote must be a 0x address', { got: quote ?? null })
+    if (!plan?.salt) {
+      // initialize takes only a quote the keeper serves (BadQuote): the rule every module's launch checks
+      const refused = await untrustedBuybackQuote(read, net, quote, 'capped')
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
+      const units = await quoteUnits(read, quote)
+      if (units.decimals === null) return fail('could not read the quote\'s decimals (--tax-cap is counted in them; RPC error?)', { quote, retry: 'same command again' })
+      const cap = capUnits(opt('tax-cap'), units.decimals, units.symbol)
+      if (cap.error) {
+        const { error, ...extra } = cap
+        return fail(error, extra)
+      }
+      const capText = formatUnits(cap.amount, units.decimals)
+      const sym = units.symbol || quote
+      const line = cappedLine({ cap: capText, symbol: sym, ...cappedSpec })
+      if ((await client.getCode({ address: cappedSpec.factory }) ?? '0x') === '0x') {
+        const env = testnet ? 'GANG_TESTNET_CAPPED_FACTORY' : 'GANG_CAPPED_FACTORY'
+        return fail(`GangCappedSplitterFactory has no code at ${cappedSpec.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}: launch without --tax-cap for now${process.env[env] ? ` (or fix ${env})` : ''}`, { factory: cappedSpec.factory })
+      }
+      const salt = `0x${randomBytes(32).toString('hex')}`
+      const at = await read(cappedSpec.factory, CAPPED_FACTORY_ABI, 'predict', [me, salt])
+      if (cappedSpec.payees.some((p) => p.toLowerCase() === at.toLowerCase())) return fail('--split: a payee cannot be the capped recipient itself', { module: at })
+      const args = [quote, cap.amount, cappedSpec.payBps, cappedSpec.buybackOfRestBps, cappedSpec.payees, cappedSpec.shares, salt]
+      const sim = await simulateCapped(client, me, cappedSpec.factory, CAPPED_FACTORY_ABI, 'create', args)
+      if (sim.failed) return out({ success: false, step: 'capped-module', factory: cappedSpec.factory, ...tag('capped-module'), ...sim.failed })
+      writePlan(key, { ...base, salt, splitter: at, factory: cappedSpec.factory, module: 'capped' })
+      const data = encodeFunctionData({ abi: CAPPED_FACTORY_ABI, functionName: 'create', args })
+      const parts = cappedParts(cappedSpec.payBps, cappedSpec.buybackOfRestBps)
+      const platformTaxPct = Number(await read(net.pad, PAD_ABI, 'PLATFORM_TAX_BPS').catch(() => 50n)) / 100
+      const volume = capVolume({
+        capAmount: cap.amount, decimals: units.decimals, symbol: sym, buyTaxPct: Number(opt('buy-tax')), sellTaxPct: Number(opt('sell-tax')),
+        platformTaxPct, dividendPct: Number(opt('dividend', '0')), payBps: cappedSpec.payBps,
+      })
+      const pcts = splitPcts(cappedSpec.payBps, cappedSpec.buybackOfRestBps)
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: cappedSpec.factory, data }, {
+          step: 'capped-module', chainId: Number(net.chainId), factory: cappedSpec.factory, module: at,
+          cap: { amount: capText, symbol: units.symbol, quote, decimals: units.decimals },
+          payPct: cappedSpec.payBps / 100, afterCap: pcts.afterCap, untilCap: pcts.untilCap, payees: cappedSpec.list,
+          ...(volume && { capReachedAt: volume }), permanent: true, parts, covers: COVERAGE_NOTE,
+          note: `clones your capped recipient (capped-v1, listed as a tax recipient in the same tx). Of the recipient's part of the tax: ${line}.${volume ? ` The cap is reached after ${volume.poolVolume} of pool volume (an estimate).` : ''} ${CAPPED_PERMANENT_NOTE}. ${COVERAGE_NOTE}. ${OTHER_ASSETS_NOTE[0].toUpperCase()}${OTHER_ASSETS_NOTE.slice(1)}`,
+        }, flag('calldata'), io.summarize),
+        ...tag('capped-module', { module: at, next: `${rerun}: it then builds the create with the capped recipient as the recipient` }),
+      })
+    }
+    if ((await client.getCode({ address: plan.splitter }) ?? '0x') === '0x') {
+      return out({
+        success: false, ...tag('capped-module', { module: plan.splitter }), error: 'the capped recipient is not on chain yet',
+        hint: `if the clone was executed, wait for it to land and ${rerun.replace(' after executing it', '')}; if it was not, add --restart to build it again`,
+      })
+    }
+    const s = await cappedOf(read, plan.splitter, { wbnb: net.wbnb })
+    if (!s || s.dev.toLowerCase() !== me.toLowerCase() || s.token) {
+      return fail('the module at this launch\'s address is not an unbound capped recipient of this wallet: add --restart', { module: plan.splitter })
+    }
+    // the create must use the quote the cap is counted in: bind takes no other (WrongQuote), and the tax would be stuck
+    const checked = await checkCapped(s, quote)
+    if (checked.failed) return checked.failed
+  }
+
   // ---- promoter pool module: cloned for the dev before the create, at predict(dev, plan.salt)
   if (poolMod && !created) {
     if (!plan?.salt) {
@@ -632,14 +782,28 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // a launch keeps the cap terms it began with: after the create too, a changed --tax-cap / --tax-cap-share / --split /
+  // --after-cap is refused (left out, the plan's module is bound as it is), and the bind shows what the module holds
+  let cappedNow = null
+  if (plan.module === 'capped' && plan.splitter && !plan.done) {
+    cappedNow = await cappedOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }).catch(() => null)
+    if (!cappedNow) return fail('could not read this launch\'s capped recipient (RPC error?)', { module: plan.splitter, retry: 'same command again' })
+    if (capped) {
+      const checked = await checkCapped(cappedNow, null)
+      if (checked.failed) return checked.failed
+    }
+  }
+
   // later steps carry no note (it went on the create) and take the token from the plan
   const stepIo = (over) => ({ ...io, ...argsWith(io, { ...over, token }, [...LAUNCH_FLAGS, ...NOTE_FLAGS, 'name', 'symbol']) })
   const bal = await read(token, ERC20_ABI, 'balanceOf', [me])
   const isSplit = plan.module === 'split'
   const isLp = plan.module === 'lp'
   const isCombo = plan.module === 'combo'
+  const isCapped = plan.module === 'capped'
   const isPromote = plan.module === 'promote'
-  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo && !isPromote ? splitterOf(read, plan.splitter) : null)
+  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo && !isCapped && !isPromote ? splitterOf(read, plan.splitter) : null)
+  const cappedState = () => (plan.splitter && isCapped ? cappedOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const comboState = () => (plan.splitter && isCombo ? comboOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const lpState = () => (plan.splitter && isLp ? lpOf(read, plan.splitter, { pad: net.pad }) : null)
   const splitState = () => (plan.splitter && isSplit ? splitOf(read, plan.splitter, { wbnb: net.wbnb, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
@@ -658,6 +822,8 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (lps) done.lp = lps
     const cs = await comboState()
     if (cs) done.combo = cs
+    const cps = await cappedState()
+    if (cps) done.capped = cps
     if (plan.splitter && isPromote) done.promote = { module: plan.splitter, next: `gang promote status --token ${token}${testnet ? ' --testnet' : ''}`, note: `your part of the pool tax comes two ways: pushed to you at once, and what the escrow holds for trades with no promoter, which stays in the module until you claim it: gang promote claim-pool --token ${token}${testnet ? ' --testnet' : ''}` }
     // 2.0: where the creator fee of a V3 token is claimed (and that a module does not get it)
     const share = kind === 'v3' ? await creatorFeeShareOf({ chainId: net.chainId, pad: net.pad, read }).catch(() => null) : null
@@ -670,19 +836,26 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   }
   if (plan.done) return report()
 
-  // ---- bind the splitter / split module / LP splitter / combined recipient to the token (anyone may; the launch does it right after the create)
+  // ---- bind the splitter / split module / LP splitter / combined or capped recipient to the token (anyone may; the launch does it right after the create)
   if (plan.splitter) {
-    const abi = isPromote ? POOL_ABI : isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
+    const abi = isPromote ? POOL_ABI : isCapped ? CAPPED_ABI : isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
     const bound = await read(plan.splitter, abi, 'token')
     if (bound === zeroAddress) {
-      const sim = await (isPromote ? simulatePool : isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
+      const sim = await (isPromote ? simulatePool : isCapped ? simulateCapped : isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
       if (sim.failed) return out({ success: false, step: 'bind', ...tag('bind', { token }), ...sim.failed })
       const data = encodeFunctionData({ abi, functionName: 'bind', args: [token] })
       return out({
         ...step({ chainId: net.chainId }, { from: me, to: plan.splitter, data }, {
-          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo || isPromote ? { module: plan.splitter } : { splitter: plan.splitter }),
+          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo || isCapped || isPromote ? { module: plan.splitter } : { splitter: plan.splitter }),
+          ...(isCapped && cappedNow && {
+            cap: cappedNow.cap, payPct: cappedNow.payPct, untilCap: cappedNow.split.untilCap, afterCap: cappedNow.split.afterCap,
+            payees: cappedNow.payees.map(({ index, payee, pctOfPayees, pctOfRecipientUntilCap }) => ({ index, payee, pctOfPayees, pctOfRecipientUntilCap })),
+            permanent: true, covers: COVERAGE_NOTE,
+          }),
           note: isPromote
             ? 'ties the promoter pool module to this token for good, reading its promoter terms. It must happen before graduation: a token bound later has no pool share'
+            : isCapped
+            ? `ties the capped recipient to this token for good: its quote must be the cap's, its pair is where the buy-backs and liquidity go (from graduation on). Nothing is split or counted against the cap before this. What it holds, fixed for good: ${cappedNow ? cappedLine({ cap: cappedNow.cap.amount, symbol: cappedNow.cap.symbol ?? cappedNow.cap.quote, payBps: cappedNow.payBps, buybackOfRestBps: cappedNow.buybackOfRestBps, payees: cappedNow.payees.map((p) => p.payee), shares: cappedNow.payees.map((p) => p.bps) }) : 'gang capped status'}`
             : isCombo
             ? 'ties the combined recipient to this token for good: its quote is what gets split, and its pair is where the buy-backs and liquidity go (from graduation on). Nothing is split before this'
             : isSplit
@@ -695,7 +868,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       })
     }
     if (bound.toLowerCase() !== token.toLowerCase()) {
-      return out({ success: false, ...tag('bind', { token }), error: `the ${isPromote ? 'promoter pool module' : isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo || isPromote ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
+      return out({ success: false, ...tag('bind', { token }), error: `the ${isPromote ? 'promoter pool module' : isCapped ? 'capped recipient' : isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo || isCapped || isPromote ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
     }
   }
 
