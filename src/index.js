@@ -364,7 +364,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          per token. The week's top token by qualified new agents is featured on gang.fun
   gang weekly                            Gang's weekly launch event (gang.fun/weekly, 0.36.0+): the issue open for
                                          applications, the current pick (launches Friday 20:00 UTC+8 on GangLaunchpad 3.0,
-                                         featured 7 days), past issues, and my applications. Attention only: no buy-back
+                                         featured 7 days), past issues, and my applications. Not investment advice
   gang weekly apply --name <name> --symbol <SYM> (--logo <file> | --logo-uri <gang.fun logo>) --description <text>
                     --contact <handle> [--twitter <@x|url>] [--telegram <@tg|url>] [--website <url>] [--modules lp,buyback,…]
                     [--issue <Friday date>] [--yes]

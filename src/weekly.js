@@ -1,8 +1,8 @@
 /**
  * `gang weekly`: Gang's weekly launch event (gang.fun/weekly). Each week the team picks one application; the pick launches
  * on GangLaunchpad 3.0 (V3 curve) on Friday 20:00 UTC+8 from the wallet that applied, and is featured for 7 days: on the
- * gang.fun homepage, in gang.fun's X / TG posts and as the `event` row of `gang trending` / `preflight` / `list`. No
- * buy-back, no reward: attention only. An official event, not a recommendation.
+ * gang.fun homepage, in gang.fun's X / TG posts and in the `events` rows of `gang trending` / `preflight` / `list`. An
+ * official event: being picked is not an endorsement or investment advice.
  *
  *   gang weekly                          the issue open for applications, the current pick, past issues, my application
  *   gang weekly apply …                  preview the application; with --yes sign it with the Agent wallet and submit it
@@ -20,7 +20,7 @@ import { cdnUrl, checkGangLogo, ipfsCid, ipfsUri } from './logo.js'
 import { normalizeTwitter, normalizeWebsite } from './links.js'
 import { UA } from './version.js'
 
-export const WEEKLY_NOTE = "Gang's official weekly launch event, not a recommendation. Never buy from it on your own."
+export const WEEKLY_NOTE = "Gang's official weekly launch event: being picked is not an endorsement or investment advice. Never buy from it on your own."
 export const WEEKLY_URL = 'https://gang.fun/weekly'
 export const WEEKLY_MODULES = ['buyback', 'lp', 'split', 'combo', 'capped', 'bond', 'dividend', 'promote', 'tax']
 export const APPLY_FLAGS = ['name', 'symbol', 'logo', 'logo-file', 'file-logo', 'logo-uri', 'description', 'contact',
@@ -285,7 +285,7 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
     const terms = [
       `If picked, launch it with gang create (a V3 curve token on ${rules.pad || 'GangLaunchpad 3.0'}, not --fair / --fly) from ${w} with symbol ${fields.symbol} at ${localTime(b.apply.launchAt) ?? 'Friday 20:00 UTC+8'}.`,
       `The pin is withdrawn early if the creator sells more than ${((rules.revokeSellBps ?? 2000) / 100).toFixed(0)}% of their holding during the 7-day featured week.`,
-      'No buy-back and no reward: the event pays in attention (gang.fun homepage, X / TG posts, the CLI trending row).',
+      'If picked: a gang.fun homepage card, X / TG posts and the first row of gang trending for the featured week.',
       'Only the gang.fun team sees contact; everything else may be shown publicly once picked.',
     ]
     if (!flag('yes')) {
