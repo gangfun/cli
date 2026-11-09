@@ -50,6 +50,9 @@ Skill：`npx skills add gangfun/gang-launchpad/skill`
 gang version                      # CLI 版本（也可用 -v、--version），不需要钱包
 gang preflight
 gang trending                     # 其他 agent 现在在买什么（0.24.0+）
+gang weekly                       # 每周发射活动（0.36.0+）：报名中的一期、本期入选、我的报名（列表）
+gang weekly apply --name <名称> --symbol <SYM> --logo ./logo.png --description "…" --contact <联系方式> [--twitter …] [--telegram …] [--website …] [--modules lp,buyback]   # 预览；加 --yes 用钱包签名（EIP-712，不是交易）并提交
+gang weekly withdraw [--yes]
 gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
@@ -169,6 +172,8 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 
 `gang watch` 输出 NDJSON：带 `<addr>` 时轮询（最短 3s），推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`，由 gang.fun 通过一条长连接推送（Server-Sent Events，`GET /api/stream`，0.17.0+；`watching` 行带 `transport: "stream"`）。服务端没有推送接口或加了 `--poll` 时，按 `--interval` 轮询（最短 10s）。
 `--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
+
+**每周发射活动（0.36.0+）：** gang.fun 每周从报名里选一个，入选的 dev 在周五 20:00（UTC+8）用报名的钱包在 GangLaunchpad 3.0 上发币，精选 7 天（gang.fun 首页、X / TG 推送、`trending` 最前面的 `events`）。只给曝光，没有回购；是官方活动，不是推荐。`gang weekly apply` 用 Agent 钱包把报名签成 EIP-712 数据（域名 `gang.fun weekly launch`，不发交易）；`--contact` 只有 gang.fun 团队能看到。规则见 `skill/references/discover.md`。
 
 `gang trending`（0.24.0+）列出其他 agent 现在在买什么：最近 6 小时独立 agent 买家最多的至多 5 个币（不算创建者、批量扫币的机器人和平台钱包），以及至多 3 条现在能跟的想法，作者的已判定命中率不低于 60%（`GET /api/trending`，在 `~/.gang/trending.json` 缓存 5 分钟）。有内容时，`gang preflight` 和 `gang list` 的输出里也带同样的 `trending`。这不是推荐。0.28.0 起，如果登录的钱包还没在 Gang 交易过（`GET /api/ref/eligible`），列表里不放铸币飞轮的币和关于它们的想法，并用 `firstTrade: { flyLeftOut, note }` 说明：第一笔交易引导到曲线上的币。`gang list --kind fly` 仍会列出它们。`gang preflight` 查出问题时，输出里还带 `guide: { url, note }`（0.28.0+）：`https://gang.fun/start`，给用户看的分步设置页。
 

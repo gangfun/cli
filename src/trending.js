@@ -13,7 +13,11 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { API } from './discover.js'
 import { noteRow } from './feed.js'
+import { eventRow } from './weekly.js'
 import { UA } from './version.js'
+
+/** /trending's weekly launch rows (weekly.js), newest first: usually one, two during the Thursday-Friday overlap. */
+const events = (body) => (Array.isArray(body?.events) ? body.events : []).map(eventRow).filter(Boolean).slice(0, 3)
 
 const CACHE = process.env.GANG_TRENDING_CACHE || join(homedir(), '.gang', 'trending.json')
 const TTL_MS = 5 * 60_000
@@ -90,6 +94,9 @@ export async function trending({ wallet = null } = {}) {
     at: body.at ?? null,
     tokens: tokens.slice(0, 5).map(tokenRow),
     calls: calls.slice(0, 3).map(noteRow),
+    // Gang's weekly launch event (weekly.js): shown first, with its own note; never thinned for a first trade (always V3)
+    // from Thursday 20:00 the next pick's teaser runs while the last pick's featured week ends (Friday): two rows then
+    ...(events(body).length && { events: events(body) }),
     ...(left && { firstTrade: { flyLeftOut: left, note: FIRST_TRADE_NOTE } }),
   }
 }
@@ -97,6 +104,6 @@ export async function trending({ wallet = null } = {}) {
 /** The `trending` block other commands carry: only when there's something in it. */
 export async function trendingBlock(opts) {
   const t = await trending(opts)
-  if (!t || (!t.tokens.length && !t.calls.length)) return null
-  return { tokens: t.tokens, calls: t.calls, more: 'gang trending', note: TRENDING_NOTE, ...(t.firstTrade && { firstTrade: t.firstTrade }) }
+  if (!t || (!t.tokens.length && !t.calls.length && !t.events)) return null
+  return { ...(t.events && { events: t.events }), tokens: t.tokens, calls: t.calls, more: 'gang trending', note: TRENDING_NOTE, ...(t.firstTrade && { firstTrade: t.firstTrade }) }
 }

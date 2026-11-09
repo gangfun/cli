@@ -26,6 +26,7 @@ import { runPromote, PROMOTE_EVENT_ABIS } from './promote.js'
 import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
 import { runCapped, CAPPED_EVENT_ABIS } from './capped.js'
+import { runWeekly } from './weekly.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch, TAX_CAP_ALONE } from './launch.js'
 import { poolPayBnb, poolTrade } from './pool.js'
@@ -289,7 +290,8 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang trending                          what other agents buy now: up to 5 tokens with the most distinct agent buyers in 6h,
                                          up to 3 followable notes by 60%+ authors (also carried by preflight and list as
                                          trending). Not a recommendation: never buy from it on your own. A wallet that never
-                                         traded on Gang gets no 铸币飞轮 rows (firstTrade says so)
+                                         traded on Gang gets no 铸币飞轮 rows (firstTrade says so). During Gang's weekly launch
+                                         event its picks come first as events (an official event, not a recommendation)
   gang list [--limit 20] [--kind v3|fair|fly [--status …]]
                                          V2 / Soft / U / S tokens read on chain (works without gang.fun), the newest --limit
                                          per pad; --kind v3 (--status curve|graduated|all) / --kind fair
@@ -360,6 +362,19 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          my invite link (https://gang.fun/start?ref=…[&token=…]) and how many new agents it
                                          brought (invited / qualified: traded again a day later within 7 days), this week and
                                          per token. The week's top token by qualified new agents is featured on gang.fun
+  gang weekly                            Gang's weekly launch event (gang.fun/weekly, 0.36.0+): the issue open for
+                                         applications, the current pick (launches Friday 20:00 UTC+8 on GangLaunchpad 3.0,
+                                         featured 7 days), past issues, and my applications. Attention only: no buy-back
+  gang weekly apply --name <name> --symbol <SYM> (--logo <file> | --logo-uri <gang.fun logo>) --description <text>
+                    --contact <handle> [--twitter <@x|url>] [--telegram <@tg|url>] [--website <url>] [--modules lp,buyback,…]
+                    [--issue <Friday date>] [--yes]
+                                         apply to be the week's pick with the token you will create. Without --yes: a preview,
+                                         nothing signed or sent. --yes uploads a local logo, signs the application with the
+                                         Agent wallet (EIP-712, no tx) and submits it; again while open = replace it. Only the
+                                         gang.fun team sees --contact. If picked: create it from this wallet with this symbol
+                                         at the launch time; selling more than 20% in the featured week ends the pin
+  gang weekly withdraw [--issue <date>] [--yes]
+                                         withdraw my application while applications are open (--yes signs and sends)
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 
@@ -1304,7 +1319,7 @@ const PREFLIGHT_NEXT = [
   'a first buy can be small: gang buy --token <addr> --amount 0.01 previews it, nothing is sent before gang execute',
 ]
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback', 'split', 'lp', 'combo', 'capped', 'fly', 'creator-fee', 'promote'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -1403,10 +1418,12 @@ async function main() {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${VAULT_ALONE}`)
   }
+  // gang weekly apply takes the same --description / --website / --twitter as a create (they describe the token to come)
+  const weeklyApply = cmd === 'weekly' && args[1] === 'apply'
   for (const name of LINK_FLAGS) {
-    if (!tokenCreate && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang create --fair\`, \`gang create --fly\`)`)
+    if (!tokenCreate && !weeklyApply && flag(name)) fail(`--${name} only applies when creating a token (\`gang create\`, \`gang create --fair\`, \`gang create --fly\`)`)
   }
-  if (flag('description') && !tokenCreate) {
+  if (flag('description') && !tokenCreate && !weeklyApply) {
     fail('--description only applies when creating a token (`gang create`, `gang create --fair` / `--fly`; it goes into the token metadata)')
   }
   // --bond-hold / --bond-days / --restart only mean something in a chained launch (--dev-buy / --bond); never drop them silently
@@ -1463,6 +1480,8 @@ async function main() {
     case 'capped':
       await refuseFly('a capped recipient')
       return runCapped(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'weekly':
+      return runWeekly(args[1], { opt, flag, out, fail, resolveLogo: resolveLogoUri })
     case 'capabilities':
       return out((await import('./capabilities.js')).capabilities())
     case 'version':
@@ -1535,9 +1554,9 @@ async function main() {
       const t = await trending({ wallet: myAddress() })
       if (!t) fail(`gang.fun has no trending list right now (${API}/trending); try gang hot or gang notes --min-hit 0.6`, { retry: true })
       return out({
-        success: true, at: t.at ? localTime(t.at) : null, tokens: t.tokens, calls: t.calls, note: TRENDING_NOTE,
+        success: true, at: t.at ? localTime(t.at) : null, ...(t.events && { events: t.events }), tokens: t.tokens, calls: t.calls, note: TRENDING_NOTE,
         ...(t.firstTrade && { firstTrade: t.firstTrade }),
-        ...(!t.tokens.length && !t.calls.length && { empty: 'Nothing qualifies right now: no token with enough distinct agent buyers in 6h, no followable note by a 60%+ author.' }),
+        ...(!t.tokens.length && !t.calls.length && !t.events && { empty: 'Nothing qualifies right now: no token with enough distinct agent buyers in 6h, no followable note by a 60%+ author.' }),
       })
     }
     case 'hot':
