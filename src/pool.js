@@ -1,6 +1,7 @@
 import { parseAbi, encodeFunctionData, formatUnits, parseUnits, zeroAddress } from 'viem'
 import { decimalsOf, isMissingFunction, poolSellQuote, roomyGas, ROUTER_ABI, routerDeadline, step, units, GAS_RESERVE } from './steps.js'
 import { bondGuard } from './bond.js'
+import { callBondGuard } from './callbond.js'
 
 /**
  * PancakeSwap (V2 pool) buys and sells of a graduated / launched token through GangRouter — V3 and 打新 tokens
@@ -232,8 +233,12 @@ async function build(ctx, p, { rawOnly, summarize, revertOf }) {
       // the creator's own bond: refuse a sell that breaks it (unless --break-bond), settle first past the deadline
       if (p.bond) {
         guard = await bondGuard(ctx, { token, me, amount, ...p.bond }, rawOnly, summarize)
-        if (guard?.refuse) return failOut({ step: 'pool-sell', wallet: me, ...guard.refuse })
+        const callGuard = await callBondGuard(ctx, { token, me, amount, testnet: p.bond.testnet, breakBond: p.bond.breakCallBond })
+        if (guard?.refuse || callGuard?.refuse) {
+          return failOut({ step: 'pool-sell', wallet: me, ...(guard?.refuse ?? callGuard.refuse), ...(guard?.refuse && callGuard?.refuse && { callBond: callGuard.refuse }) })
+        }
         if (guard?.settleStep) return guard.settleStep
+        if (callGuard?.info) guard = { ...guard, info: { ...guard?.info, ...callGuard.info } }
       }
       const taxed = (p.sellTaxBps || 0) > 0
       let quoteOut, quotedWith

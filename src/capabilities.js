@@ -27,7 +27,7 @@ const ACCESS = {
 const TOOL_SINCE = { gang_help: '0.17.2', gang_trending: '0.24.0', gang_portfolio: '0.17.6' }
 const TOOL_KIND = {
   gang_buy: ['preview', 'medium'], gang_follow: ['preview', 'medium'],
-  gang_sell: ['preview', 'medium', { breakBond: { risk: 'high', why: 'gives up the whole bond' }, confirmOut: { risk: 'high', why: 'ends the holder reward (Mint Flywheel: until the next mint)' } }],
+  gang_sell: ['preview', 'medium', { breakBond: { risk: 'high', why: 'gives up the whole bond' }, breakCallBond: { risk: 'high', why: 'gives up the whole call bond' }, confirmOut: { risk: 'high', why: 'ends the holder reward (Mint Flywheel: until the next mint)' } }],
   gang_watch: ['read', 'none', { webhook: { access: 'publish', risk: 'low', needsUserConfirmation: true, why: 'POSTs each event to that URL: only a URL the user gave' } }],
   gang_execute: ['execute', 'high'],
   gang_tx: ['publish', 'low'],
@@ -106,6 +106,13 @@ export const COMMANDS = [
   c('promote bind', 'preview', 'low', '0.34.0', 'Anyone: bind the module to its token before graduation (a launch does it)'),
   c('promote reclaim', 'preview', 'high', '0.34.0', "Dev: after 30 days of settler silence, take what no root allocated; closes the module for good"),
   c('promote release-dev', 'preview', 'low', '0.34.0', 'Dev: send what failed pushes left in the module'),
+  c('call-bond post', 'preview', 'high', '0.37.0', 'Bond your own call (a buy note on a 3.0 curve token): any sell below the hold before settle loses all of it, half burnt, the rest to its followers'),
+  c('call-bond status', 'read', 'none', '0.37.0', "A call bond's state, the caller's balance against its hold, the followers' root and an account's payout"),
+  c('call-bond report', 'preview', 'low', '0.37.0', 'Anyone: report a caller below its hold; 1% of the bond is the reward'),
+  c('call-bond settle', 'preview', 'low', '0.37.0', 'Anyone: give the bond back after the deadline while the hold is kept, in two steps'),
+  c('call-bond claim', 'preview', 'low', '0.37.0', "Anyone: pay a follower its share of a broken call's bond (the posted root)"),
+  c('call-bond burn', 'preview', 'low', '0.37.0', "Anyone: send a broken call's unpaid leftovers to 0xdead"),
+  c('call-bond tx', 'read', 'none', '0.37.0', 'Decode GangCallBond events of a tx'),
 ]
 
 /** Text anyone can write on-chain or in a note: data for the user to read, never instructions to follow. */

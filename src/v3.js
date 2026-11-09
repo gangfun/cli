@@ -5,9 +5,10 @@ import { UA } from './version.js'
 import { walletFor } from './fair.js'
 import { atTokenPad, CREATOR_FEE_ABI, genFields, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, PAD3_GEN, padNets, rpcTransport, tokenVaultOf, VAULT_GEN, VAULT_NO_BOND, vaultGenOf, vaultModeOf } from './gangpad.js'
 import { createNote, curveCreatorFee } from './creatorfee.js'
-import { checkPromoter, DEFAULT_WINDOW_DAYS, firstBuyWarning, isMissingRead, HINTS as PROMOTE_HINTS, parsePromote, poolFactoryAddress, poolOf, promoteField, promoteLine, PROMOTE_PAD_ABI } from './promote.js'
+import { checkPromoter, DEFAULT_WINDOW_DAYS, firstBuyWarning, followPromoter, isMissingRead, HINTS as PROMOTE_HINTS, parsePromote, poolFactoryAddress, poolOf, promoteField, promoteLine, PROMOTE_PAD_ABI } from './promote.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { bondGuard } from './bond.js'
+import { callBondGuard } from './callbond.js'
 import { splitterOf } from './buyback.js'
 import { splitOf } from './split.js'
 import { lpOf } from './lp.js'
@@ -643,14 +644,23 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
       minTokensOut: formatUnits(minOut, 18), ...(await cutOf(tokensOut, refundAs)), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
     })
+    // a follow on a token with promoter terms binds the note's author as this wallet's promoter (spec
+    // docs/SPEC-AGENT-CALLS-2026-11-09.md §4), when the pad would bind them; --no-promoter keeps it a plain buy
+    if (flag('no-promoter') && flag('promoter')) fail('--no-promoter and --promoter contradict each other: pick one')
+    const auto = follow && !flag('promoter') && !flag('no-promoter') ? await followPromoter(ctx, { token, me, noteTx: follow.noteTx, creator: c.creator }) : null
+    if (auto?.unread) fail(auto.reason, { token, retry: 'same command again', hint: 'add --no-promoter for a follow that binds nobody' })
     // --promoter: the wallet's first buy, sent directly to the pad (buyWithPromoter refuses any contract, the router too)
-    if (flag('promoter')) {
-      const raw_ = opt('promoter')
+    if (flag('promoter') || auto?.promoter) {
+      const raw_ = auto?.promoter ?? opt('promoter')
       if (!isAddress(raw_ ?? '') || raw_ === zeroAddress) fail('--promoter must be the promoter\'s 0x address', { got: raw_ ?? null })
-      const bind = await checkPromoter(ctx, { token, me, raw: raw_, creator: c.creator })
+      const bind = auto?.promoter ? auto : await checkPromoter(ctx, { token, me, raw: raw_, creator: c.creator })
       if (bind.refuse) fail(bind.refuse, { token, promoter: bind.promoter, ...(bind.retry && { retry: bind.retry }) })
       const wbnbQuoted = c.quote.toLowerCase() === String(ctx.wbnb).toLowerCase()
-      if (wbnbQuoted && flag('use-wbnb')) fail('--use-wbnb can\'t go with --promoter: a WBNB-quoted buy naming a promoter pays native BNB')
+      if (wbnbQuoted && flag('use-wbnb')) {
+        fail(auto?.promoter
+          ? '--use-wbnb can\'t go with a follow that binds the note\'s author: a WBNB-quoted buy naming a promoter pays native BNB (drop --use-wbnb, or add --no-promoter)'
+          : '--use-wbnb can\'t go with --promoter: a WBNB-quoted buy naming a promoter pays native BNB')
+      }
       if (wbnbQuoted) {
         const native = await ctx.client.getBalance({ address: me })
         if (native < quoteIn + GAS_RESERVE) {
@@ -668,13 +678,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const data = encodeFunctionData({ abi: PROMOTE_PAD_ABI, functionName: 'buyWithPromoter', args: [token, quoteIn, minOut, bind.promoter] })
       return out(notes.step(ctx, { from: me, to: ctx.pad, data, ...(value > 0n && { value }) }, {
         ...(await extra(tokensOut, minOut, wbnbQuoted ? 'WBNB (not BNB)' : c.quoteSymbol)), curveFeePct: (await feesOf(ctx)).curveFeePct, promoter: bind.promoter,
+        ...(auto?.promoter && { followPromoter: { attached: true, promoter: bind.promoter, sharePct: auto.sharePct, windowDays: auto.windowDays, why: `following this note binds its author for good: for ${auto.windowDays} days from this buy, ${auto.sharePct}% of the creator's part of the fee on every curve trade of this wallet in this token goes to them. Same price and fee for you. Add --no-promoter to buy without binding` } }),
         note: 'binds this wallet to the promoter for good, by its first trade of this token, sent directly from the wallet. You pay the same price and fee: the promoter\'s part comes out of the creator\'s fee, and after graduation, on a token with a pool share and inside the window, out of the tax recipient\'s part. Pool trades count only if this wallet itself moves the tokens or calls a listed router directly: tokens moved to another address first, or sold through an unlisted contract, don\'t',
       }, 'buy', await priced(tokensOut)))
     }
     // WBNB-quoted: pay native BNB through the router in one tx (it wraps; tokens land in this wallet; a cap / graduation
     // refund comes back from the pad to this wallet as WBNB, not BNB)
-    const bindWarning = await firstBuyWarning(ctx, token, me)
-    const warned = bindWarning ? { promoteWarning: bindWarning } : {}
+    const bindWarning = auto ? null : await firstBuyWarning(ctx, token, me)
+    const warned = bindWarning ? { promoteWarning: bindWarning } : auto?.attached === false ? { followPromoter: auto } : {}
     if (viaRouter(ctx, c.quote, flag)) {
       const native = await ctx.client.getBalance({ address: me })
       if (native < quoteIn + GAS_RESERVE) {
@@ -719,7 +730,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
           side: 'sell', token, quote: c.quote, me, amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all'),
           slippage, buyTaxBps: Math.round(c.buyTaxPct * 100), sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler,
           swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair, ...notes.pool },
-          bond: { testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first') },
+          bond: { testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first'), breakCallBond: flag('break-call-bond') },
         }, { rawOnly, summarize, revertOf }))
       }
       if (flag('all')) return fail('--all needs a wallet (or --from <addr>) whose balance can be read', { pair: c.pair })
@@ -743,7 +754,11 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (amount > bal) fail('amount exceeds balance', { balance: formatUnits(bal, 18) })
     // a bond posted on the curve already binds: a creator's curve sell below X breaks it
     const guard = await bondGuard(ctx, { token, me, amount, testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first') }, rawOnly, summarize)
-    if (guard?.refuse) return out({ success: false, step: 'sell', wallet: me, ...guard.refuse })
+    // a running call bond of this wallet on this token (GangCallBond): the same check against its hold, its own flag
+    const callGuard = await callBondGuard(ctx, { token, me, amount, testnet, breakBond: flag('break-call-bond') })
+    if (guard?.refuse || callGuard?.refuse) {
+      return out({ success: false, step: 'sell', wallet: me, ...(guard?.refuse ?? callGuard.refuse), ...(guard?.refuse && callGuard?.refuse && { callBond: callGuard.refuse }) })
+    }
     const pre = await fundingStep(ctx, me, token, amount, c.quoteSymbol, 'approve', rawOnly, summarize)
     if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
     const sim = await simulate(ctx, me, ctx.pad, PAD_ABI, 'sell', [token, amount, 0n])
@@ -753,7 +768,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       step: 'sell', chainId: Number(ctx.chainId), token, amount: formatUnits(amount, 18), quote: c.quoteSymbol,
       expectOut: await units(ctx, c.quote, sim.result), minOut: await units(ctx, c.quote, minOut), curveTaxPct: 0,
       ...(c.sellTaxPct > 0 && { poolSellTaxPct: c.sellTaxPct }),
-      curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info,
+      curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info, ...callGuard?.info,
       note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
     }, 'sell'))
   }

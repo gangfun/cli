@@ -20,6 +20,7 @@ import { UA, VERSION, checkUpdate } from './version.js'
 import { runFair, FAIR_EVENT_ABIS } from './fair.js'
 import { runV3, v3Ctx, V3_EVENT_ABIS } from './v3.js'
 import { runBond } from './bond.js'
+import { runCallBond, CALL_BOND_ABI } from './callbond.js'
 import { runBuyback } from './buyback.js'
 import { runSplit, SPLIT_EVENT_ABIS } from './split.js'
 import { runPromote, PROMOTE_EVENT_ABIS } from './promote.js'
@@ -347,9 +348,10 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang claim --token <addr>              V3: my dividend (the quote token); 打新 / 铸币飞轮: the holder reward
   gang release --token <addr>            V3: push a tax payment that failed earlier (anyone may; the recipient gets it).
                                          铸币飞轮: push the creator's dev cut / tax share that a transfer could not deliver
-  gang follow <note tx> --amount <n> [--slippage 1] [--note …] [--ref <inviter>]
+  gang follow <note tx> --amount <n> [--slippage 1] [--note …] [--ref <inviter>] [--no-promoter]
                                          buy the token that note is about, marked on-chain as following it (= gang buy
-                                         --follow; curve buys only)
+                                         --follow; curve buys only). On a 3.0 token with a promoter share it binds the
+                                         note's author as this wallet's promoter for good (0.37.0+; --no-promoter: don't)
                                          --ref (buy / mint / follow, 0.26.0+): who invited this wallet (address or .ai handle,
                                          from the invite link the user gave). Attached only when this is the wallet's first
                                          Gang trade; the result's ref says whether it was. 铸币飞轮: the mint's own inviter
@@ -609,6 +611,24 @@ BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND
                                          per 4 minutes; waits for a 10-minute average and skips when the price is > 2% above
                                          it). Slashed before the
                                          pair: waits for it; none 30 days after the post → the rest goes to 0xdead as quote
+  gang call-bond post --token <addr> --amount <quote> --for <48h-7d> [--note <your buy tx>] [--hold <all|N%|tokens>] [--use-wbnb]
+                                         bond your own call (a buy note) on a 3.0 curve token: until settle your balance
+                                         stays ≥ hold (default all). Broken (a sell, vault lock or transfer below it, also
+                                         after the deadline until settle): anyone reports, 1% to them, half burns, the rest
+                                         pays the note's followers by their loss, nothing back. --note defaults to your
+                                         latest buy of the token (last ~20 min). gang.fun shows it as bonded (有担保) only
+                                         with hold = all, posted within 10 min of the note, deadline ≥ note + 48 h
+  gang call-bond status (--id <n> | --token <addr>) [--account <addr>] [--from-file <settle.json>]
+                                         state, the caller's balance vs hold, settle / report next steps; broken: the
+                                         followers' root, claim window and an account's payout
+  gang call-bond report --id <n>         anyone, when the caller holds less than hold: 1% of the bond to you
+  gang call-bond settle --id <n>         anyone, after the deadline while hold is kept, two steps 1 hour apart: run it once
+                                         to ask, again after 1 hour and the bond goes back to the caller
+  gang call-bond claim --id <n> [--account <addr>] [--from-file <settle.json>]
+                                         a follower's payout of a broken call (proof from gang.fun; testnet: --from-file)
+  gang call-bond burn --id <n>           anyone: a broken call's unpaid leftovers to 0xdead
+  gang call-bond tx --hash <0x..>        decode GangCallBond events. A caller's gang v3 sell (curve or pool) is checked
+                                         against its running call bond's hold (--break-call-bond)
   gang bond tx --hash <0x..>             decode GangBond events. --testnet, --calldata, --from as in gang v3. A bonded
                                          creator's gang v3 sell (curve or pool), gang fair sell and gang fair withdraw are
                                          checked against X (--break-bond / --settle-first)
@@ -1321,9 +1341,9 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'capped', 'fly', 'creator-fee', 'promote'])
+  'buyback', 'split', 'lp', 'combo', 'capped', 'fly', 'creator-fee', 'promote', 'call-bond'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...PROMOTE_EVENT_ABIS]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
 
 /** gang bond / gang buyback / gang split / gang lp / gang combo / gang capped on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
@@ -1465,6 +1485,8 @@ async function main() {
     case 'bond':
       await refuseFly('GangBond')
       return runBond(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'call-bond':
+      return runCallBond(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'buyback':
       await refuseFly('a buy-back splitter')
       return runBuyback(args[1], { opt, flag, out, fail, summarize: summarizePreview })

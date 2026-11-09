@@ -61,6 +61,9 @@ export const GANG_GENS = {
       // the pool side of the promoter share, 2026-11-07, block 132218466; the Safe allowed it on GangHandlerAdmin at block
       // 132219892 (docs/MAINNET-GANG-LAUNCHPAD-3-PROMOTE-2026-11-07.md)
       promotePoolFactory: '0xA633e499ADcD69A4F91dc83587096b2c1903167A',
+      // GangCallBond (喊单保证金, docs/SPEC-AGENT-CALLS-2026-11-09.md §5), 2026-11-09, block 132609869
+      // (docs/MAINNET-CALL-BOND-2026-11-09.md)
+      callBond: '0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D',
     },
     // 2026-10-31, pad block 130874052: 2.0 with the creator fee and the graduation target the creator picks (the create
     // target until 3.0; its tokens trade and claim here); its own GangRouter, GangBond, buy-back factory
@@ -108,6 +111,8 @@ export const GANG_GENS = {
       cappedFactory: '0xe3f61865d98993dd39c136Af19651C6F6686498A',
       // the pool side of the promoter share, 2026-11-05 (docs/TESTNET-GANG-LAUNCHPAD-3-2026-11-03.md)
       promotePoolFactory: '0x7a68A65d27591a21C44f91015F930422BA79F1c2',
+      // GangCallBond, 2026-11-09, block 141708762 (docs/TESTNET-CALL-BOND-2026-11-09.md)
+      callBond: '0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70',
     },
     // 2026-10-31, pad block 139940227: 2.0 with the graduation target the creator picks (GRAD_BNB_TIERS, createWithGradTarget;
     // docs/SPEC-CURVE-GRAD-TARGET-2026-10-31.md), the create target until 3.0; buy-back factory buyback-burn-v4, split-v1,
@@ -146,19 +151,20 @@ export const GANG_GENS = {
   ],
 }
 // what a generation brings to a ctx (gen: '1.0' | '2.0' | PAD3_GEN | VAULT_GEN, null for a pad named by the env that this CLI does not know)
-const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'cappedFactory', 'promotePoolFactory']
+const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'cappedFactory', 'promotePoolFactory', 'callBond']
 // the env names of each field, per network (new name first; the old per-command names still work as aliases)
 const GEN_ENV = {
   mainnet: {
     pad: ['GANG_PAD', 'GANG_V3_PAD', 'GANG_FAIR_PAD'], router: ['GANG_ROUTER'], bond: ['GANG_BOND'],
     splitterFactory: ['GANG_SPLITTER_FACTORY'], splitFactory: ['GANG_SPLIT_FACTORY'], lpFactory: ['GANG_LP_FACTORY'],
     comboFactory: ['GANG_COMBO_FACTORY'], cappedFactory: ['GANG_CAPPED_FACTORY'], promotePoolFactory: ['GANG_PROMOTE_POOL_FACTORY'],
+    callBond: ['GANG_CALL_BOND'],
   },
   testnet: {
     pad: ['GANG_TESTNET_PAD', 'GANG_V3_TESTNET_PAD', 'GANG_FAIR_TESTNET_PAD'], router: ['GANG_TESTNET_ROUTER', 'GANG_ROUTER_TESTNET'],
     bond: ['GANG_TESTNET_BOND'], splitterFactory: ['GANG_TESTNET_SPLITTER_FACTORY'], splitFactory: ['GANG_TESTNET_SPLIT_FACTORY'],
     lpFactory: ['GANG_TESTNET_LP_FACTORY'], comboFactory: ['GANG_TESTNET_COMBO_FACTORY'], cappedFactory: ['GANG_TESTNET_CAPPED_FACTORY'],
-    promotePoolFactory: ['GANG_TESTNET_PROMOTE_POOL_FACTORY'],
+    promotePoolFactory: ['GANG_TESTNET_PROMOTE_POOL_FACTORY'], callBond: ['GANG_TESTNET_CALL_BOND'],
   },
 }
 

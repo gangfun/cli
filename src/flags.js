@@ -24,11 +24,11 @@ export const CREATE_ACCEPTS = new Set([
 // every flag a buy's code reads, whatever the token's kind: a buy refuses the rest, since a misspelled --promoter would fall
 // through to a plain first buy, which uses up the wallet's only chance to bind
 export const BUY_ACCEPTS = new Set([
-  'agent', 'all', 'amount', 'bnb', 'board', 'break-bond', 'buy-tax', 'calldata', 'cap', 'conf', 'confirm-out',
+  'agent', 'all', 'amount', 'bnb', 'board', 'break-bond', 'break-call-bond', 'buy-tax', 'calldata', 'cap', 'conf', 'confirm-out',
   'description', 'dev-buy', 'dev-cut', 'dev-shares', 'dividend', 'events', 'exit-fee', 'fair', 'file', 'file-logo',
   'fly', 'follow', 'from', 'grad', 'guard', 'hash', 'hold', 'hours', 'include-graduated', 'interval',
   'keep-logo-uri', 'kind', 'limit', 'logo', 'logo-file', 'logo-uri', 'max-age', 'max-events', 'min-hit', 'min-pct',
-  'min-shares', 'mint-fee', 'name', 'no-post-mint', 'note', 'notes', 'pair', 'pair-or-quote', 'path', 'pay-bnb',
+  'min-shares', 'mint-fee', 'name', 'no-post-mint', 'no-promoter', 'note', 'notes', 'pair', 'pair-or-quote', 'path', 'pay-bnb',
   'pending', 'poll', 'post-mint', 'preset', 'promoter', 'quote', 'raise', 'recipient', 'ref', 'ref-pool',
   'request-id', 'reveal-after', 'sell-tax', 'settle-first', 'shares', 'slippage', 'sort', 'status', 'symbol',
   'taxed', 'testnet', 'tier', 'timeout', 'to-bnb', 'token', 'track', 'twap-window', 'twitter', 'url', 'use-quote',

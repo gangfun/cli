@@ -89,7 +89,8 @@ export const withNote = (data, note) => (note ? data + note.suffix : data)
 const TX_RE = /^0x[0-9a-f]{64}$/
 
 /** The note suffix at the very end of a tx input ({ version, hash }), or null. Same as the server's readNoteCommit. */
-function readNoteCommit(s) {
+export function readNoteCommit(input) {
+  const s = String(input || '').toLowerCase()
   const v2 = s.slice(-82)
   if (v2.length === 82 && v2.startsWith(MAGIC_V2)) {
     const revealAfter = parseInt(v2.slice(10, 18), 16)

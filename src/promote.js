@@ -330,6 +330,27 @@ export async function promoteTermsOf(ctx, token) {
 }
 
 /**
+ * A follow buy (gang follow / --follow) on a token with promoter terms: the note's author (the note tx's sender) as this
+ * wallet's promoter, when the pad would bind them (docs/SPEC-AGENT-CALLS-2026-11-09.md §4). → null (no terms),
+ * { promoter, sharePct, windowDays } to bind, or { attached: false, author?, reason } for a plain follow buy.
+ */
+export async function followPromoter(ctx, { token, me, noteTx, creator }) {
+  let terms
+  try { terms = await promoteTermsOf(ctx, token) } catch {
+    return { unread: true, reason: 'could not read the token\'s promoter terms (RPC error): nothing was built, since a plain first buy could never bind the note\'s author later' }
+  }
+  if (!terms || terms.shareBps === 0) return null
+  let author
+  try { author = (await ctx.client.getTransaction({ hash: noteTx })).from } catch {
+    return { unread: true, reason: 'could not read the note tx (RPC error): nothing was built, since a plain first buy could never bind the note\'s author later' }
+  }
+  const bind = await checkPromoter(ctx, { token, me, raw: author, creator })
+  if (bind.retry) return { unread: true, reason: bind.refuse }
+  if (bind.refuse) return { attached: false, author: bind.promoter, reason: bind.refuse.replace(/\s*Drop --promoter[^.]*\.?/i, '') }
+  return { promoter: bind.promoter, sharePct: terms.sharePct, windowDays: terms.windowDays }
+}
+
+/**
  * For a plain curve buy: the wallet's first trade of a token with promoter terms is its only chance to bind. Advice on a
  * preview, so an unread answer just says nothing.
  */
