@@ -1,4 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseEther, parseUnits, isAddress, zeroAddress } from 'viem'
+import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, roomyGas, ROUTER_ABI, ROUTER_HINTS, step, swapBackState, units, GAS_RESERVE } from './steps.js'
 import { API, get as apiGet } from './discover.js'
 import { walletFor } from './fair.js'
@@ -191,7 +192,7 @@ const HINTS = {
   FeeOnTransferQuote: 'the quote token takes a fee on transfer; it cannot be used',
   RouterNeedsGate: 'this sale has no Agent gate, so router entries are off',
 }
-const revertOf = (e) => revertIn(e, [FLY_PAD_ABI, FLY_HANDLER_ABI, TOKEN_ABI, ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [FLY_PAD_ABI, VANITY_ABI, FLY_HANDLER_ABI, TOKEN_ABI, ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
 
 /**
  * Network settings: GangLaunchpad's chain, RPCs, WBNB and GangRouter (pool trades), with the fly pads. ctx.pad /
@@ -827,16 +828,24 @@ export async function runFly(sub, { opt, flag, out, fail, summarize, resolveLogo
     const sym = await symbolOf(ctx, quote)
     const pre = await fund(ctx, { me: who, token: quote, need, spender: ctx.pad, sym }, rawOnly, summarize)
     if (pre) return out(pre)
-    const createData = (logoURI, metaURI) => tagged(encodeFunctionData({
+    const createData = (logoURI, metaURI) => encodeFunctionData({
       abi: padAbi, functionName: 'create', args: [[name, symbol, logoURI, metaURI], quote, refPool, cfg, BigInt(devShares)],
-    }))
-    const dry = await dryRun(ctx, who, ctx.pad, createData('', ''))
+    })
+    const vanity = await vanityDeployer(ctx)
+    const handler = vanity ? await handlerOf() : zeroAddress
+    const maxSupply = parseEther('2000000000') * BigInt(cfg.postMint ? cfg.supplyCapMul : 1)
+    const prepareCreate = (logoURI, metaURI) => vanityCreate(ctx, who, createData(logoURI, metaURI), {
+      mint: true, args: [name, symbol, metaURI, handler, 100, cfg.sellTaxBps, 0n, maxSupply],
+    })
+    const dry = await dryRun(ctx, who, ctx.pad, tagged((await prepareCreate('', '')).data))
     if (dry) return out({ success: false, step: 'create', ...dry })
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
-    return out(write({ from: who, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
+    const launch = await prepareCreate(logo.logoURI, meta.metaURI)
+    return out(write({ from: who, to: ctx.pad, data: tagged(launch.data) }, {
       step: 'create', kind: 'fly', padVersion: ctx.version, ...(ctx.version === 3 && { padGen: PAD3_GEN }), pad: ctx.pad, name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata, quote: sym || quote, preset: presetName, config: cfgView(cfg),
+      ...(launch.token && { tokenIfNext: launch.token, addressSuffix: 'abcd' }),
       sharePrice: await units(ctx, quote, quoteWbnb ? price : (price * 100n) / 102n), devShares, devCost: await units(ctx, quote, need),
       ...(v2 && v.postMint && {
         guardNote: cfg.guardBps

@@ -1,5 +1,7 @@
 # Gang CLI（`gang`）
 
+**Pad 3.0 地址后缀（0.38.0+）：** owner 启用 `abcd` 部署器后，曲线、打新和铸币飞轮新币地址统一以 `abcd` 结尾（忽略校验和大小写）。CLI 会在最终元数据确定后自动计算 salt，`--grad`、`--vault`、`--promote` 发币也包含在内，`tokenIfNext` 显示确定的预测地址。请在启用前升级 CLI：启用后旧的直接发币调用会被拒绝。旧币地址和交易不变；启用前，新 CLI 仍走原有发币流程。
+
 用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
 
 **`gang create`：** 在 GangLaunchpad 上发 V3 币（`gang create --fair` 发打新）；不带 `--buy-tax` / `--sell-tax` 就是无税币。LaunchpadV2 / Soft / LaunchpadU / LaunchpadS **不再发新币**，存量币照常交易（`gang buy` / `gang sell`）。V3 新币在 GangLaunchpad 1.0 上 **15 BNB** 毕业；2.0 和 3.0 上由 creator 用 `--grad` 选 **6 / 9 / 12 / 15 BNB**（默认 9）。Soft 存量链上仍为 20 BNB 毕业。

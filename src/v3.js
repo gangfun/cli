@@ -14,6 +14,7 @@ import { splitOf } from './split.js'
 import { lpOf } from './lp.js'
 import { comboOf, decoyWarning } from './combo.js'
 import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
+import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -160,7 +161,7 @@ const VIRTUAL_TOKEN = 1_066_666_666_666_666_666_666_666_667n
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
-const revertOf = (e) => revertIn(e, [PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
 
 /** eth_call `data` from `from`: { result } when it passes, { failed } with the revert (or RPC error) otherwise. */
 async function simulate(ctx, from, to, abi, functionName, args, value = 0n) {
@@ -557,11 +558,19 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const argsOf = (logoURI, metaURI) => [name, symbol, logoURI, metaURI, quote, refPool, tax,
       ...(vault ? [parseUnits(String(targetBnb), 18), vault] : promote ? [parseUnits(String(targetBnb), 18), promote.shareBps, promote.window] : grad !== null ? [parseUnits(String(grad), 18)] : [])]
     const createData = (logoURI, metaURI) => encodeFunctionData({ abi: PAD_ABI, functionName: fn, args: argsOf(logoURI, metaURI) })
+    const vanity = await vanityDeployer(ctx)
+    const handler = vanity && taxed ? (await taxContracts(ctx)).handler : zeroAddress
+    const prepareCreate = (logoURI, metaURI) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
+      args: [name, symbol, metaURI, handler, tax.buyTaxBps, tax.sellTaxBps, false],
+    })
     // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
-    const dry = await simulate(ctx, me, ctx.pad, PAD_ABI, fn, argsOf('', ''))
+    const probe = await prepareCreate('', '')
+    const dry = await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : PAD_ABI,
+      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData('', '')] : argsOf('', ''))
     if (dry.failed) return out({ success: false, step: 'create', ...dry.failed })
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
+    const launch = await prepareCreate(logo.logoURI, meta.metaURI)
     let label = null
     const selfRecipient = recipient !== zeroAddress && recipient.toLowerCase() === String(me).toLowerCase()
     if (recipient !== zeroAddress && !selfRecipient) {
@@ -572,14 +581,15 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const baseCreatorFee = await createNote(ctx, net)
     const creatorFee = baseCreatorFee && promote ? `${baseCreatorFee} Less the ${promote.shareBps / 100}% of it you give promoters on their bound wallets' trades.` : baseCreatorFee
     const poolModule = promote && !!launchPoolModule
-    return out(notes.step(ctx, { from: me, to: ctx.pad, data: createData(logo.logoURI, meta.metaURI) }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: launch.data }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata,
       quote: (await symbolOf(ctx, quote)) || quote, graduationTargetBnb: targetBnb, graduationAt: await units(ctx, quote, gradAmt),
       graduation: `${gradLine(targetBnb, quote.toLowerCase() === String(ctx.wbnb).toLowerCase() ? null : `${await units(ctx, quote, gradAmt)} ${(await symbolOf(ctx, quote)) || 'of the quote'}`)}${tiers ? `; ${grad !== null ? 'picked with --grad' : 'the default'}, --grad picks ${tiers.join(' / ')}` : ''}`,
       ...(refPool !== zeroAddress && quote.toLowerCase() !== String(ctx.wbnb).toLowerCase() && { refPool }),
       buyTaxPct: buyTax, sellTaxPct: sellTax, dividendPct: dividend,
-      recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: dry.result,
+      recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: launch.token ?? dry.result,
+      ...(launch.token && { addressSuffix: 'abcd' }),
       split: taxed
         ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
@@ -597,7 +607,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         padGen: ctx.gen, pad: ctx.pad, vault,
         vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming. A vault-bound token takes no GangBond (gang bond post refuses it): a lock moves tokens out of the creator\'s wallet, which would forfeit a bond',
       }),
-      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. tokenIfNext changes if another create lands first: the real address is the Created event from \`gang tx --hash …\`.`,
+      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. ${launch.token ? 'The CREATE2 address ends in abcd and is fixed for this transaction.' : 'tokenIfNext changes if another create lands first: the real address is the Created event from `gang tx --hash …`.'}`,
     }, 'create'))
   }
 

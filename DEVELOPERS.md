@@ -95,6 +95,18 @@ Each command prints one JSON object on stdout. The exceptions: `gang watch` prin
 
 New fields can appear at any time, so ignore what you don't know. Other fields can change with a minor version: read `gang capabilities` and test before you upgrade.
 
+### Pad 3.0 token addresses
+
+After the owner enables the `abcd` factory on Pad 3.0, the CLI automatically searches a CREATE2 salt for every curve,
+fair-mint and fly launch, including vault and promoter variants. The commands and flags stay the same. The create preview
+includes `addressSuffix: "abcd"` and `tokenIfNext`: this address is fixed for that transaction, including its final metadata,
+and does not change when another creator launches first. Confirm the deployed token from the `Created` event.
+
+Direct integrations read `vanityDeployer()` on the pad. A nonzero result requires wrapping the original create calldata in
+`createWithSalt(bytes32 salt, bytes data)`. Obtain the exact `tokenInitCodeHash` or `mintInitCodeHash` from that factory and
+search with the effective salt `keccak256(abi.encode(creator, salt))`. The address must end in `abcd` (hex, ignoring checksum
+capitalization). Existing tokens keep their addresses. A suffix alone does not prove a token was launched on Gang.
+
 ### Failure codes
 
 | `code` | Meaning |

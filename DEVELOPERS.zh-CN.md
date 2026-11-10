@@ -95,6 +95,16 @@ gang execute --request-id <id>         发送
 
 随时可能增加新字段，不认识的忽略即可。其他字段可能随小版本变化：升级前看 `gang capabilities` 并先测试。
 
+### Pad 3.0 代币地址
+
+Pad 3.0 的 owner 启用 `abcd` 部署器后，CLI 会为曲线、打新、铸币飞轮发币自动搜索 CREATE2 salt，金库和推广员版本也包含在内。
+命令和参数不变。发币预览增加 `addressSuffix: "abcd"` 和 `tokenIfNext`：地址按这笔交易的最终元数据确定，其他人先发币也不会改变它。
+实际部署结果仍以 `Created` 事件为准。
+
+直接对接合约时，先读 pad 的 `vanityDeployer()`。返回非零地址就必须用 `createWithSalt(bytes32 salt, bytes data)` 包住原来的发币 calldata。
+从该部署器读取准确的 `tokenInitCodeHash` 或 `mintInitCodeHash`，按有效 salt `keccak256(abi.encode(creator, salt))` 搜索地址。
+十六进制地址后四位必须为 `abcd`，忽略校验和带来的大小写。旧币地址不变；仅凭后缀不能认定是 Gang 发行的币。
+
 ### 失败代码
 
 | `code` | 含义 |
