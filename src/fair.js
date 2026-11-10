@@ -1,4 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseEther, parseUnits, isAddress, zeroAddress } from 'viem'
+import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { bawAddress } from './baw.js'
 import { defaultRefPool, dividendOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, poolSellQuote, POOL_SELL_HINT, revertOf as revertIn, ROUTER_ABI, ROUTER_HINTS, routerDeadline, step, swapBackState, units, viaRouter, GAS_RESERVE } from './steps.js'
 import { API } from './discover.js'
@@ -125,7 +126,7 @@ export function walletFor(ctx, from) {
 }
 
 /** Revert name (+ BadConfig reason) of a failed eth_call, or null when it was the RPC. */
-const revertOf = (e) => revertIn(e, [PAD_ABI, ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, ROUTER_ABI, MERGED_ERRORS_ABI], { ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
 
 /** Dry-run `data` from `from`; null when it would pass. */
 async function dryRun(ctx, from, to, data, value = 0n) {
@@ -329,15 +330,21 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     const createData = (logoURI, metaURI) => encodeFunctionData({
       abi: PAD_ABI, functionName: 'create', args: [name, symbol, logoURI, metaURI, quote, refPool, cfg, BigInt(devShares)],
     })
+    const vanity = await vanityDeployer(ctx)
+    const handler = vanity ? await ctx.read(ctx.pad, PAD_ABI, 'taxHandler') : zeroAddress
+    const prepareCreate = (logoURI, metaURI) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
+      args: [name, symbol, metaURI, handler, 100, 100, true],
+    })
     // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
-    const dry = await dryRun(ctx, me, ctx.pad, createData('', ''))
+    const dry = await dryRun(ctx, me, ctx.pad, (await prepareCreate('', '')).data)
     if (dry) return out({ success: false, step: 'create', ...dry })
     const logo = await resolveLogo()
     const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
-    const data = createData(logo.logoURI, meta.metaURI)
-    return out(notes.step(ctx, { from: me, to: ctx.pad, data }, {
+    const launch = await prepareCreate(logo.logoURI, meta.metaURI)
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: launch.data }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata, quote: sym || quote,
+      ...(launch.token && { tokenIfNext: launch.token, addressSuffix: 'abcd' }),
       raise: await units(ctx, quote, raiseQuote), sharePrice: await units(ctx, quote, sharePrice),
       capShares: cfg.capBps * 2, minWallets: Math.ceil(10_000 / (cfg.capBps * 2)), holdPct, mintFeePct, exitFeePct, devShares,
       devCost: await units(ctx, quote, need),
