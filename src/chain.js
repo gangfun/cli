@@ -1,4 +1,4 @@
-import { createPublicClient, formatEther, parseAbi, parseEther, encodeFunctionData, decodeEventLog, isAddress, zeroAddress } from 'viem'
+import { createPublicClient, formatEther, hexToString, parseAbi, parseEther, encodeFunctionData, decodeEventLog, isAddress, zeroAddress } from 'viem'
 import { bsc } from 'viem/chains'
 import { SOFT_ABI, V2_ABI, S_ABI, ERC20_ABI, WBNB_ABI } from './abi.js'
 import { genOf, padNets, rpcTransport } from './gangpad.js'
@@ -292,13 +292,18 @@ export const calldata = {
  * reads beside the V2 / Soft / U / S pads'. Integers stay as on chain (strings), marked `units: 'raw'`: amounts are in wei
  * (18 decimals), bps / shares / counts as they are; the V2 / Soft events are formatted (no `units`).
  */
-export function decodeLogs(logs, abis) {
+export function decodeLogs(logs, abis, firstFor = null) {
   const events = []
   for (const log of logs) {
-    for (const abi of abis) {
+    // an event signature several module kinds share (Split with three amounts): the emitting module's own ABI first
+    const first = firstFor ? firstFor(log) : null
+    for (const abi of first ? [...first, ...abis] : abis) {
       try {
         const ev = decodeEventLog({ abi, data: log.data, topics: log.topics })
-        events.push({ event: ev.eventName, contract: log.address, units: 'raw', ...Object.fromEntries(Object.entries(ev.args).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])) })
+        events.push({
+          event: ev.eventName, contract: log.address, units: 'raw', ...(first === UNKNOWN_KIND_ABI && { kindUnread: true }),
+          ...Object.fromEntries(Object.entries(ev.args).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])),
+        })
         break
       } catch { /* other contract / event */ }
     }
@@ -306,15 +311,35 @@ export function decodeLogs(logs, abis) {
   return events
 }
 
-/** `extraAbis`: decoders for logs not from the V2 / Soft / U / S pads (see decodeLogs). */
-export async function decodeTx(hash, extraAbis = []) {
+const MODULE_TYPE_ABI = parseAbi(['function moduleType() view returns (bytes32)'])
+/** What a shared-signature event decodes to when its module's kind could not be read: no kind's field names are guessed. */
+const UNKNOWN_KIND_ABI = [parseAbi(['event Split(uint256 incoming, uint256 firstPart, uint256 secondPart)'])]
+
+/**
+ * For logs whose topic0 is `topic` — an event signature several module kinds share, whose fields mean different things
+ * in each — the decoder of the emitting module's own kind, asked of its moduleType(): `byType(kind)`. A module whose
+ * kind is unread or unknown decodes with neutral field names and `kindUnread: true`, never with another kind's.
+ */
+export async function firstByModuleType(c, logs, topic, byType) {
+  const addrs = [...new Set(logs.filter((l) => l.topics[0] === topic).map((l) => l.address.toLowerCase()))]
+  const types = new Map(await Promise.all(addrs.map(async (a) => [a, await c.readContract({ address: a, abi: MODULE_TYPE_ABI, functionName: 'moduleType' })
+    .then((t) => hexToString(t, { size: 32 }).replace(/\0+$/, '')).catch(() => null)])))
+  return (log) => (log.topics[0] === topic ? byType(types.get(log.address.toLowerCase())) ?? UNKNOWN_KIND_ABI : null)
+}
+
+/**
+ * `extraAbis`: decoders for logs not from the V2 / Soft / U / S pads (see decodeLogs). `shared`: { topic, byType } for
+ * an event signature several module kinds share (firstByModuleType).
+ */
+export async function decodeTx(hash, extraAbis = [], shared = null) {
   const r = await client.waitForTransactionReceipt({ hash, timeout: 120_000 })
+  const firstFor = shared ? await firstByModuleType(client, r.logs, shared.topic, shared.byType) : null
   const events = []
   const known = new Map(PADS.map((p) => [p.address.toLowerCase(), p]))
   for (const log of r.logs) {
     const pad = known.get(log.address.toLowerCase())
     if (!pad) {
-      events.push(...decodeLogs([log], extraAbis))
+      events.push(...decodeLogs([log], extraAbis, firstFor))
       continue
     }
     try {

@@ -95,6 +95,10 @@ export const COMMANDS = [
     c('capped distribute', 'preview', 'low', '0.35.0', 'Anyone: split the bound quote (payees up to the cap), or send another asset to 0xdead'),
     c('capped chunk', 'preview', 'low', '0.35.0', 'Anyone: one buy-back or liquidity chunk'),
   ]),
+  ...baseModule('floor', '0.39.0', "That slot's payee only", [
+    c('floor redeem', 'preview', 'high', '0.39.0', 'Holder: give up tokens (to 0xdead, for good) for their share of the floor treasury, less the fee'),
+    c('floor distribute', 'preview', 'low', '0.39.0', 'Anyone: split the bound quote and push the payees their part, or send another asset to 0xdead'),
+  ]),
   c('promote buy', 'preview', 'medium', '0.34.0', "Buy naming a promoter: a wallet's first trade of the token binds it for good, on the curve"),
   c('promote status', 'read', 'none', '0.34.0', "A token's promoter terms, a wallet's binding and what it can claim"),
   c('promote earnings', 'read', 'none', '0.34.0', 'A promoter wallet: shares to claim on the curve and in the pool'),

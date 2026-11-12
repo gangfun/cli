@@ -185,7 +185,7 @@ export function parsePromote(raw, daysRaw) {
 /** Does this create's flags ask for the pool module? --promote on a taxed V3 token with no recipient or other module named. Pure. */
 export function wantsPoolModule(kind, flag, opt) {
   if (kind !== 'v3' || !flag('promote') || flag('recipient') || flag('vault')) return false
-  if (flag('buyback') || flag('split') || flag('lp') || flag('tax-cap')) return false
+  if (flag('buyback') || flag('split') || flag('lp') || flag('tax-cap') || flag('floor')) return false
   const zero = (f) => !flag(f) || /^0*(\.0*)?$/.test(opt(f) ?? '')
   if (zero('buy-tax') && zero('sell-tax')) return false
   return !/^0*100(\.0+)?$/.test(opt('dividend', '0'))

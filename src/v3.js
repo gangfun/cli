@@ -14,6 +14,7 @@ import { splitOf } from './split.js'
 import { lpOf } from './lp.js'
 import { comboOf, decoyWarning } from './combo.js'
 import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
+import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModule } from './floor.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 
 /**
@@ -191,8 +192,12 @@ async function taxContracts(ctx) {
   return ctx._tax
 }
 
-/** The call hit a contract without this function: a bare revert (no error data) or an empty return. */
+/**
+ * The call hit a contract without this function: a bare revert (no error data) or an empty return. A node's internal
+ * error (-32603) also comes back from viem as a revert: it is the node's, never "no such function" (as gangpad.js).
+ */
 function noSuchFunction(e) {
+  if (e?.walk?.((x) => x?.code === -32603)) return false
   if (e?.walk?.((x) => x?.name === 'ContractFunctionZeroDataError')) return true
   const r = e?.walk?.((x) => x?.name === 'ContractFunctionRevertedError')
   return !!r && !r.data && (!r.raw || r.raw === '0x')
@@ -303,7 +308,7 @@ const USAGE = 'usage: gang v3 <list|info|status|create|buy|sell|claim|income|rel
  * Entry for `gang v3 <sub>`. io: { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes } from
  * index.js (summarize = summarizePreview, so previews look like every other command's; notes = padNotes: --note / --follow).
  */
-export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes, launchPoolModule = null }) {
+export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo, checkMeta, resolveMeta, notes, launchPoolModule = null, launchFloor = null }) {
   if (!SUBS.includes(sub)) return fail(USAGE, { got: sub ?? null })
   const testnet = flag('testnet')
   const net = testnet ? ' --testnet' : ''
@@ -374,6 +379,16 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const capped = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp && !combo
       ? await cappedOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, pad: ctx.pad, extraAssets: [c.quote], ref: comboRef }) : null
     const cappedWarning = capped ? cappedDecoyWarning(capped, token, c.quote, comboRef) : null
+    // or the dev's floor module (floor-v1): the tax kept as a treasury holders can redeem. Only one GangFloorModuleFactory
+    // made, cloned for this very token, is this token's floor: anything else is shown with a warning, never as one
+    const floorRaw = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp && !combo && !capped
+      ? await floorOf(ctx.read, c.recipient, { wbnb: ctx.wbnb, pad: ctx.pad, factory: ctx.floorFactory, extraAssets: [c.quote], ref: comboRef, getCode: (a) => ctx.client.getCode({ address: a }) }) : null
+    // not this token's floor (not made by the factory, unchecked, or cloned for another token): only the warning, no numbers
+    const floorSeen = floorRaw ? floorShown(floorRaw, token) : null
+    const floor = floorRaw && (floorSeen !== floorRaw ? floorSeen : {
+      ...floorRaw,
+      treasuryGets: treasuryShare({ buyTaxPct: c.buyTaxPct, sellTaxPct: c.sellTaxPct, platformTaxPct: fees.platformTaxPct, dividendPct: c.dividendPct, payBps: floorRaw.cap?.reached ? 0 : floorRaw.payBps }),
+    })
     const lpWarn = lp && lp.token && lp.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
@@ -392,6 +407,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
       ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
+      ...(floor && { floor }),
     })
   }
 
@@ -535,6 +551,21 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       return ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfig', [tax])
     })
     if (!ok) fail(`tax setting refused: ${reason}`, { hint: HINTS.BadTaxConfig, tax: { buyTax, sellTax, dividend, recipient } })
+    // a floor module serves the one token address it was cloned for: a token that names one by hand lands elsewhere, and
+    // its tax goes into a module that can never bind it — for good. Only the launch that cloned it for this very token
+    // names it. Checked on the chain's own records, at one block, and nothing is built on an answer that is not sure
+    if (recipient !== zeroAddress && !launchFloor && recipient.toLowerCase() !== String(me).toLowerCase()) {
+      // the floor factory of the create target's generation, even when --vault moved ctx to the vault pad (whose own
+      // generation has none: its handler lists no floor module, so nothing matches there)
+      const typed = await typedFloorModule({ client: ctx.client, pad: ctx.pad }, recipient, floorFactoryAddress(testnet))
+      if (typed.floor) {
+        fail('--recipient is a floor module: a token can\'t name one by hand. A floor module serves only the token address it was cloned for, so this token\'s tax would go into a module that can never bind it, and the token would have no floor. Leave --recipient out and add --floor: the launch clones a module for this token', { recipient, seenBy: typed.by })
+      }
+      // the pad just took this recipient, so it is listed: a node that says otherwise is behind (or the two answers are
+      // of different blocks). Not sure → nothing is built
+      if (typed.unlisted) fail('could not check --recipient: the pad accepts it, but the tax handler did not show it as listed at the block it was checked on (a node may be behind)', { recipient, retry: 'same command again' })
+      if (typed.unread) fail('could not check --recipient (RPC error)', { detail: typed.unread, retry: 'same command again' })
+    }
     if (!(await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me]))) fail('this wallet holds no Agent ID; V3 create is Agent-only', { wallet: me })
     // the target: --grad (2.0, createWithGradTarget) or the pad's default (create: 9 BNB on 2.0, 15 on 1.0)
     const targetBnb = grad ?? bnbOf(await ctx.read(ctx.pad, GRAD_TARGET_ABI, 'TARGET_GRAD_BNB'))
@@ -560,17 +591,34 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const createData = (logoURI, metaURI) => encodeFunctionData({ abi: PAD_ABI, functionName: fn, args: argsOf(logoURI, metaURI) })
     const vanity = await vanityDeployer(ctx)
     const handler = vanity && taxed ? (await taxContracts(ctx)).handler : zeroAddress
-    const prepareCreate = (logoURI, metaURI) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
-      args: [name, symbol, metaURI, handler, tax.buyTaxBps, tax.sellTaxBps, false],
+    const prepareCreate = (logoURI, metaURI, fixed = null) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
+      args: [name, symbol, metaURI, handler, tax.buyTaxBps, tax.sellTaxBps, false], fixed,
     })
     // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
     const probe = await prepareCreate('', '')
     const dry = await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : PAD_ABI,
       probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData('', '')] : argsOf('', ''))
     if (dry.failed) return out({ success: false, step: 'create', ...dry.failed })
-    const logo = await resolveLogo()
-    const meta = await resolveMeta({ name, symbol, logoURI: logo.logoURI })
-    const launch = await prepareCreate(logo.logoURI, meta.metaURI)
+    // a floor launch: the module was cloned for one token address, so the create reuses the metadata and the salt that
+    // give it, and is refused when anything that decides the address (name, symbol, tax rates) changed since
+    const logo = launchFloor ? { logoURI: launchFloor.logoURI, uploaded: !!launchFloor.uploaded } : await resolveLogo()
+    const meta = launchFloor ? { metaURI: launchFloor.metaURI, metadata: launchFloor.metadata } : await resolveMeta({ name, symbol, logoURI: logo.logoURI })
+    const launch = await prepareCreate(logo.logoURI, meta.metaURI, launchFloor ? { salt: launchFloor.salt, token: launchFloor.token } : null)
+    if (launch.mismatch) {
+      return fail(launch.mismatch.got
+        ? 'this create would put the token at another address than the one its floor module was cloned for: the name, the symbol or a tax rate changed since the module was cloned. Run the launch again with what it began with, or add --restart for a new module and token'
+        : 'the pad\'s token deployer could not be read: a floor launch creates its token at the address its module was cloned for, so nothing is built without it', {
+        floorToken: launch.mismatch.expected, ...(launch.mismatch.got && { wouldBe: launch.mismatch.got }), retry: launch.mismatch.got ? undefined : 'same command again',
+      })
+    }
+    if (launchFloor) {
+      // the last check before the tx: the pad itself says where this exact call puts the token
+      const sure = await simulate(ctx, me, ctx.pad, VANITY_ABI, 'createWithSalt', [launch.salt, createData(logo.logoURI, meta.metaURI)])
+      if (sure.failed) return out({ success: false, step: 'create', ...sure.failed })
+      if (String(sure.result).toLowerCase() !== String(launchFloor.token).toLowerCase()) {
+        return fail('the pad would create this token at another address than the one its floor module was cloned for: nothing is built. Add --restart for a new module and token', { floorToken: launchFloor.token, padSays: sure.result })
+      }
+    }
     let label = null
     const selfRecipient = recipient !== zeroAddress && recipient.toLowerCase() === String(me).toLowerCase()
     if (recipient !== zeroAddress && !selfRecipient) {
@@ -590,6 +638,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       buyTaxPct: buyTax, sellTaxPct: sellTax, dividendPct: dividend,
       recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: launch.token ?? dry.result,
       ...(launch.token && { addressSuffix: 'abcd' }),
+      ...(launchFloor && { floorToken: launchFloor.token, metadataFixed: 'the metadata is the one fixed when the floor module was cloned (its URL is part of the token\'s address); --logo / --description / --website / --twitter given now are not read again' }),
       split: taxed
         ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')

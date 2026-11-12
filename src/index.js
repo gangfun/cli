@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
-  calldata, decodeTx, decodeLogs, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
+  calldata, decodeTx, decodeLogs, firstByModuleType, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
 import { baw, bawAddress, bawError, bawFailed, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
@@ -27,9 +27,10 @@ import { runPromote, PROMOTE_EVENT_ABIS } from './promote.js'
 import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
 import { runCapped, CAPPED_EVENT_ABIS } from './capped.js'
+import { runFloor, FLOOR_ABI, FLOOR_EVENT_ABIS } from './floor.js'
 import { runWeekly } from './weekly.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
-import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, runLaunch, TAX_CAP_ALONE } from './launch.js'
+import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, REDEEM_FEE_ALONE, runLaunch, TAX_CAP_ALONE } from './launch.js'
 import { poolPayBnb, poolTrade } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
 import { MERGED_ERRORS_ABI, genOf, padNets } from './gangpad.js'
@@ -41,7 +42,7 @@ import { codeOf, record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { shareFor } from './share.js'
 import { BUY_ACCEPTS, CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, suggestFlag, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
-import { parseAbi } from 'viem'
+import { encodeEventTopics, parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
 const cmd = args[0]
@@ -516,6 +517,26 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          recipient (GangCappedSplitterFactory; listed in the same tx) → create → bind → the
                                          rest of the launch. Quote: WBNB (default), GANG or one listed in the pad's
                                          QuoteRegistry only.
+  gang create … --buy-tax <1-5> --sell-tax <1-5> --floor [--redeem-fee <0-5>] [--tax-cap <amount> [--tax-cap-share <0.01-100>]
+                                         [--split <addr>:<pct>[,…]]] [--dev-buy …]
+                                         V3, taxed, floor module (GangFloorModule, floor-v1): the
+                                         recipient's part of the pool tax is KEPT as a treasury, nothing is bought back or
+                                         added. After graduation any holder can give up tokens for their share of it:
+                                         amount × treasury ÷ (supply − what 0xdead holds), less --redeem-fee % (default 2)
+                                         that stays for the holders who remain (gang floor redeem; the tokens go to 0xdead).
+                                         With --tax-cap, --tax-cap-share % (default 100) of the recipient's part goes to the
+                                         --split payees (default: you) until they have been credited --tax-cap in all, as a
+                                         capped recipient pays them; the rest, and after the cap all of it, is the treasury.
+                                         Without --tax-cap nobody takes a share. The floor is not a price promise: it starts
+                                         at 0, grows only with pool volume and is usually far below the market price; the
+                                         preview shows the % of pool volume that reaches the treasury.
+                                         PERMANENT: the token it serves, the quote, the fee, the cap, payees and shares can
+                                         never change. Steps: the CLI computes the token's address (its name, symbol, tax
+                                         rates and metadata decide it: they are fixed from this step on), clones your floor
+                                         module for that address (GangFloorModuleFactory) → create (at that address, checked
+                                         with the pad before the tx) → bind → the rest of the launch. Not with --buyback /
+                                         --lp / --after-cap / --recipient / --vault; with --promote the promoter share stays
+                                         on the curve. Quote: WBNB (default), GANG or one listed in the pad's QuoteRegistry.
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
                                          打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
                                          chain (a token this wallet created with this symbol since the plan); a run that finds
@@ -747,12 +768,39 @@ CAPPED (a V3 token whose recipient is a capped recipient, capped-v1, 0.35.0+; GA
   gang capped chunk --token <addr> [--slippage 1]
                                          anyone: one chunk now, as gang combo chunk. --module <addr> instead of --token names
                                          a module directly (not for bind). Gas, --testnet, --calldata, --from as gang combo
+FLOOR (a V3 token whose recipient is a floor module, floor-v1; GANG_FLOOR_FACTORY / GANG_TESTNET_FLOOR_FACTORY):
+  gang floor status --token <addr> [--asset <addr>]
+                                         the treasury, the supply it is measured against, what one token redeems for before
+                                         and after the fee, the fee, the cap and payees (if any), what waits to be split or
+                                         pushed, next commands — and whether GangFloorModuleFactory made this module
+                                         (verified) and whether it was cloned for this token: if not, a warning, and no
+                                         other gang floor command is built
+  gang floor redeem --token <addr> --amount <tokens>|all [--to <addr>] [--slippage 0]
+                                         a holder, after graduation: give up tokens (they go to 0xdead, IRREVERSIBLE) for
+                                         their share of the treasury less the fee, paid in the quote to --to (default: this
+                                         wallet). The preview shows what selling the same tokens in the pool would pay and
+                                         warns when that is more. Step approve first (the module pulls the tokens), then
+                                         the redemption; its minimum is the previewed amount (--slippage % under it).
+                                         For a creator's GangBond or call bond a redemption is a sell: one that would
+                                         break it is refused unless --break-bond / --break-call-bond (--settle-first as
+                                         in gang sell)
+  gang floor distribute --token <addr> [--asset <addr>|wbnb]
+                                         anyone, once bound: splits the quote that arrived and pushes the payees their part,
+                                         with what redemptions set aside for them (a redemption pushes nobody); any other
+                                         asset goes to 0xdead in full (BURNED, paid to nobody)
+  gang floor release --token <addr> [--index <i>] [--max <amount>]
+                                         anyone: push a slot what a failed push left owed (as gang capped release)
+  gang floor set-payee --token <addr> --to <addr> [--index <i>]
+                                         only the slot's current payee: moves the slot to --to at once
+  gang floor bind --token <addr>         anyone: bind the module to the token it was cloned for (the launch does it).
+                                         --module <addr> instead of --token names a module directly (not for redeem).
+                                         Gas, --testnet, --calldata, --from as gang capped
   gang execute --request-id <id>         broadcast a previewed call
   gang tx --pending                      a trade that waited for Binance App approval (execute: pendingConfirmation): find its tx
                                          in the wallet's history by the exact call previewed, then as gang tx --hash below
   gang tx --hash <0x..> [--testnet]      wait for receipt and decode Gang events: V2 / Soft / U / S, GangLaunchpad (V3 /
                                          打新, 铸币飞轮, tax routers, vaults), GangFlywheelPad (铸币飞轮 pads), split modules,
-                                         LP splitters, combined and capped recipients (publishes a queued --note; mainnet). GangLaunchpad events
+                                         LP splitters, combined and capped recipients, floor modules (publishes a queued --note; mainnet). GangLaunchpad events
                                          carry units: "raw" (amounts in wei, 18 decimals; bps / shares as is)
 
 --note is PUBLIC: shown on gang.fun next to the trade. Its hash goes into the tx calldata, so it is provably written
@@ -1294,7 +1342,7 @@ function alias(kind, sub) {
 
 // 铸币飞轮 settings beyond those it shares with 打新 (--raise / --hold / --mint-fee / --exit-fee) and V3 (--sell-tax)
 const FLY_ONLY_FLAGS = FLY_CREATE_FLAGS.filter((f) => !['raise', 'hold', 'mint-fee', 'exit-fee', 'sell-tax'].includes(f))
-const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter, combined recipient, capped recipient or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
+const FLY_NO_BOND = '铸币飞轮 tokens take no GangBond, buy-back splitter, split module, LP splitter, combined recipient, floor module, capped recipient or --dev-buy (phase 1): the creator mints its shares in the create with --dev-shares <n>'
 /** The flags a 铸币飞轮 create refuses (gang create --fly and gang fly create alike). */
 function checkFlyCreate() {
   if (flag('fair')) fail('give --fly (铸币飞轮) or --fair (打新), not both')
@@ -1307,7 +1355,7 @@ function checkFlyCreate() {
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
-const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined / capped recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
+const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
 // --grad picks a V3 curve's graduation target (2.0 / 3.0); a 打新 / 铸币飞轮 sale ends at its own --raise
 const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): ${what} fills at its --raise instead, so leave --grad out`
 function create() {
@@ -1341,9 +1389,19 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'capped', 'fly', 'creator-fee', 'promote', 'call-bond'])
+  'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'fly', 'creator-fee', 'promote', 'call-bond'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...FLOOR_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
+// Split with three amounts is the event of four module kinds, and the amounts mean different things in each (a buy-back
+// splitter's toBuyback / toDev, an LP splitter's toLp / toDev, a promoter pool's toEscrow / toDev, a floor module's
+// toTreasury / toPayees): gang tx asks the
+// emitting module what it is before naming them
+const BUYBACK_SPLIT_ABI = [parseAbi(['event Split(uint256 incoming, uint256 toBuyback, uint256 toDev)'])]
+const SHARED_SPLIT = {
+  topic: encodeEventTopics({ abi: FLOOR_ABI, eventName: 'Split' })[0],
+  byType: (kind) => (kind === 'lp-burn-v1' ? LP_EVENT_ABIS : kind === 'promote-pool-v1' ? PROMOTE_EVENT_ABIS : kind === 'floor-v1' ? FLOOR_EVENT_ABIS
+    : String(kind ?? '').startsWith('buyback-burn-') ? BUYBACK_SPLIT_ABI : null),
+}
 
 /** gang bond / gang buyback / gang split / gang lp / gang combo / gang capped on a 铸币飞轮 token: those contracts refuse it, so say why before any step. */
 async function refuseFly(what) {
@@ -1354,7 +1412,7 @@ async function refuseFly(what) {
 
 /** A mainnet tx decoded, its queued note published (or its state refreshed), its follow ref and token links. */
 async function txReport(hash) {
-  const t = await decodeTx(hash, GANG_EVENT_ABIS)
+  const t = await decodeTx(hash, GANG_EVENT_ABIS, SHARED_SPLIT)
   // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
   // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
   const queued = hasQueued()
@@ -1455,8 +1513,11 @@ async function main() {
     const capFlag = ['tax-cap', 'tax-cap-share', 'after-cap'].find((f) => flag(f))
     if (capFlag && launchKind === 'fair') fail(`--${capFlag} is for V3 tokens: it makes the tax recipient a capped recipient, and a 打新 token has no recipient`)
     if (capFlag) fail(TAX_CAP_ALONE)
+    const floorFlag = ['floor', 'redeem-fee'].find((f) => flag(f))
+    if (floorFlag && launchKind === 'fair') fail(`--${floorFlag} is for V3 tokens: it makes the tax recipient a floor module, and a 打新 token has no recipient`)
+    if (flag('redeem-fee')) fail(REDEEM_FEE_ALONE)
     const lone = LAUNCH_FLAGS.find((f) => flag(f))
-    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,… / --lp <pct> / --tax-cap <amount>)'}`)
+    if (lone) fail(`--${lone} only applies to a launch in one command: add --bond <quote>${launchKind === 'fair' ? '' : ' (or --dev-buy <quote> / --buyback <pct> / --split <addr>:<pct>,… / --lp <pct> / --tax-cap <amount> / --floor)'}`)
   }
   switch (cmd) {
     case 'fair':
@@ -1502,6 +1563,9 @@ async function main() {
     case 'capped':
       await refuseFly('a capped recipient')
       return runCapped(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'floor':
+      await refuseFly('a floor module')
+      return runFloor(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'weekly':
       return runWeekly(args[1], { opt, flag, out, fail, resolveLogo: resolveLogoUri })
     case 'capabilities':
@@ -1849,7 +1913,7 @@ async function main() {
         const r = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
         return out({
           success: true, chainId: Number(ctx.chainId), hash, status: r.status, block: Number(r.blockNumber),
-          events: decodeLogs(r.logs, GANG_EVENT_ABIS), explorer: `${ctx.explorer}/tx/${hash}`,
+          events: decodeLogs(r.logs, GANG_EVENT_ABIS, await firstByModuleType(ctx.client, r.logs, SHARED_SPLIT.topic, SHARED_SPLIT.byType)), explorer: `${ctx.explorer}/tx/${hash}`,
         })
       }
       return out(await txReport(hash))

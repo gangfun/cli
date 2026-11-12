@@ -3,6 +3,7 @@ import { revertOf as revertIn, step, units } from './steps.js'
 import { atTokenPad, CREATOR_FEE_ABI, creatorFeeShareOf, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { promoteTermsOf } from './promote.js'
+import { floorVerified } from './floor.js'
 
 /**
  * `gang creator-fee` — the GangLaunchpad 2.0 creator fee (docs/SPEC-CURVE-CREATOR-FEE-2026-10-31.md): of the 1% fee on
@@ -23,7 +24,7 @@ const CURVES_ABI = parseAbi([
 const SYMBOL_ABI = parseAbi(['function symbol() view returns (string)'])
 const MODULE_TYPE_ABI = parseAbi(['function moduleType() view returns (bytes32)'])
 const QUOTE_ABI = parseAbi(['function quote() view returns (address)'])
-const CAP_QUOTE_ABI = parseAbi(['function capQuote() view returns (address)'])
+const CAP_QUOTE_ABI = parseAbi(['function capQuote() view returns (address)', 'function floorQuote() view returns (address)', 'function floorToken() view returns (address)'])
 const ABIS = [CREATOR_FEE_ABI, CURVES_ABI]
 const HINTS = {
   NotCreator: 'only the token\'s creator (the wallet that created it) can claim its creator fee; pass that wallet with --from',
@@ -68,7 +69,7 @@ export async function createNote(ctx, net = '') {
 export function payOutCmd(moduleType, at, net = '', { asset, assetSymbol } = {}) {
   const t = String(moduleType ?? '')
   const base = t.startsWith('buyback-burn-') ? 'gang buyback' : t === 'lp-burn-v1' ? 'gang lp'
-    : t === 'split-v1' ? 'gang split' : t === 'combo-v1' ? 'gang combo' : t === 'capped-v1' ? 'gang capped' : null
+    : t === 'split-v1' ? 'gang split' : t === 'combo-v1' ? 'gang combo' : t === 'capped-v1' ? 'gang capped' : t === 'floor-v1' ? 'gang floor' : null
   if (!base) return null
   const splitter = base === 'gang buyback' || base === 'gang lp'
   const m = `--module ${at ?? '<module>'}`
@@ -76,6 +77,11 @@ export function payOutCmd(moduleType, at, net = '', { asset, assetSymbol } = {})
     return asset
       ? `${base} distribute ${m} --asset ${asset}${net} (anyone) sends ALL of it to 0xdead: ${assetSymbol ?? 'this asset'} is not the module's quote, so it is burned, paid to nobody`
       : `${base} distribute ${m}${net} (anyone) then splits it as the tax: the payees' part is pushed and counted against the cap (so it only uses the cap up sooner), the rest set aside for buy-back and liquidity`
+  }
+  if (base === 'gang floor') {
+    return asset
+      ? `${base} distribute ${m} --asset ${asset}${net} (anyone) sends ALL of it to 0xdead: ${assetSymbol ?? 'this asset'} is not the module's quote, so it is burned, paid to nobody`
+      : `${base} distribute ${m}${net} (anyone) then splits it as the tax: the payees' part (if the module has payees and their cap is not reached) is pushed and counted against the cap, the rest joins the treasury every holder can redeem`
   }
   // a fee in another quote than the module's own: split / distribute of the bound quote never moves it
   if (asset) {
@@ -95,13 +101,15 @@ export function claimToModule({ moduleType, at, net = '', bound, quote, quoteSym
   const other = !!bound && !!quote && bound.toLowerCase() !== quote.toLowerCase()
   const unbound = !bound || /^0x0{40}$/.test(bound)
   // a capped recipient burns every asset but its quote: unbound, its quote is already fixed (capQuote)
-  const burned = moduleType === 'capped-v1' && !!quote && (unbound ? !!capQuote && capQuote.toLowerCase() !== quote.toLowerCase() : other)
+  const burns = moduleType === 'capped-v1' || moduleType === 'floor-v1'
+  const noun = moduleType === 'floor-v1' ? 'floor module' : 'capped recipient'
+  const burned = burns && !!quote && (unbound ? !!capQuote && capQuote.toLowerCase() !== quote.toLowerCase() : other)
   const payOut = payOutCmd(moduleType, at, net, (other && !unbound) || burned ? { asset: quote, assetSymbol: quoteSymbol } : {})
   if (!payOut) return { payOut: null, warning: null }
-  if (burned) return { payOut, warning: `the capped recipient's quote is ${(unbound ? capSymbol : boundSymbol) ?? (unbound ? capQuote : bound)}, this fee is in ${quoteSymbol ?? quote}: it sends any other asset to 0xdead in full, so a fee claimed there is burned` }
+  if (burned) return { payOut, warning: `the ${noun}'s quote is ${(unbound ? capSymbol : boundSymbol) ?? (unbound ? capQuote : bound)}, this fee is in ${quoteSymbol ?? quote}: it sends any other asset to 0xdead in full, so a fee claimed there is burned` }
   // its quote unknown (capQuote() unread): never stay silent about a burn that may follow
-  if (moduleType === 'capped-v1' && unbound && !capQuote) {
-    return { payOut, warning: `could not read the capped recipient's quote (capQuote): if it is not ${quoteSymbol ?? quote}, this fee's quote, a fee claimed there is burned (it sends any other asset to 0xdead in full). Check gang capped status --module ${at ?? '<module>'}${net} first` }
+  if (burns && unbound && !capQuote) {
+    return { payOut, warning: `could not read the ${noun}'s quote (${moduleType === 'floor-v1' ? 'floorQuote' : 'capQuote'}): if it is not ${quoteSymbol ?? quote}, this fee's quote, a fee claimed there is burned (it sends any other asset to 0xdead in full). Check gang ${moduleType === 'floor-v1' ? 'floor' : 'capped'} status --module ${at ?? '<module>'}${net} first` }
   }
   if (unbound) return { payOut, warning: 'the module is not bound to a token yet: it pays this out only once it is bound (its launch binds it)' }
   if (!other) return { payOut, warning: null }
@@ -110,7 +118,23 @@ export function claimToModule({ moduleType, at, net = '', bound, quote, quoteSym
     warning: `the module's own quote is ${boundSymbol ?? bound}, this fee is in ${quoteSymbol ?? quote}: split / distribute of the module's quote leave it where it is`,
   }
 }
-const LAUNCH_TYPES = { buyback: 'buyback-burn-v4', lp: 'lp-burn-v1', split: 'split-v1', combo: 'combo-v1', capped: 'capped-v1' }
+/**
+ * `--to` a contract that says it is a floor module and is not known to be one (`verified`: false, or null when the
+ * check could not be read; `hasFactory`: whether the token's pad generation has a floor factory to check against). Pure.
+ */
+export function unverifiedFloorNote(verified, hasFactory) {
+  if (verified === null) return 'could not check whether GangFloorModuleFactory made this contract (RPC error): run the command again before claiming there'
+  if (!hasFactory) return 'this contract says it is a floor module, but this token\'s GangLaunchpad generation has no floor factory to check it against: a fee claimed there is in that contract\'s hands, and nothing here confirms it is a treasury holders can redeem'
+  return 'this contract says it is a floor module, but GangFloorModuleFactory did not make it: a fee claimed there is in its hands, not in a treasury holders can redeem'
+}
+
+/** `--to` a floor module that was not cloned for `token` (or whose token could not be read): what to say. Pure. */
+export function floorModuleOfAnother(floorToken, token) {
+  if (!floorToken) return 'could not read which token this floor module was cloned for: if it is not this token, the fee goes to another token\'s holders and payees. Check gang floor status --module first'
+  if (floorToken.toLowerCase() === String(token).toLowerCase()) return null
+  return `this floor module was cloned for another token (${floorToken}), not this one: a fee claimed there goes to that token's payees and holders, and this token's holders get nothing of it`
+}
+const LAUNCH_TYPES = { buyback: 'buyback-burn-v4', lp: 'lp-burn-v1', split: 'split-v1', combo: 'combo-v1', capped: 'capped-v1', floor: 'floor-v1' }
 
 /** Added to the create's note when the tax recipient is one of the dev's modules (`module`: its name; `kind`: buyback | lp | split | combo | capped). */
 export const notThroughModule = (module, { token, at, net = '', kind } = {}) =>
@@ -266,10 +290,23 @@ export async function runCreatorFee({ opt, flag, out, fail, summarize }) {
   let toModule = { payOut: null, warning: null }
   if (toType && payOutCmd(toType, to)) {
     const bound = await ctx.read(to, QUOTE_ABI, 'quote').catch(() => null)
-    const capQuote = toType === 'capped-v1' ? await ctx.read(to, CAP_QUOTE_ABI, 'capQuote').catch(() => null) : null
+    const capQuote = toType === 'capped-v1' ? await ctx.read(to, CAP_QUOTE_ABI, 'capQuote').catch(() => null)
+      : toType === 'floor-v1' ? await ctx.read(to, CAP_QUOTE_ABI, 'floorQuote').catch(() => null) : null
     const sym = (a) => (a && !/^0x0{40}$/.test(a) ? ctx.read(a, SYMBOL_ABI, 'symbol').catch(() => null) : null)
     const [quoteSymbol, boundSymbol, capSymbol] = await Promise.all([sym(quote), sym(bound), sym(capQuote)])
     toModule = claimToModule({ moduleType: toType, at: to, net, bound, quote, quoteSymbol, boundSymbol, capQuote, capSymbol })
+    // a floor module serves one token: a fee claimed into another token's module goes to that token's holders and payees
+    if (toType === 'floor-v1') {
+      // only a module GangFloorModuleFactory made does what a floor module does: nothing is promised about any other
+      const verified = await floorVerified(ctx.read, to, ctx.floorFactory ?? null)
+      if (verified !== true) {
+        toModule = { payOut: 'what this contract does with a fee sent to it is unknown', warning: unverifiedFloorNote(verified, !!ctx.floorFactory) }
+      } else {
+        const floorToken = await ctx.read(to, CAP_QUOTE_ABI, 'floorToken').catch(() => null)
+        const note = floorModuleOfAnother(floorToken, token)
+        if (note) toModule = { ...toModule, warning: toModule.warning ? `${note}. Also: ${toModule.warning}` : note }
+      }
+    }
   }
   const { payOut, warning } = toModule
   return out(step(ctx, { from: me, to: ctx.pad, data }, {

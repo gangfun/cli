@@ -58,6 +58,9 @@ export const GANG_GENS = {
       // capped-v1, 2026-11-08, block 132418984; the Safe allowed it on GangHandlerAdmin at block 132420220
       // (docs/MAINNET-CAPPED-MODULE-2026-11-08.md)
       cappedFactory: '0x294E901ecb66af280C1cDD26fD871601d89a2Dca',
+      // floor-v1, 2026-11-12, block 133121257; the Safe allowed it on GangHandlerAdmin at block 133123169
+      // (docs/MAINNET-FLOOR-MODULE-2026-11-12.md)
+      floorFactory: '0x057d2C1557a0E8298a1E00834D6064497f5DC2fC',
       // the pool side of the promoter share, 2026-11-07, block 132218466; the Safe allowed it on GangHandlerAdmin at block
       // 132219892 (docs/MAINNET-GANG-LAUNCHPAD-3-PROMOTE-2026-11-07.md)
       promotePoolFactory: '0xA633e499ADcD69A4F91dc83587096b2c1903167A',
@@ -109,6 +112,9 @@ export const GANG_GENS = {
       comboFactory: '0xdc1687961c8aAf5A0340c1A73b604cf3a2be543C',
       // capped-v1, 2026-11-08 (deployed at block 141527185, allowed on the GangHandlerAdmin at block 141527190)
       cappedFactory: '0xe3f61865d98993dd39c136Af19651C6F6686498A',
+      // floor-v1, 2026-11-11 (deployed at block 142099242, allowed on the GangHandlerAdmin at block 142099247;
+      // docs/TESTNET-FLOOR-MODULE-2026-11-11.md)
+      floorFactory: '0x0804C018201D8fFe378b873b41B67f136dbdc3F8',
       // the pool side of the promoter share, 2026-11-05 (docs/TESTNET-GANG-LAUNCHPAD-3-2026-11-03.md)
       promotePoolFactory: '0x7a68A65d27591a21C44f91015F930422BA79F1c2',
       // GangCallBond, 2026-11-09, block 141708762 (docs/TESTNET-CALL-BOND-2026-11-09.md)
@@ -151,19 +157,19 @@ export const GANG_GENS = {
   ],
 }
 // what a generation brings to a ctx (gen: '1.0' | '2.0' | PAD3_GEN | VAULT_GEN, null for a pad named by the env that this CLI does not know)
-const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'cappedFactory', 'promotePoolFactory', 'callBond']
+const GEN_FIELDS = ['gen', 'pad', 'router', 'bond', 'splitterFactory', 'splitFactory', 'lpFactory', 'comboFactory', 'cappedFactory', 'floorFactory', 'promotePoolFactory', 'callBond']
 // the env names of each field, per network (new name first; the old per-command names still work as aliases)
 const GEN_ENV = {
   mainnet: {
     pad: ['GANG_PAD', 'GANG_V3_PAD', 'GANG_FAIR_PAD'], router: ['GANG_ROUTER'], bond: ['GANG_BOND'],
     splitterFactory: ['GANG_SPLITTER_FACTORY'], splitFactory: ['GANG_SPLIT_FACTORY'], lpFactory: ['GANG_LP_FACTORY'],
-    comboFactory: ['GANG_COMBO_FACTORY'], cappedFactory: ['GANG_CAPPED_FACTORY'], promotePoolFactory: ['GANG_PROMOTE_POOL_FACTORY'],
+    comboFactory: ['GANG_COMBO_FACTORY'], cappedFactory: ['GANG_CAPPED_FACTORY'], floorFactory: ['GANG_FLOOR_FACTORY'], promotePoolFactory: ['GANG_PROMOTE_POOL_FACTORY'],
     callBond: ['GANG_CALL_BOND'],
   },
   testnet: {
     pad: ['GANG_TESTNET_PAD', 'GANG_V3_TESTNET_PAD', 'GANG_FAIR_TESTNET_PAD'], router: ['GANG_TESTNET_ROUTER', 'GANG_ROUTER_TESTNET'],
     bond: ['GANG_TESTNET_BOND'], splitterFactory: ['GANG_TESTNET_SPLITTER_FACTORY'], splitFactory: ['GANG_TESTNET_SPLIT_FACTORY'],
-    lpFactory: ['GANG_TESTNET_LP_FACTORY'], comboFactory: ['GANG_TESTNET_COMBO_FACTORY'], cappedFactory: ['GANG_TESTNET_CAPPED_FACTORY'],
+    lpFactory: ['GANG_TESTNET_LP_FACTORY'], comboFactory: ['GANG_TESTNET_COMBO_FACTORY'], cappedFactory: ['GANG_TESTNET_CAPPED_FACTORY'], floorFactory: ['GANG_TESTNET_FLOOR_FACTORY'],
     promotePoolFactory: ['GANG_TESTNET_PROMOTE_POOL_FACTORY'], callBond: ['GANG_TESTNET_CALL_BOND'],
   },
 }
