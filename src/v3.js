@@ -3,7 +3,7 @@ import { decimalsOf, defaultRefPool, dividendOf, VAULT_ABI, fundingStep as fund,
 import { API } from './discover.js'
 import { UA } from './version.js'
 import { walletFor } from './fair.js'
-import { atTokenPad, CREATOR_FEE_ABI, genFields, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, PAD3_GEN, padNets, rpcTransport, tokenVaultOf, VAULT_GEN, VAULT_NO_BOND, vaultGenOf, vaultModeOf } from './gangpad.js'
+import { atTokenPad, CREATOR_FEE_ABI, creatorFeeShareOf, genFields, GRAD_TARGET_ABI, gradTargetBnbOf, gradTiersOf, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, notThisKind, PAD3_GEN, padNets, rpcTransport, tokenVaultOf, VAULT_GEN, VAULT_NO_BOND, vaultGenOf, vaultModeOf } from './gangpad.js'
 import { createNote, curveCreatorFee } from './creatorfee.js'
 import { checkPromoter, DEFAULT_WINDOW_DAYS, firstBuyWarning, followPromoter, isMissingRead, HINTS as PROMOTE_HINTS, parsePromote, poolFactoryAddress, poolOf, promoteField, promoteLine, PROMOTE_PAD_ABI } from './promote.js'
 import { poolPayBnb, poolTrade } from './pool.js'
@@ -16,6 +16,7 @@ import { comboOf, decoyWarning } from './combo.js'
 import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
 import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModule } from './floor.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
+import { BASE_LOST, BASE_NO_BOND, BASE_PAD_ABI, baseOf as baseVaultView, basePayoff, baseSupport, baseTaxLine, HINTS as BASE_HINTS, parseBase, scheduleLine } from './base.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -162,7 +163,7 @@ const VIRTUAL_TOKEN = 1_066_666_666_666_666_666_666_666_667n
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
-const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, BASE_PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...BASE_HINTS, ...HINTS })
 
 /** eth_call `data` from `from`: { result } when it passes, { failed } with the revert (or RPC error) otherwise. */
 async function simulate(ctx, from, to, abi, functionName, args, value = 0n) {
@@ -397,13 +398,16 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const gen = await curveCreatorFee(ctx, token, c, net)
     const vault = await vaultView(ctx, token, c, net)
     const promote = await promoteField(ctx, token, { recipient: c.recipient, dividendPct: c.dividendPct, testnet })
+    // 3.0: the opening base (gang create --base): the vault, its size, period and progress
+    const baseSeen = await baseVaultView(ctx, token).catch((e) => ({ raw: null, error: `could not read the token's base vault (${e.shortMessage || e.message.split('\n')[0]})`, retry: `gang base status --token ${token}${net}` }))
+    const { raw: _baseRaw, ...baseField } = baseSeen ?? {}
     // 3.0: the rule set the token was created under (fixed for good; an upgrade adds rules for new tokens only)
     const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, PAD_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
     const nonWbnb = c.quote.toLowerCase() !== String(ctx.wbnb).toLowerCase()
     const graduationNote = c.graduationTargetBnb != null && !c.graduated
       ? gradLine(c.graduationTargetBnb, nonWbnb ? `${c.graduationAt} ${c.quoteSymbol || 'of the quote'}` : null) : null
     return out({
-      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(baseSeen && { base: { ...baseField, ...(!baseField.error && { more: `gang base status --token ${token}${net}` }) } }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
       ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
@@ -495,6 +499,22 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       fail(error, extra)
     }
     if (promote && vault) fail('--promote and --vault can\'t go together: a token is made with one or the other')
+    // --base: the opening base (createWithBase, 3.0 once upgraded): 5% / 10% of the supply bought for the token's base
+    // vault in the create, paid in BNB, released to the creator after graduation. WBNB quote, no dividend, alone
+    if (flag('base-vest') && !flag('base')) fail('--base-vest goes with --base <5|10>')
+    const base = flag('base') ? parseBase(opt('base'), opt('base-vest')) : null
+    if (base?.error) {
+      const { error, ...extra } = base
+      fail(error, extra)
+    }
+    if (base) {
+      if (vault) fail('--base and --vault can\'t go together: a token with an opening base is not bound to a vault')
+      if (promote) fail('--base and --promote can\'t go together (not offered with the opening base)')
+      if (launchFloor || launchPoolModule) fail('--base goes on a plain create only: no chained launch')
+      if (flag('quote') && String(opt('quote')).toLowerCase() !== String(ctx.wbnb).toLowerCase()) fail('--base is for WBNB-quoted tokens only: leave --quote out', { got: opt('quote') })
+      if (flag('ref-pool')) fail('--base is for WBNB-quoted tokens only: leave --ref-pool out')
+      if (flag('dividend') && !/^0+(\.0+)?$/.test(opt('dividend') ?? '')) fail('--base can\'t go with a dividend: a base token takes --dividend 0 (the vault would take a share of the holders\' dividend)', { got: opt('dividend') })
+    }
     if (grad !== null && !(grad > 0)) fail('--grad must be the graduation target in BNB raised: 6, 9, 12 or 15', { got: opt('grad') ?? null })
     const buyTax = taxed ? taxOf('buy-tax') : 0
     const sellTax = taxed ? taxOf('sell-tax') : 0
@@ -545,6 +565,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       fail(`--grad: this GangLaunchpad${ctx.gen ? ` (${ctx.gen})` : ''} has no graduation target to pick; every curve graduates at ${bnbOf(await ctx.read(ctx.pad, GRAD_TARGET_ABI, 'TARGET_GRAD_BNB'))} BNB raised: leave --grad out`)
     }
     if (grad !== null && !tiers.includes(grad)) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') })
+    // --base: asked of the pad before anything else is checked (mainnet before its upgrade has no opening base)
+    if (base) {
+      const support = await baseSupport(ctx)
+      if (support.unread) fail('could not check the pad for the opening base (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
+      if (!support.open) fail(`${support.why}: drop --base${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
+    }
     // the recipient may be the creator itself: checkTaxConfigFor knows who creates (a pad without it: checkTaxConfig)
     const [ok, reason] = await ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfigFor', [me, tax]).catch((e) => {
       if (!noSuchFunction(e)) throw e
@@ -584,11 +610,25 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         fail(`GangLaunchpad ${ctx.gen ?? ctx.pad} has no promoter share yet: drop --promote`, { pad: ctx.pad })
       }
     }
-    // createWithVault and createWithPromote always take the target (the pad's default when --grad is left out)
-    const fn = vault ? 'createWithVault' : promote ? 'createWithPromote' : grad !== null ? 'createWithGradTarget' : 'create'
-    const argsOf = (logoURI, metaURI) => [name, symbol, logoURI, metaURI, quote, refPool, tax,
-      ...(vault ? [parseUnits(String(targetBnb), 18), vault] : promote ? [parseUnits(String(targetBnb), 18), promote.shareBps, promote.window] : grad !== null ? [parseUnits(String(grad), 18)] : [])]
-    const createData = (logoURI, metaURI) => encodeFunctionData({ abi: PAD_ABI, functionName: fn, args: argsOf(logoURI, metaURI) })
+    // --base: the pad must have it (mainnet before its upgrade has not), and it names the exact BNB the create takes
+    let baseCost = 0n
+    if (base) {
+      try { baseCost = await ctx.read(ctx.pad, BASE_PAD_ABI, 'previewBaseCost', [parseUnits(String(targetBnb), 18), base.baseBps]) } catch (e) {
+        return fail('could not read the base cost from the pad (previewBaseCost)', revertOf(e) || { detail: e.shortMessage || e.message.split('\n')[0], retry: 'same command again' })
+      }
+      const native = await ctx.client.getBalance({ address: me })
+      if (native < baseCost) {
+        fail(`not enough BNB for the base: the create pays exactly ${formatUnits(baseCost, 18)} BNB, plus gas`, { wallet: me, haveBnb: formatUnits(native, 18), needBnb: formatUnits(baseCost, 18) })
+      }
+    }
+    // createWithVault, createWithPromote and createWithBase always take the target (the pad's default when --grad is left out)
+    const fn = base ? 'createWithBase' : vault ? 'createWithVault' : promote ? 'createWithPromote' : grad !== null ? 'createWithGradTarget' : 'create'
+    const argsOf = (logoURI, metaURI) => (base
+      ? [name, symbol, logoURI, metaURI, tax, parseUnits(String(targetBnb), 18), { baseBps: base.baseBps, vestDays: base.vestDays }]
+      : [name, symbol, logoURI, metaURI, quote, refPool, tax,
+        ...(vault ? [parseUnits(String(targetBnb), 18), vault] : promote ? [parseUnits(String(targetBnb), 18), promote.shareBps, promote.window] : grad !== null ? [parseUnits(String(grad), 18)] : [])])
+    const createAbi = base ? BASE_PAD_ABI : PAD_ABI
+    const createData = (logoURI, metaURI) => encodeFunctionData({ abi: createAbi, functionName: fn, args: argsOf(logoURI, metaURI) })
     const vanity = await vanityDeployer(ctx)
     const handler = vanity && taxed ? (await taxContracts(ctx)).handler : zeroAddress
     const prepareCreate = (logoURI, metaURI, fixed = null) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
@@ -596,8 +636,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     })
     // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
     const probe = await prepareCreate('', '')
-    const dry = await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : PAD_ABI,
-      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData('', '')] : argsOf('', ''))
+    // createWithSalt (abcd) or the entry itself; a base create sends exactly its cost either way
+    const dry = await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : createAbi,
+      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData('', '')] : argsOf('', ''), baseCost)
     if (dry.failed) return out({ success: false, step: 'create', ...dry.failed })
     // a floor launch: the module was cloned for one token address, so the create reuses the metadata and the salt that
     // give it, and is refused when anything that decides the address (name, symbol, tax rates) changed since
@@ -629,7 +670,18 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const baseCreatorFee = await createNote(ctx, net)
     const creatorFee = baseCreatorFee && promote ? `${baseCreatorFee} Less the ${promote.shareBps / 100}% of it you give promoters on their bound wallets' trades.` : baseCreatorFee
     const poolModule = promote && !!launchPoolModule
-    return out(notes.step(ctx, { from: me, to: ctx.pad, data: launch.data }, {
+    const baseView = base && {
+      sizePct: base.baseBps / 100, vestDays: base.vestDays, costBnb: formatUnits(baseCost, 18), payWithThisTx: `${formatUnits(baseCost, 18)} BNB (the tx's value: exactly what the pad's previewBaseCost asks for a ${base.baseBps / 100}% base at the ${targetBnb} BNB target)`,
+      what: `the pad buys ${base.baseBps / 100}% of the supply on the curve as the token's very first trade, for this token's own base vault (GangBaseVault, base-v1). The vault never trades and approves no one: the base cannot move before graduation`,
+      schedule: scheduleLine(base.vestDays),
+      payoff: basePayoff({ gradBnb: targetBnb, baseBps: base.baseBps, vestDays: base.vestDays, cost: baseCost, creatorFeeShareBps: (await creatorFeeShareOf(ctx).catch(() => null)) ?? undefined }),
+      ...(taxed && { tax: baseTaxLine({ taxed, sellTaxPct: sellTax, platformTaxPct: fees.platformTaxPct, selfRecipient }) }),
+      neverGraduates: BASE_LOST,
+      bond: BASE_NO_BOND,
+      wallet: 'the release always goes to the wallet that creates (this one), for good: if it is lost, the base goes there anyway. That wallet can still buy up to 1% on the curve on its own',
+      warning: `PERMANENT: ${formatUnits(baseCost, 18)} BNB is spent in this create; if the token never graduates, it and the base are locked for good. The size, the period and the recipient never change`,
+    }
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: launch.data, ...(base && { value: baseCost }) }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata,
       quote: (await symbolOf(ctx, quote)) || quote, graduationTargetBnb: targetBnb, graduationAt: await units(ctx, quote, gradAmt),
@@ -652,6 +704,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
           note: promoteLine({ shareBps: promote.shareBps, windowDays: promote.windowDays, pool: poolModule, taxed, dividendPct: dividend }),
         },
       }),
+      ...(base && { base: baseView }),
       ...(vault && {
         padGen: ctx.gen, pad: ctx.pad, vault,
         vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming. A vault-bound token takes no GangBond (gang bond post refuses it): a lock moves tokens out of the creator\'s wallet, which would forfeit a bond',

@@ -13,7 +13,7 @@ export const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee'
 
 export const CREATE_ACCEPTS = new Set([
   'name', 'symbol', 'logo', 'logo-file', 'file-logo', 'logo-uri', 'keep-logo-uri', ...LINK_FLAGS, 'description',
-  'quote', 'ref-pool', 'grad', 'vault', 'testnet', 'calldata', 'from', 'note', 'conf', 'reveal-after',
+  'quote', 'ref-pool', 'grad', 'vault', 'base', 'base-vest', 'testnet', 'calldata', 'from', 'note', 'conf', 'reveal-after',
   'fair', 'fly', ...V3_CREATE_FLAGS, ...FAIR_CREATE_FLAGS, ...FLY_CREATE_FLAGS,
   // a launch in one command: its dev buy reads --slippage like gang buy, its bond --use-wbnb like gang bond post
   ...LAUNCH_FLAGS, 'slippage', 'use-wbnb',

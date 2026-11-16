@@ -28,6 +28,7 @@ import { runLp, LP_EVENT_ABIS } from './lp.js'
 import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
 import { runCapped, CAPPED_EVENT_ABIS } from './capped.js'
 import { runFloor, FLOOR_ABI, FLOOR_EVENT_ABIS } from './floor.js'
+import { runBase, BASE_EVENT_ABIS } from './base.js'
 import { runWeekly } from './weekly.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, REDEEM_FEE_ALONE, runLaunch, TAX_CAP_ALONE } from './launch.js'
@@ -601,6 +602,28 @@ PROMOTER SHARE (GangLaunchpad 3.0, 0.34.0+; GANG_PROMOTE_POOL_FACTORY / GANG_TES
   gang promote reclaim | gang promote release-dev (--token <addr> | --module <addr>) [--to <addr>]
                                          the dev: reclaim what no root allocated, after 30 days of settler silence once the token
                                          has graduated, which closes the module FOR GOOD / send what a failed push left
+
+OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; the pad says whether it is open: BSC testnet now; mainnet once the Safe opens it):
+  gang create … --base <5|10> --base-vest <30|90|180> [--grad 6|9|12|15] [--buy-tax <1-5> --sell-tax <1-5>]
+                                         the create also buys 5% or 10% of the supply on the curve, as its first trade, for
+                                         the token's own base vault (GangBaseVault). The tx pays exactly the pad's
+                                         previewBaseCost in BNB (e.g. 5% at 9 BNB: 0.149 BNB; 1% fee included, 70% of it back
+                                         as your creator fee). The vault never trades: the base is locked until graduation;
+                                         then the first gang base release (anyone's) starts the clock and it is released
+                                         linearly over --base-vest days to your wallet (5%: 30 / 90 / 180; 10%: 90 / 180;
+                                         fixed for good). If the token never graduates, the base and its cost stay locked FOR
+                                         GOOD. The preview shows the cost, the schedule, what you can get (spec table: least,
+                                         at the graduation price, days to recover the cost) and what others pay more.
+                                         GangBond does not constrain the base (the vault refills your wallet), so a bond is no
+                                         promise about it. WBNB quote only (no --quote / --ref-pool), no --dividend, not with
+                                         --vault / --promote / --fair / --fly or a launch in one command (--dev-buy, --bond,
+                                         --buyback, --split, --lp, --tax-cap, --floor); taxed, the recipient is usually you.
+                                         abcd on: sent through createWithSalt with the BNB
+  gang base status --token <addr>        the vault, base size, period, start (or not started), total, released, releasable,
+                                         vested so far and unreleased (counted by time, not from the vault's balance)
+  gang base release --token <addr>       anyone, after graduation: the first call starts the release (sends nothing); later
+                                         ones send what has vested to the creator (never to the caller). --testnet,
+                                         --calldata, --from as elsewhere
 
 BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND / GANG_TESTNET_BOND = its address):
   gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover <coverage %>) [--use-wbnb]
@@ -1355,6 +1378,7 @@ function checkFlyCreate() {
             : `--${wrong} is a V3 tax setting; a 铸币飞轮 token's tax goes to holders, the platform and the creator in fixed parts`)
   }
 }
+const BASE_ALONE = 'a --base create stands alone in this CLI: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient. A GangBond would not constrain the base anyway (the vault refills your wallet); a dev buy is its own gang buy after the create lands (your wallet can still hold 1%)'
 const VAULT_ALONE = 'a --vault create stands alone: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient (the 2.0 金库版 pad has none of them); a dev buy is its own gang buy after the create lands'
 // --grad picks a V3 curve's graduation target (2.0 / 3.0); a 打新 / 铸币飞轮 sale ends at its own --raise
 const GRAD_ONLY_V3 = (what) => `--grad is a V3 curve setting (the graduation target, 2.0 / 3.0): ${what} fills at its --raise instead, so leave --grad out`
@@ -1389,9 +1413,9 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'fly', 'creator-fee', 'promote', 'call-bond'])
+  'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'base', 'fly', 'creator-fee', 'promote', 'call-bond'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...FLOOR_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...FLOOR_EVENT_ABIS, ...BASE_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
 // Split with three amounts is the event of four module kinds, and the amounts mean different things in each (a buy-back
 // splitter's toBuyback / toDev, an LP splitter's toLp / toDev, a promoter pool's toEscrow / toDev, a floor module's
 // toTreasury / toPayees): gang tx asks the
@@ -1496,6 +1520,16 @@ async function main() {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${VAULT_ALONE}`)
   }
+  // --base (3.0 opening base): a V3 create paid in BNB, alone: no 打新 / 铸币飞轮, no chained launch
+  if (tokenCreate && (flag('base') || flag('base-vest'))) {
+    if (!flag('base')) fail('--base-vest needs --base 5 or --base 10 (the opening base size)')
+    if (flyCreate || flag('fair') || cmd === 'fair') fail(`--base buys an opening base on a V3 curve token: leave --${flyCreate ? 'fly' : 'fair'} out`)
+    // --promote / --vault first: a taxed --promote alone starts a launch in one command (a promoter pool module clone)
+    const other = ['promote', 'promote-days', 'vault'].find((f) => flag(f))
+    if (other) fail(other === 'vault' ? '--base and --vault can\'t go together: a token with an opening base is not bound to a vault' : `--${other}: --base and --promote can't go together (not offered with the opening base)`)
+    const launch = LAUNCH_FLAGS.find((f) => flag(f))
+    if (launch) fail(`--${launch}: ${BASE_ALONE}`)
+  }
   // gang weekly apply takes the same --description / --website / --twitter as a create (they describe the token to come)
   const weeklyApply = cmd === 'weekly' && args[1] === 'apply'
   for (const name of LINK_FLAGS) {
@@ -1566,6 +1600,8 @@ async function main() {
     case 'floor':
       await refuseFly('a floor module')
       return runFloor(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'base':
+      return runBase(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'weekly':
       return runWeekly(args[1], { opt, flag, out, fail, resolveLogo: resolveLogoUri })
     case 'capabilities':

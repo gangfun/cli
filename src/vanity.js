@@ -4,7 +4,8 @@ import { PAD3_GEN } from './gangpad.js'
 
 export const VANITY_ABI = parseAbi([
   'function vanityDeployer() view returns (address)',
-  'function createWithSalt(bytes32 salt, bytes data) returns (address token)',
+  // payable since the opening base (createWithBase takes BNB through it); every other entry it reaches takes none
+  'function createWithSalt(bytes32 salt, bytes data) payable returns (address token)',
   'function tokenInitCodeHash(string name, string symbol, string uri, address handler, uint16 buyTaxBps, uint16 sellTaxBps, bool reclaimable) view returns (bytes32)',
   'function mintInitCodeHash(string name, string symbol, string uri, address handler, uint16 buyTaxBps, uint16 sellTaxBps, uint256 startSupply, uint256 maxSupply) view returns (bytes32)',
   'error InvalidSuffix()', 'error VanityContextRequired()', 'error BadVanityCall()',
