@@ -66,6 +66,9 @@ export function codeOf(o = {}) {
   if (/^this wallet holds no Agent ID/i.test(msg)) return 'NO_AGENT_ID' // this wallet's: an inviter's is a usage matter
   if (/baw auth signin|not signed in/i.test(msg)) return 'NOT_SIGNED_IN'
   if (/unreachable|timed out|fetch failed|ECONN|ENOTFOUND|API 5\d\d|RPC error|data unavailable/i.test(msg)) return 'NETWORK'
+  // the wallet can't pay: a new wallet's usual first stop, worth telling apart from a broken command
+  // (BNB, WBNB, a quote's symbol such as USDT, or "quote"; case-sensitive, so a sell's "not enough tokens" stays apart)
+  if (/^not enough (BNB|WBNB|quote\b|[A-Z][A-Z0-9]{1,11}\b)/.test(msg)) return 'NO_FUNDS'
   if (/revert/i.test(msg)) return 'REVERT'
   // the command itself is wrong: a flag named, or a form the CLI asks for. State errors ("needs at least 3000 shares") are not
   if (/^--|^usage|^pass |^give |^use either |^unknown |^gang .*\b(needs|takes)\b|--[a-z][a-z-]+ must|must be (a|an|one|between) /i.test(msg)) return 'USAGE'
@@ -95,7 +98,18 @@ export function eventOf(argv, o = {}) {
     ? { signedIn: o.status === 'CONNECTED', agent: o.isAgent ?? null, dev: o.devMode ?? null, all: o.tradeAllTokens ?? null }
     : null
   const cl = clientOf()
-  return { t: Math.floor(Date.now() / 1000), c, s, f, ok, code: ok ? '' : codeOf(o), pf, ...(cl && { cl }) }
+  return { t: Math.floor(Date.now() / 1000), c, s, f, ok, code: ok ? '' : eventCode(o), pf, ...(cl && { cl }) }
+}
+
+/**
+ * The event's code: codeOf, plus baw's error name after a numeric baw code (953401:SOME_NAME), so a refusal can be read
+ * without the message. The name is baw's constant (an upper-case word), never text.
+ */
+function eventCode(o) {
+  const code = codeOf(o)
+  const name = String(o.errorName ?? '')
+  if (!/^\d{1,10}$/.test(code) || !/^[A-Z][A-Z0-9_]{1,30}$/.test(name)) return code
+  return `${code}:${name}`.slice(0, 48)
 }
 
 let recorded = false

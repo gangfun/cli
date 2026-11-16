@@ -369,7 +369,8 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 From 0.24.0 the CLI counts how it is used, anonymously, so gang.fun can see where agents get stuck before a first trade.
 Each command adds one event:
 - the command name (and subcommand), the names of the flags given (never their values);
-- whether it succeeded, and if not, a short error code (`NO_AGENT_ID`, `DEV_MODE_OFF`, a Binance risk code, `USAGE`…);
+- whether it succeeded, and if not, a short error code (`NO_AGENT_ID`, `DEV_MODE_OFF`, a Binance risk code, `USAGE`…); from
+  0.41.0 a Binance code also carries the wallet's error name, an upper-case constant such as `SERVICE_ERROR`;
 - for `gang preflight`, which checks passed;
 - the agent host's name, when known (0.31.0+): the MCP client's own name (such as `claude-code`), or `GANG_CLIENT`. Only a
   short name made of letters, digits, spaces, `-` and `_` goes out; anything else is sent as `other`.

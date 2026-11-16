@@ -3,6 +3,7 @@ import {
   CONFIG, ADDR, listTokens, tokenInfo, quoteBuy, quoteSell, isAgent, balanceOf, allowance,
   calldata, decodeTx, decodeLogs, firstByModuleType, parseEther, fmt, fmtTok, resolvePad, isAddress, client,
 } from './chain.js'
+import { wantsHelp } from './help.js'
 import { baw, bawAddress, bawError, bawFailed, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
 import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
@@ -59,6 +60,7 @@ const out = (o) => {
   if (o && typeof o === 'object' && o.success === false) {
     process.exitCode = 1 // fail() exits 1 too: a refused send can't look like a success to a script
     if (!o.code) o = { ...o, code: codeOf(o) }
+    if (o.code === 'NO_FUNDS' && !o.fund) o = { ...o, fund: /^not enough (BNB|WBNB)\b/.test(String(o.error ?? '')) ? FUND_HINT : FUND_TOKEN_HINT }
   }
   if (refInfo && o && typeof o === 'object' && !('ref' in o)) o = { ...o, ref: refInfo }
   // a failed result built no tx, so it claims no tag; a bad id is always said
@@ -1405,6 +1407,14 @@ function create() {
 // after a clean preflight: where a first trade usually starts
 // gang.fun's setup page: every preflight issue code, step by step, for the user to open on their phone (gang-web-legacy /start)
 const SETUP_GUIDE = 'https://gang.fun/start'
+// a wallet that can't pay: what to tell the user (gang preflight prints the wallet's address)
+const FUND_HOW = 'send BNB on BNB Smart Chain (BEP-20) to the Agentic Wallet address (gang preflight shows it), keeping about 0.002 BNB more than the trade for gas'
+const FUND_HINT = `Top up: ${FUND_HOW}; then run the same command again. Nothing was sent.`
+// a token that pays in an ERC-20 quote (USDT, GANG, …): that token, plus BNB for gas
+const FUND_TOKEN_HINT = 'Top up: send the token this trade pays in (see need / have) on BNB Smart Chain (BEP-20) to the Agentic Wallet address '
+  + '(gang preflight shows it), plus about 0.002 BNB for gas; then run the same command again. Nothing was sent.'
+// below this a wallet can't make a first small buy plus gas: preflight warns, without failing
+const LOW_BNB = parseEther('0.005')
 const PREFLIGHT_NEXT = [
   'gang trending: what other agents buy now',
   'gang notes --min-hit 0.6: followable calls by authors who hit 60%+',
@@ -1500,6 +1510,12 @@ async function pendingReport() {
 }
 
 async function main() {
+  // agents ask a command for its help (gang buy --help, gang create -h): answer with the help, not an unknown-flag refusal
+  if (cmd !== 'help' && wantsHelp(args)) {
+    record(args, { success: true })
+    console.log(HELP)
+    return
+  }
   if (UPDATE_CHECKED.has(cmd)) update = checkUpdate()
   // streams and the MCP server print no single result: count the start (MCP tools run this CLI, so each one counts itself)
   if (cmd === 'watch' || cmd === 'mcp') record(args, { success: true })
@@ -1614,26 +1630,39 @@ async function main() {
       const issues = []
       const status = bawStatus()
       if (status !== 'CONNECTED') issues.push({ code: 'NOT_SIGNED_IN', fix: 'Run `baw auth signin` and confirm in the Binance App.' })
-      let me = null, settings = null, agent = false
+      let me = null, settings = null, agent = false, balance = null, balanceCut = false
       if (status === 'CONNECTED') {
         me = bawAddress(); settings = bawSettings()
         if (!settings.devMode?.enabled) issues.push({ code: 'DEV_MODE_OFF', fix: 'Enable Developer Mode in Binance App → Agentic Wallet settings.' })
         if (!settings.tradeAllTokens) issues.push({ code: 'TRADE_ALL_TOKENS_OFF', fix: 'Enable "Trade all tokens" in Binance App → Agentic Wallet settings, otherwise SELLING Gang tokens is blocked by risk control (buying still works).' })
+        // the BNB balance, read beside the Agent ID check (after the last baw call, which blocks the event loop). Capped at
+        // 3 s: with every RPC down, the transport's retries would hold preflight for far longer. Null when unread
+        const cap = new Promise((r) => { const t = setTimeout(() => { balanceCut = true; r(null) }, 3000); t.unref?.() })
+        balance = Promise.race([client.getBalance({ address: me }), cap]).catch(() => null)
         agent = await createGateAgent(me)
         if (!agent) issues.push({ code: 'NO_AGENT_ID', fix: 'Claim a .ai Agent ID in Binance Wallet (Agent ID banner). Gang only lets Agent ID holders buy/create.' })
       }
       // after the baw calls: they block the event loop, and the fetch's short timeout would run out meanwhile
       const hot = trendingBlock({ wallet: me })
-      return out({
+      // an empty wallet is the next stop after setup: say so now, as a warning (setup itself is done)
+      const bnb = balance && await balance
+      const warnings = bnb != null && bnb < LOW_BNB
+        ? [{ code: 'LOW_BNB', fix: 'Top up before the first trade: send BNB on BNB Smart Chain (BEP-20) to the address above, keeping about 0.002 BNB more than the trade for gas.' }]
+        : []
+      out({
         success: issues.length === 0, cliVersion: VERSION, status, address: me,
         // `launchpad` = createPad: kept for readers of the old field (it used to be the V2 create target)
         launchpad: padNets('v3').mainnet.pad, createPad: padNets('v3').mainnet.pad, createPadGen: padNets('v3').mainnet.gen, isAgent: agent,
         devMode: settings?.devMode?.enabled ?? null, tradeAllTokens: settings?.tradeAllTokens ?? null, issues,
+        ...(bnb != null && { bnb: fmt(bnb) }), ...(warnings.length && { warnings }),
         note: 'New create → GangLaunchpad (gang create = gang v3 create; gang fair create for 打新). LaunchpadV2 / Soft / U / S take no new tokens: existing buy / sell only.',
         ...(!issues.length && { next: PREFLIGHT_NEXT }),
         ...(issues.length && { guide: { url: SETUP_GUIDE, note: 'Step-by-step setup (Agentic Wallet, Agent ID, Developer Mode, Trade all tokens) for the user to open on their phone; give it with the fixes.' } }),
         ...await hot.then((t) => (t ? { trending: t } : {})),
       })
+      // the cut-off read is still pending and would keep the process (and an MCP host waiting on it) alive: exit once printed
+      if (balanceCut) process.stdout.write('', () => process.exit(process.exitCode ?? 0))
+      return
     }
     case 'list': {
       // --kind v3 / fair: GangLaunchpad tokens (from gang.fun); without it the V2 / Soft / U / S pads, as before

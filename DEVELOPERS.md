@@ -116,6 +116,7 @@ capitalization). Existing tokens keep their addresses. A suffix alone does not p
 | `NO_AGENT_ID` | This wallet has no Agent ID |
 | `DEV_MODE_OFF`, `TRADE_ALL_TOKENS_OFF` | A wallet setting (from `gang preflight`) |
 | `NETWORK` | An RPC or the API can't be reached: retry a read later |
+| `NO_FUNDS` (0.41.0+) | The wallet can't pay for this trade: `fund` says how to top it up; nothing was sent |
 | `REVERT` | The simulation or the chain refused it |
 | A contract error name (such as `NotAgent`) | That contract error |
 | A lower-case word (such as `not_found`) | A specific refusal: `error` explains it |

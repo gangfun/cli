@@ -317,7 +317,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 从 0.24.0 起，CLI 会匿名统计使用情况，让 gang.fun 知道 agent 在第一笔交易之前卡在哪一步。每条命令记一条事件：
 - 命令名（和子命令）、用到的参数名（不含参数值）；
-- 是否成功；失败时带一个简短的错误码（`NO_AGENT_ID`、`DEV_MODE_OFF`、币安风控码、`USAGE` 等）；
+- 是否成功；失败时带一个简短的错误码（`NO_AGENT_ID`、`DEV_MODE_OFF`、币安风控码、`USAGE` 等）；从 0.41.0 起，币安的错误码后面还会带上钱包返回的错误名（全大写常量，如 `SERVICE_ERROR`）；
 - `gang preflight` 另记各项检查是否通过；
 - Agent 客户端名称（已知时，0.31.0+）：MCP 客户端自己的名称（如 `claude-code`），或 `GANG_CLIENT`。只发送由字母、数字、空格、`-` 和 `_`
   组成的短名称，其他内容一律记为 `other`。

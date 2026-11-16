@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, join, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { wantsHelp } from './help.js'
 import { clientOf } from './telemetry.js'
 import { VERSION } from './version.js'
 
@@ -235,6 +236,8 @@ export function invalid(t, a) {
     }
   }
   if (t.name === 'gang_cli' && Object.hasOwn(NOT_VIA_CLI, a.args[0])) return NOT_VIA_CLI[a.args[0]]
+  // gang buy --help prints plain text, which this tool can't return: the help is gang_help's (a --help after a text flag is its value)
+  if (t.name === 'gang_cli' && wantsHelp(a.args)) return NOT_VIA_CLI.help
   if (t.name === 'gang_watch') {
     const mode = a.mode || (a.token ? 'token' : 'market')
     if (mode === 'token' && !a.token) return 'mode token needs token'

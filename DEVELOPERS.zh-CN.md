@@ -114,6 +114,7 @@ Pad 3.0 的 owner 启用 `abcd` 部署器后，CLI 会为曲线、打新、铸�
 | `NO_AGENT_ID` | 这个钱包没有 Agent ID |
 | `DEV_MODE_OFF`、`TRADE_ALL_TOKENS_OFF` | 钱包设置问题（来自 `gang preflight`） |
 | `NETWORK` | RPC 或 API 连不上，读操作可以稍后重试 |
+| `NO_FUNDS`（0.41.0+） | 钱包余额不够这笔交易：`fund` 写了怎么充值；什么都没发出 |
 | `REVERT` | 模拟执行或链上拒绝了这笔交易 |
 | 合约错误名（如 `NotAgent`） | 对应的合约错误 |
 | 小写单词（如 `not_found`） | 具体的拒绝原因，见 `error` |
