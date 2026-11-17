@@ -35,6 +35,16 @@
 
 买家只付正常的价格和手续费：奖励池是你自己的钱，按公开的固定规则发给毕业前最后几笔买入。`gang buy` / `gang sell` 的预览会在 `rewards.gradReward` 里说明这笔会不会计入、卖出会让哪些格子失效。`gang grad-reward status --token 0x…` 显示奖励池、规则、名单、撤回状态和你能领多少；`claim`、`settle`、`sweep`、`retry-carry`、`refund-request`、`refund-cancel`、`refund` 负责其余操作。
 
+**倒计时奖励（0.43.2+，BSC 主网和测试网）：** `gang create … --buy-tax 3 --sell-tax 3 --countdown-reward --cd-max-payout <金额> [--cd-window 60m] [--cd-max-round 6h] [--cd-idle 30d] [--cd-payout 30] [--cd-last 20] [--cd-dev 0] [--cd-entries 10] [--cd-min-buy 0.05] [--cd-min-pot 0.1] [--cd-seed <金额>]` 把币的税收接收地址设成它自己的倒计时奖励模块（GangCountdownReward，`countdown-v1`）：你那份池子税变成买家的奖励。
+
+- **怎么计入**：毕业后，每笔通过模块买入、至少 `--cd-min-buy` 的买单，把倒计时推到 `--cd-window` 之后；一轮最长不超过第一笔计入后的 `--cd-max-round`。
+- **怎么分**：倒计时结束时，这一轮最后 `--cd-entries` 笔计入的买入平分奖励池的 `--cd-payout`%（不超过必填的 `--cd-max-payout`），最后一笔再多拿这一轮的 `--cd-last`%。到上限结束的轮次结束时间是公开的，所以只平分，不发额外部分。
+- **其他**：奖励池低于 `--cd-min-pot` 时不开新轮；连续 `--cd-idle` 天没有计入的买入，任何人可以把最后一轮再发一次。`--cd-dev`% 的税留给你。WBNB 报价的币 `--cd-min-buy` / `--cd-min-pot` 默认 0.05 / 0.1 BNB，其他报价币必须写明。
+- **预览**：写明池子成交额有多少进奖励池、一轮最多发多少、占满所有名额要花多少（名额数 × 最低买入 × 买入税）。要如实告诉买家：任何人（包括你自己）都可以用多个钱包占名额；只有 gang CLI / MCP 通过模块发出的买入才算（`gang buy`；PancakeSwap 路由、聚合器、GangRouter 都不算；gang.fun 网站只展示倒计时）。
+- **步骤**：和 `--floor` 一样，先算出币的地址并为它克隆模块，再在这个地址建币、bind，有 `--cd-seed` 时再批准和 fund。每次运行一笔交易，重复运行同一条命令。中途改了税率或 `--cd-*` 设置会被拒绝。fund 预览构建过、但模块账目里还看不到时，只有加 `--cd-seed-again` 才会再构建一笔；前一笔可能还在 Binance App 里等批准，两笔只批一笔。暂时不能和 `--grad-reward` 一起用（两个奖励同时开放在以后的版本）。
+
+毕业后的 `gang buy` 默认通过模块买入并要求计入（不计入的买单在构建前就会拒绝；`--cd-uncounted` 照买不计入），预览的 `rewards.countdown` 写明计不计入、原因、当前轮次、截止时间和上限、奖励池、你的预计份额。`gang countdown status|claim|settle|finalize|claim-dev --token 0x… [--to 0x…]` 负责其余操作。工厂：主网 `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`，测试网 `0x0f83ABC7d39C0d043d3f5612E304D9395B5fe582`。
+
 **喊单保证金和跟单绑定（0.37.0+）：** agent 可以给自己的喊单（GangLaunchpad 3.0 内盘币上的一条买入 note）押保证金：带 `--note` 买入，10 分钟内执行 `gang call-bond post --token 0x… --amount 0.1 --for 48h`（note 默认取这个钱包最近一次买这个币的交易；`--hold` 默认是全部余额）。结算前，这个钱包的持仓不能低于 hold：只要一次卖出、锁进 vault 或转出让余额低于它（过了截止时间、`gang call-bond settle` 还没执行完之前也算；结算分两步，间隔 1 小时），任何人都能 `gang call-bond report`：举报人拿 1%，一半销毁，其余按损失赔给这条 note 的跟单者（root 的 2 天争议期过后用 `gang call-bond claim` 领取）。违约的保证金一分都不会回到喊单者。报价币：WBNB、USDT、USDC、USD1。喊单者用 `gang v3 sell` 卖到低于 hold 会被拒，除非加 `--break-call-bond`。在开了推广分成的币上，`gang follow` 会把 note 作者永久绑成这个钱包的推广人（走 `buyWithPromoter`，价格和手续费不变；加 `--no-promoter` 就是普通跟单）。GangCallBond 已在 BSC 主网上线（`0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D`，2026-11-09 部署，owner 是平台多签；已内置），测试网也有（`0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70`）。
 
 **GangLaunchpad 2.0、creator 分成和毕业目标（0.23.0+）：** 2.0 是同一个内盘的新一代（V3 曲线和打新都一样）。V3 内盘每笔买卖收的 1% 手续费里，70% 留在内盘上归这个币的 creator，creator 毕业前后随时可以领：`gang creator-fee` 列出这个 creator 所有 2.0 币各自可领多少，`gang creator-fee --token <addr> --claim [--to <addr>]` 领取。这笔钱只归 creator 本人，不给税收接收地址，也不经过回购 / 分账 / 加池模块；1.0 的币和打新没有这项。2.0 还允许 creator 自选 V3 毕业目标：`gang create --grad 6|9|12|15`（内盘募到的 BNB，默认 9；毕业时市值约为目标的 5 倍）；`gang info` / `gang status` 显示每个币的 `graduationTargetBnb`。新币发到这条链上内置的最新一代（`gang preflight` 的 `createPadGen`）；已有的币始终用它自己那一代的内盘、GangRouter、GangBond 和模块工厂（CLI 逐个问各代内盘的 `kindOf` 找到它）。BSC 测试网上 2.0 已上线并且是发币目标（内盘 `0xb14d415f70D7F99f0D93Bd3BF76e0D6b38b53B3E`，GangRouter `0x5a4FA2D91638a305EdF027894753c943f095dDAA`；测试网第一版 2.0 `0x6381…39be` 不再发新币，上面的币照常交易和领取）。BSC 主网 2026-10-31 起 2.0 已上线并且是发币目标（内盘 `0x770331a9accdb53ACb4a45B6c5B7D151fADCe557`，GangRouter `0xa83209d6bfC2B220cD86410cCDDC71FEb354844a`）；1.0 的币照常在 1.0（内盘 `0x15CF…4365`）上交易。
@@ -142,6 +152,8 @@ gang create … --base 5|10 --base-vest 30|90|180 [--grad 6|9|12|15]  # 3.0 开�
 gang base status|release --token 0x…  # 底仓金库：大小、释放期、开始时间、已释放、可释放、未释放；release 第一次开始计时，之后把到期的部分转给创建人
 gang create … --grad-reward <种子钱> [--gr-min-buy <金额>] [--gr-entries 1-20] [--gr-last 0-50] [--gr-refund-days 30-180]  # 3.0 冲毕业奖励：你出钱奖励毕业前最后几笔买入，按花费分
 gang grad-reward status|claim|settle|sweep|retry-carry|refund-request|refund-cancel|refund --token 0x…  # 奖励池、名单和领取；创建人撤回要先公示 7 天
+gang create … --buy-tax 3 --sell-tax 3 --countdown-reward --cd-max-payout 1 [--cd-* …] [--cd-seed 0.2]  # V3 倒计时奖励：你那份税变成买家的奖励
+gang countdown status|claim|settle|finalize|claim-dev --token 0x… [--to 0x…]  # 轮次、奖励池、领取；gang buy 默认走模块
 gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
 gang execute --request-id <id>
 gang tx --pending                            # 在 Binance App 里批准过的交易：按预览时的调用自动找到交易，再按下面这条处理
@@ -323,6 +335,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_COMBO_FACTORY` / `GANG_TESTNET_COMBO_FACTORY` | 发币目标那一代的 GangComboSplitterFactory（同时给 `--buyback` / `--lp` / `--split` 中的几个；已有的币用它自己那一代的）。默认（CLI 0.22.0+）：主网 3.0 `0x2018…eA39`（2.0 `0xcCeA…98Be`，1.0 `0xd33C…1DBd`，2026-10-31 起），测试网 3.0 `0xdc16…543C`（2.0 `0x312c…84BD`，1.0 `0x52a8…4CFE`；第一版 2.0 没有） |
 | `GANG_CAPPED_FACTORY` / `GANG_TESTNET_CAPPED_FACTORY` | 发币目标那一代的 GangCappedSplitterFactory（有税 V3 发射的 `--tax-cap`）。CLI 0.35.0+；已内置：主网 `0x294E901ecb66af280C1cDD26fD871601d89a2Dca`，测试网 `0xe3f61865d98993dd39c136Af19651C6F6686498A` |
 | `GANG_FLOOR_FACTORY` / `GANG_TESTNET_FLOOR_FACTORY` | 发币目标那一代的 GangFloorModuleFactory（有税 V3 发射的 `--floor`）。已内置：主网 `0x057d2C1557a0E8298a1E00834D6064497f5DC2fC`，测试网 `0x0804C018201D8fFe378b873b41B67f136dbdc3F8` |
+| `GANG_COUNTDOWN_FACTORY` / `GANG_TESTNET_COUNTDOWN_FACTORY` | 发币目标那一代的 GangCountdownRewardFactory（`--countdown-reward`）。CLI 0.43.2+；已内置：主网 `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`，测试网 `0x0f83ABC7d39C0d043d3f5612E304D9395B5fe582` |
 | `GANG_CALL_BOND` / `GANG_TESTNET_CALL_BOND` | GangLaunchpad 3.0 的 GangCallBond（`gang call-bond`）。CLI 0.37.0+；已内置：主网 `0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D`，测试网 `0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | 发币目标那一代的 GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖；已有的币用它自己那一代的）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 3.0 `0xec97…61e7`（2.0 `0xa832…844a`，1.0 `0xE040…79C4`），测试网 3.0 `0x0954…87b9`（2.0 `0x5a4F…dDAA`，第一版 2.0 `0xb218…FC08`，1.0 `0x6bB6…C9F6`） |
 

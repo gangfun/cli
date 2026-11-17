@@ -6,7 +6,7 @@ import { DIR } from './notes.js'
 import { creatorFeeShareOf, gradTiersOf, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
 import { bondAddress, BOND_ABI } from './bond.js'
 import { walletFor } from './fair.js'
-import { parseAmount, parseIntIn, step } from './steps.js'
+import { fundingStep, parseAmount, parseIntIn, step } from './steps.js'
 import { buybackBpsOf, FACTORY_ABI, notDeployed, simulateCall, SPLITTER_ABI, splitterFactoryAddress, splitterOf } from './buyback.js'
 import { parsePromote, poolFactoryAddress, poolNotDeployed, poolOf, POOL_ABI, POOL_FACTORY_ABI, PROMOTE_PAD_ABI, revertOf as promoteRevertOf, simulatePool, wantsPoolModule } from './promote.js'
 import { parseSplitSpec, simulateSplit, SPLIT_ABI, SPLIT_FACTORY_ABI, splitFactoryAddress, splitLine, splitNotDeployed, splitOf } from './split.js'
@@ -15,6 +15,8 @@ import { claimCmd, notThroughModule } from './creatorfee.js'
 import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotDeployed, comboOf, comboParts, parseComboSpec, PERMANENT_NOTE, simulateCombo } from './combo.js'
 import { FLOOR_ABI, FLOOR_FACTORY_ABI, FLOOR_NOTE, floorFactoryAddress, floorLine, floorNotDeployed, floorOf, floorShown, OTHER_ASSETS_NOTE as FLOOR_OTHER_ASSETS_NOTE, parseFloorSpec, PERMANENT_NOTE as FLOOR_PERMANENT_NOTE, simulateFloor, treasuryShare } from './floor.js'
 import { mineToken } from './vanity.js'
+import { GRAD_FLAGS } from './gradreward.js'
+import { CD_ALONE, CD_FLAGS, COUNTDOWN_ABI, COUNTDOWN_FACTORY_ABI, countdownConfig, countdownCreateView, countdownFactoryAddress, countdownNotLive, countdownRaw, countdownShown, formatCountdown, parseCountdownSpec, sameConfig, simulateCountdown } from './countdown.js'
 import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappedNotDeployed, cappedOf, cappedParts, capUnits, capVolume, COVERAGE_NOTE, OTHER_ASSETS_NOTE, parseCappedSpec, PERMANENT_NOTE as CAPPED_PERMANENT_NOTE, quoteUnits, simulateCapped, splitPcts } from './capped.js'
 
 /**
@@ -57,7 +59,13 @@ import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappe
  */
 
 // the dev's recipient modules by flag, as the creator-fee note names them
-const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', floor: 'floor module', promote: 'promoter pool module' }
+const MODULE_NAMES = { buyback: 'buy-back splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', floor: 'floor module', countdown: 'countdown reward module', promote: 'promoter pool module' }
+/**
+ * The modules cloned for ONE token address before the token exists (floor-v1, countdown-v1): the plan keeps that address,
+ * the salt and the metadata under the module's own key, and the create reuses them.
+ */
+const PINNED = { floor: 'floor module', countdown: 'countdown reward module' }
+const pinnedOf = (p) => (p?.module === 'floor' ? p.floor : p?.module === 'countdown' ? p.countdown : null) ?? null
 const LAUNCH_DIR = process.env.GANG_LAUNCH_DIR || join(dirname(DIR), 'launch')
 const TTL_MS = 7 * 24 * 3600_000
 const PAD_ABI = parseAbi([
@@ -110,6 +118,10 @@ const UNTRUSTED = {
     why: '--tax-cap (a capped recipient) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its buy-backs and liquidity adds price on what the pair receives (a quote that taxes transfers into the pair fails every chunk), the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --tax-cap',
   },
+  countdown: {
+    why: '--countdown-reward (a countdown reward module) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its pool counts on the quote arriving and leaving in full, and the keeper serves only those quotes',
+    hint: 'drop --quote (WBNB), use a listed quote, or launch without --countdown-reward',
+  },
   floor: {
     why: '--floor (a floor module) needs WBNB, GANG or a quote listed in the pad\'s QuoteRegistry: its treasury counts on the quote arriving and leaving in full, the keeper serves only those quotes, and an unlisted quote may call a payee back on transfer',
     hint: 'drop --quote (WBNB), use a listed quote, or launch without --floor',
@@ -126,13 +138,13 @@ export async function untrustedBuybackQuote(read, net, quote, mode = 'buyback') 
   if (listed) return null
   return {
     error: listed === null
-      ? `could not read the pad's QuoteRegistry to check the ${{ combo: '--buyback / --lp / --split', capped: '--tax-cap', floor: '--floor', promote: '--promote' }[mode] ?? `--${mode}`} quote: try again`
+      ? `could not read the pad's QuoteRegistry to check the ${{ combo: '--buyback / --lp / --split', capped: '--tax-cap', floor: '--floor', countdown: '--countdown-reward', promote: '--promote' }[mode] ?? `--${mode}`} quote: try again`
       : UNTRUSTED[mode].why,
     quote, hint: UNTRUSTED[mode].hint,
   }
 }
 
-export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'lp', 'lp-to', 'tax-cap', 'tax-cap-share', 'after-cap', 'floor', 'redeem-fee', 'restart']
+export const LAUNCH_FLAGS = ['dev-buy', 'bond', 'bond-hold', 'bond-days', 'buyback', 'buyback-to', 'split', 'lp', 'lp-to', 'tax-cap', 'tax-cap-share', 'after-cap', 'floor', 'redeem-fee', 'countdown-reward', ...CD_FLAGS, 'restart']
 const NOTE_FLAGS = ['note', 'conf', 'reveal-after']
 /** `gang fair create --dev-buy`, with or without --bond (index.js stops the lone flag, runLaunch the chained one). */
 /** --tax-cap-share / --after-cap without --tax-cap (index.js stops the lone flags, runLaunch the chained ones). */
@@ -142,11 +154,11 @@ export const REDEEM_FEE_ALONE = '--redeem-fee goes with --floor: it is the % of 
 export const FAIR_DEV_BUY = 'a 打新 dev buys its shares in the create itself: use --shares <n> (not --dev-buy)'
 
 /** The run asks for a chained launch (`kind` 'v3' | 'fair'). */
-export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && (flag('dev-buy') || flag('tax-cap') || flag('floor'))) || wantsPoolModule(kind, flag, opt)
+export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || flag('buyback') || flag('split') || flag('lp') || (kind === 'v3' && (flag('dev-buy') || flag('tax-cap') || flag('floor') || flag('countdown-reward'))) || wantsPoolModule(kind, flag, opt)
 /** The recipient modules a launch can clone (their flags): one alone clones its own module, several a combined one. */
 const MODULE_FLAGS = ['buyback', 'split', 'lp']
 /** How a module's flags read in a message. */
-const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', capped: '--tax-cap', floor: '--floor', promote: '--promote on a taxed token' }
+const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', capped: '--tax-cap', floor: '--floor', countdown: '--countdown-reward', promote: '--promote on a taxed token' }
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -201,6 +213,23 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (kind === 'fair') {
     const f = ['floor', 'redeem-fee'].find((x) => flag(x))
     if (f) fail(`--${f} is for V3 tokens: it makes the tax recipient a floor module, and a 打新 token has no recipient`)
+  }
+  if (kind === 'fair') {
+    const f = ['countdown-reward', ...CD_FLAGS].find((x) => flag(x))
+    if (f) fail(`--${f} is for V3 tokens: it makes the tax recipient a countdown reward module, and a 打新 token has no recipient`)
+  }
+  // --countdown-reward: the countdown reward module (GangCountdownReward) of a V3 launch: the token's one recipient slot
+  const countdown = kind === 'v3' && flag('countdown-reward')
+  if (!countdown) {
+    const f = CD_FLAGS.find((x) => flag(x))
+    if (f) fail(`--${f}: ${CD_ALONE}`)
+  }
+  if (countdown && ['grad-reward', ...GRAD_FLAGS].some((x) => flag(x))) {
+    fail('--grad-reward and --countdown-reward can\'t go together in this CLI version: running both rewards on one token (the graduation reward carried into the countdown pool) comes in a later version. Launch with one of them')
+  }
+  if (countdown) {
+    const other = ['floor', 'redeem-fee', 'buyback', 'buyback-to', 'lp', 'lp-to', 'split', 'tax-cap', 'tax-cap-share', 'after-cap', 'recipient', 'vault'].find((x) => flag(x))
+    if (other) fail(`--${other} does not go with --countdown-reward: a token has one tax recipient, and the countdown reward module takes it (the recipient's part of the pool tax becomes the buyers' reward pool)`)
   }
   // --floor: the floor module (GangFloorModule) of a V3 launch; with it, --tax-cap / --tax-cap-share / --split name its
   // payees and their cap instead of a capped recipient's
@@ -292,6 +321,26 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
     floorFactory = floorFactoryAddress(testnet)
     if (!floorFactory) fail(floorNotDeployed(testnet))
+  }
+
+  // --countdown-reward: a taxed V3 token whose recipient is its countdown reward module (the tax share as buyers' rewards)
+  let cdSpec = null
+  if (countdown) {
+    const inRange = (f) => flag(f) && Number(opt(f)) >= 1 && Number(opt(f)) <= 5
+    if (!inRange('buy-tax') || !inRange('sell-tax')) {
+      fail('--countdown-reward needs a taxed token: add --buy-tax and --sell-tax, each 1–5 (in %); the reward pool fills from the tax', { buyTax: opt('buy-tax') ?? null, sellTax: opt('sell-tax') ?? null })
+    }
+    const div = Number(opt('dividend', '0'))
+    if (div === 100) fail('--dividend 100 leaves nothing for the recipient, so the reward pool would never fill: lower it or drop --countdown-reward')
+    if (!(div >= 0 && div < 100)) fail('--dividend must be a number between 0 and 100 (in %)', { got: opt('dividend') })
+    const spec = parseCountdownSpec(opt, flag)
+    if (spec.error) {
+      const { error, ...extra } = spec
+      fail(error, extra)
+    }
+    const factory = countdownFactoryAddress(testnet)
+    if (!factory) fail(countdownNotLive(testnet))
+    cdSpec = { ...spec, factory }
   }
 
   // --buyback: a taxed V3 token whose recipient (the part left after holders) is the dev's splitter
@@ -421,7 +470,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!(div >= 0 && div <= 100)) fail('--dividend must be a number between 0 and 100 (in %)', { got: opt('dividend') })
     poolMod = { factory }
   }
-  const mod = floorSpec ? 'floor' : cappedSpec ? 'capped' : comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : poolMod ? 'promote' : null
+  const mod = cdSpec ? 'countdown' : floorSpec ? 'floor' : cappedSpec ? 'capped' : comboSpec ? 'combo' : buyback ? 'buyback' : split ? 'split' : lp ? 'lp' : poolMod ? 'promote' : null
 
   const client = createPublicClient({ chain: net.chain, transport: rpcTransport(net.rpcs) })
   const read = (address, abi, functionName, args = []) => client.readContract({ address, abi, functionName, args })
@@ -432,11 +481,13 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!tiers.includes(Number(opt('grad')))) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') ?? null })
   }
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
-  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', capped: 'capped-module', floor: 'floor-module', promote: 'promote-module' }[mod]
+  const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', capped: 'capped-module', floor: 'floor-module', countdown: 'countdown-module', promote: 'promote-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
-    ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
+    ...(cdSpec?.seed ? ['seed'] : []), ...(devBuy ? ['dev-buy'] : []), ...(bond ? ['bond'] : [])]
   const rerun = 're-run this same command after executing it'
-  const tag = (stage, extra = {}) => ({ launch: { stage, steps, ...extra } })
+  // a countdown seed that landed is said on every later run (it is never funded again)
+  const seedDone = () => (plan?.module === 'countdown' && plan.seeded ? `done: ${plan.seededText ?? 'the seed'} arrived in the module's books since the seed stage began; it is not funded again` : null)
+  const tag = (stage, extra = {}) => ({ launch: { stage, steps, ...(seedDone() && { seed: seedDone() }), ...extra } })
   const withTag = (stage, extra) => (o) => out({ ...o, ...tag(stage, extra) })
 
   let plan = flag('restart') ? null : readPlan(key)
@@ -461,28 +512,33 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   // ---- a launch keeps the mode it began with (the create, once built, is never redone by a changed flag)
   // a floor module is cloned for one token address: a plan that lost it builds nothing more (no create without the
   // salt and metadata that give that address, no guess at which token is this launch's)
-  if (plan?.module === 'floor' && !plan.floor) return fail('this launch\'s plan has no token address for its floor module: add --restart', { module: plan.splitter })
+  // a countdown launch begun with another factory (an older CLI, or a changed GANG_*COUNTDOWN_FACTORY): its module is not
+  // one this CLI can verify, so nothing more is built on it
+  if (plan?.module === 'countdown' && !plan.done && plan.factory && String(plan.factory).toLowerCase() !== String(countdownFactoryAddress(testnet) ?? '').toLowerCase()) {
+    return fail(`this launch's countdown reward module was cloned by the factory ${plan.factory}, not by ${countdownFactoryAddress(testnet) ?? 'any factory'} (the one this CLI uses now): nothing more is built on it. Add --restart for a new module and token${plan.token ? ` (the token ${plan.token} stays as it is)` : ''}`, { module: plan.splitter, planFactory: plan.factory, factory: countdownFactoryAddress(testnet) })
+  }
+  if (PINNED[plan?.module] && !pinnedOf(plan)) return fail(`this launch's plan has no token address for its ${PINNED[plan.module]}: add --restart`, { module: plan.splitter })
   let created = plan?.startCount !== undefined
   let rebuilt = false
   // a floor launch's token has one possible address: whether its create landed is read there, never guessed from a
   // symbol. Not there yet: the same create is built again (the same salt, so a second one can only revert) — never
   // "--restart", which would clone another module for another address
-  if (created && plan.module === 'floor' && plan.floor && !plan.token) {
-    const c = await read(net.pad, PAD_ABI, 'curves', [plan.floor.token]).catch(() => null)
-    if (c === null) return fail('could not read whether this launch\'s token is created yet (RPC error)', { token: plan.floor.token, retry: 'same command again' })
+  if (created && pinnedOf(plan) && !plan.token) {
+    const c = await read(net.pad, PAD_ABI, 'curves', [pinnedOf(plan).token]).catch(() => null)
+    if (c === null) return fail('could not read whether this launch\'s token is created yet (RPC error)', { token: pinnedOf(plan).token, retry: 'same command again' })
     if (c[0].toLowerCase() !== me.toLowerCase()) {
       created = false
       rebuilt = true
     }
   }
   // the module this plan cloned: 'split' / 'lp' / 'combo' / 'capped' when it says so, else a --buyback splitter (plans from before --split)
-  const planMod = plan?.salt ? (['split', 'lp', 'combo', 'capped', 'floor', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
-  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', floor: 'floor module', promote: 'promoter pool module' }
+  const planMod = plan?.salt ? (['split', 'lp', 'combo', 'capped', 'floor', 'countdown', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
+  const modNoun = { buyback: 'splitter', split: 'split module', lp: 'LP splitter', combo: 'combined recipient', capped: 'capped recipient', floor: 'floor module', countdown: 'countdown reward module', promote: 'promoter pool module' }
   if (mod && created && !plan.splitter) {
     return fail(`this launch was created without ${MOD_FLAG[mod]} (its recipient is fixed): run it again without ${mod === 'combo' ? '--buyback / --lp / --split' : MOD_FLAG[mod]}, or add --restart for a new token`)
   }
   if (planMod && mod !== planMod && (!created || mod)) {
-    const again = planMod === 'combo' ? 'the same --buyback / --lp / --split as before' : planMod === 'capped' ? 'the same --tax-cap / --tax-cap-share / --split / --after-cap as before' : planMod === 'floor' ? 'the same --floor / --redeem-fee / --tax-cap / --tax-cap-share / --split as before' : MOD_FLAG[planMod]
+    const again = planMod === 'combo' ? 'the same --buyback / --lp / --split as before' : planMod === 'capped' ? 'the same --tax-cap / --tax-cap-share / --split / --after-cap as before' : planMod === 'floor' ? 'the same --floor / --redeem-fee / --tax-cap / --tax-cap-share / --split as before' : planMod === 'countdown' ? 'the same --countdown-reward / --cd-* settings as before' : MOD_FLAG[planMod]
     return fail(`this launch began with ${MOD_FLAG[planMod]} (its ${modNoun[planMod]} is cloned or on the way): run it again with ${again}${mod ? ` instead of ${MOD_FLAG[mod]}` : ''}, or add --restart${mod ? '' : ' without it'}`)
   }
 
@@ -877,6 +933,114 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // the countdown module's settings on chain against the --cd-* flags (in the quote's units, read from the module), and
+  // the token it was cloned for against this launch's: before the create and after it. A failed read is retried, never --restart
+  const cdUnits = async (quote) => {
+    const units = await quoteUnits(read, quote)
+    if (units.decimals === null) return { failed: fail('could not read the quote\'s decimals (the --cd-* amounts are counted in them; RPC error?)', { quote, retry: 'same command again' }) }
+    const wbnbQuoted = quote.toLowerCase() === String(net.wbnb).toLowerCase()
+    const conf = countdownConfig(cdSpec, { decimals: units.decimals, wbnbQuoted, symbol: units.symbol || quote })
+    if (conf.error) {
+      const { error, ...extra } = conf
+      return { failed: fail(error, extra) }
+    }
+    return { units, ...conf }
+  }
+  const checkCountdown = async (s, quote) => {
+    const pinned = pinnedOf(plan)
+    if (pinned && s.rewardToken.toLowerCase() !== pinned.token.toLowerCase()) {
+      return { failed: fail('this launch\'s countdown reward module was cloned for another token address than the one this launch planned: add --restart', { module: s.module, rewardToken: s.rewardToken, planned: pinned.token }) }
+    }
+    if (quote && s.rewardQuote.toLowerCase() !== quote.toLowerCase()) {
+      const named = (await quoteUnits(read, quote)).symbol || quote
+      return { failed: fail(`this launch's countdown reward module keeps its pool in ${s.rewardQuote}, not in ${named}: run it again with ${s.rewardQuote.toLowerCase() === String(net.wbnb).toLowerCase() ? 'no --quote' : `--quote ${s.rewardQuote}`}, or add --restart for a new one (its quote can never change)`, { module: s.module, rewardQuote: s.rewardQuote }) }
+    }
+    if (!cdSpec) return {}
+    const want = await cdUnits(s.rewardQuote)
+    if (want.failed) return want
+    if (!sameConfig(s.cfg, want.config)) {
+      const shown = formatCountdown(s, { symbol: want.units.symbol, decimals: want.units.decimals }, '')
+      return { failed: fail(`this launch's countdown reward module is set up like this — ${JSON.stringify(shown.rules)} — not what the --cd-* flags say now: run it again with those, or add --restart for a new one (nothing in it can change after the clone)`, { module: s.module, onChain: shown.rules }) }
+    }
+    return want
+  }
+
+  // ---- countdown reward module: the token's address first (its final name, symbol, metadata and tax rates decide it),
+  // then the module cloned for that address, at predict(dev, plan.salt), as the floor module. The create later uses the
+  // same salt and metadata
+  if (cdSpec && !created) {
+    const quote = flag('quote') ? opt('quote') : net.wbnb
+    if (!isAddress(quote ?? '')) return fail('--quote must be a 0x address', { got: quote ?? null })
+    if (!plan?.salt) {
+      const refused = await untrustedBuybackQuote(read, net, quote, 'countdown')
+      if (refused) {
+        const { error, ...extra } = refused
+        return fail(error, extra)
+      }
+      const want = await cdUnits(quote)
+      if (want.failed) return want.failed
+      if ((await client.getCode({ address: cdSpec.factory }) ?? '0x') === '0x') {
+        const env = testnet ? 'GANG_TESTNET_COUNTDOWN_FACTORY' : 'GANG_COUNTDOWN_FACTORY'
+        return fail(`GangCountdownRewardFactory has no code at ${cdSpec.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}: launch without --countdown-reward for now${process.env[env] ? ` (or fix ${env})` : ''}`, { factory: cdSpec.factory })
+      }
+      const vctx = { ...net, client, read }
+      const handler = await read(net.pad, FLOOR_PAD_ABI, 'taxHandler')
+      const buyBps = Math.round(Number(opt('buy-tax')) * 100), sellBps = Math.round(Number(opt('sell-tax')) * 100)
+      const probe = await mineToken(vctx, me, { args: [name, symbol, '', handler, buyBps, sellBps, false] }).catch((e) => fail('could not read the pad\'s token deployer (RPC error)', { detail: e.shortMessage || e.message.split('\n')[0], retry: 'same command again' }))
+      if (!probe) return fail('--countdown-reward is not available on this pad yet: a countdown module is cloned for the address its token will have, and this pad does not create tokens at an address known in advance (its CREATE2 deployer is not on)', { pad: net.pad })
+      const salt = `0x${randomBytes(32).toString('hex')}`
+      const at = await read(cdSpec.factory, COUNTDOWN_FACTORY_ABI, 'predict', [me, salt])
+      // dry-run with the probe's address before anything is uploaded: a clone that would fail publishes nothing
+      const dry = await simulateCountdown(client, me, cdSpec.factory, COUNTDOWN_FACTORY_ABI, 'create', [probe.token, quote, want.config, salt])
+      if (dry.failed) return out({ success: false, step: 'countdown-module', factory: cdSpec.factory, ...tag('countdown-module'), ...dry.failed })
+      // the metadata now: its URL is part of the token's address, so it is fixed here and the create reuses it
+      io.checkMeta()
+      const logo = await io.resolveLogo()
+      const meta = await io.resolveMeta({ name, symbol, logoURI: logo.logoURI })
+      const tokenAt = await mineToken(vctx, me, { args: [name, symbol, meta.metaURI, handler, buyBps, sellBps, false] })
+      const args = [tokenAt.token, quote, want.config, salt]
+      const sim = await simulateCountdown(client, me, cdSpec.factory, COUNTDOWN_FACTORY_ABI, 'create', args)
+      if (sim.failed) return out({ success: false, step: 'countdown-module', factory: cdSpec.factory, ...tag('countdown-module'), ...sim.failed })
+      writePlan(key, {
+        ...base, salt, splitter: at, factory: cdSpec.factory, module: 'countdown',
+        countdown: { token: tokenAt.token, salt: tokenAt.salt, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }), metaURI: meta.metaURI, metadata: meta.metadata, buyBps, sellBps },
+      })
+      const data = encodeFunctionData({ abi: COUNTDOWN_FACTORY_ABI, functionName: 'create', args })
+      const platformTaxPct = Number(await read(net.pad, PAD_ABI, 'PLATFORM_TAX_BPS').catch(() => 50n)) / 100
+      const view = countdownCreateView({
+        cfg: want.config, seed: want.seed, decimals: want.units.decimals, symbol: want.units.symbol || quote,
+        buyTaxPct: Number(opt('buy-tax')), sellTaxPct: Number(opt('sell-tax')), platformTaxPct, dividendPct: Number(opt('dividend', '0')), defaults: want.notes,
+      })
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: cdSpec.factory, data }, {
+          step: 'countdown-module', chainId: Number(net.chainId), factory: cdSpec.factory, module: at,
+          tokenWillBe: tokenAt.token, addressSuffix: 'abcd', metaURI: meta.metaURI, metadata: meta.metadata, logoURI: logo.logoURI,
+          quote, quoteSymbol: want.units.symbol, countdown: view, permanent: true,
+          note: `clones your countdown reward module (countdown-v1, listed as a tax recipient in the same tx) for the token this launch will create at ${tokenAt.token}: it can never serve another token. ${view.what}. ${view.permanent}. The token's name, symbol, tax rates and metadata are fixed from here too (they decide its address): changing any of them later needs --restart`,
+        }, flag('calldata'), io.summarize),
+        ...tag('countdown-module', { module: at, token: tokenAt.token, next: `${rerun}: it then builds the create, at that address, with the countdown module as the recipient` }),
+      })
+    }
+    if (!plan.countdown) return fail('this launch\'s plan has no token address for its countdown reward module: add --restart', { module: plan.splitter })
+    if ((await client.getCode({ address: plan.splitter }) ?? '0x') === '0x') {
+      return out({
+        success: false, ...tag('countdown-module', { module: plan.splitter }), error: 'the countdown reward module is not on chain yet',
+        hint: `if the clone was executed, wait for it to land and ${rerun.replace(' after executing it', '')}; if it was not, add --restart to build it again`,
+      })
+    }
+    const s = await countdownRaw(read, plan.splitter, { factory: plan.factory, admin: net.handlerAdmin }).catch(() => undefined)
+    if (s === undefined || (s && s.verified === null)) return fail('could not check this launch\'s countdown reward module against its factory (RPC error)', { module: plan.splitter, retry: 'same command again' })
+    if (!s || s.verified !== true || s.dev.toLowerCase() !== me.toLowerCase() || s.token) {
+      return fail('the module at this launch\'s address is not an unbound countdown reward module of this wallet: add --restart', { module: plan.splitter })
+    }
+    const checked = await checkCountdown(s, quote)
+    if (checked.failed) return checked.failed
+    const buyBps = Math.round(Number(opt('buy-tax')) * 100), sellBps = Math.round(Number(opt('sell-tax')) * 100)
+    if (buyBps !== plan.countdown.buyBps || sellBps !== plan.countdown.sellBps) {
+      return fail(`this launch's countdown reward module was cloned for a token with a ${plan.countdown.buyBps / 100}% buy / ${plan.countdown.sellBps / 100}% sell tax (the rates decide the token's address): run it again with those, or add --restart`, { module: plan.splitter, token: plan.countdown.token })
+    }
+  }
+
   // ---- promoter pool module: cloned for the dev before the create, at predict(dev, plan.salt)
   if (poolMod && !created) {
     if (!plan?.salt) {
@@ -917,7 +1081,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   // ---- create
   if (!created) {
     // a floor module is cloned for one token address: its create is never built without the salt and metadata that give it
-    if (plan?.module === 'floor' && !plan.floor) return fail('this launch\'s plan has no token address for its floor module: add --restart', { module: plan.splitter })
+    if (PINNED[plan?.module] && !pinnedOf(plan)) return fail(`this launch's plan has no token address for its ${PINNED[plan.module]}: add --restart`, { module: plan.splitter })
     const startCount = (await read(net.pad, PAD_ABI, 'tokenCount')).toString()
     const createIo = {
       ...io,
@@ -925,12 +1089,12 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       // the module this launch cloned and will bind: runV3 tells it from a --recipient someone typed
       ...(plan?.module === 'promote' && { launchPoolModule: plan.splitter }),
       // a floor module is cloned for one token address: the create must use the salt and metadata that give it
-      ...(plan?.module === 'floor' && { launchFloor: plan.floor }),
+      ...(pinnedOf(plan) && { launchFloor: { ...pinnedOf(plan), noun: PINNED[plan.module] } }),
       out: (o) => {
         // the plan starts with the create tx itself: a wrap / approve step before it (or a failed preview) leaves none,
         // so the next run builds the create again
         const built = o.success && o.step === 'create'
-        if (built) writePlan(key, { ...base, ...(plan?.splitter && { salt: plan.salt, splitter: plan.splitter, factory: plan.factory, ...(plan.module && { module: plan.module }), ...(plan.floor && { floor: plan.floor }) }), startCount })
+        if (built) writePlan(key, { ...base, ...(plan?.splitter && { salt: plan.salt, splitter: plan.splitter, factory: plan.factory, ...(plan.module && { module: plan.module }), ...(plan.floor && { floor: plan.floor }), ...(plan.countdown && { countdown: plan.countdown }) }), startCount })
         const after = steps[steps.indexOf(kind === 'v3' ? 'create' : 'create (dev shares included)') + 1]
         return out({
           ...o,
@@ -948,9 +1112,9 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- the token this plan created: kept in the plan once found, else looked up from the pad's list since the plan
   let token = plan.token ?? null
-  if (!token && plan.module === 'floor' && plan.floor) {
+  if (!token && pinnedOf(plan)) {
     // read above: this wallet's token is at the address the module was cloned for
-    token = plan.floor.token
+    token = pinnedOf(plan).token
     plan = { ...plan, token }
     writePlan(key, plan)
   }
@@ -1015,6 +1179,21 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     }
   }
 
+  // a launch keeps the countdown settings it began with, and its token is the one the module was cloned for
+  let cdNow = null
+  if (plan.module === 'countdown' && plan.splitter && !plan.done) {
+    cdNow = await countdownRaw(read, plan.splitter, { factory: plan.factory, admin: net.handlerAdmin }).catch(() => null)
+    if (!cdNow || cdNow.verified === null) return fail('could not read this launch\'s countdown reward module (RPC error?)', { module: plan.splitter, retry: 'same command again' })
+    if (cdNow.verified !== true) return fail('this launch\'s module is not one GangCountdownRewardFactory made: nothing more is built for it', { module: plan.splitter })
+    if (cdNow.rewardToken.toLowerCase() !== token.toLowerCase()) {
+      return fail('the token this launch created is not at the address its countdown reward module was cloned for: the module can never be bound to it, and the tax this token pays there feeds another token\'s pool. Do not promote this token as a countdown token', { token, rewardToken: cdNow.rewardToken, module: plan.splitter })
+    }
+    if (countdown) {
+      const checked = await checkCountdown(cdNow, null)
+      if (checked.failed) return checked.failed
+    }
+  }
+
   // later steps carry no note (it went on the create) and take the token from the plan
   const stepIo = (over) => ({ ...io, ...argsWith(io, { ...over, token }, [...LAUNCH_FLAGS, ...NOTE_FLAGS, 'name', 'symbol']) })
   const bal = await read(token, ERC20_ABI, 'balanceOf', [me])
@@ -1024,7 +1203,16 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   const isCapped = plan.module === 'capped'
   const isPromote = plan.module === 'promote'
   const isFloor = plan.module === 'floor'
-  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo && !isCapped && !isPromote && !isFloor ? splitterOf(read, plan.splitter) : null)
+  const isCountdown = plan.module === 'countdown'
+  const buybackState = () => (plan.splitter && !isSplit && !isLp && !isCombo && !isCapped && !isPromote && !isFloor && !isCountdown ? splitterOf(read, plan.splitter) : null)
+  const countdownState = async () => {
+    if (!plan.splitter || !isCountdown) return null
+    const raw = await countdownRaw(read, plan.splitter, { factory: plan.factory, admin: net.handlerAdmin, me, getBlock: () => client.getBlock() })
+    if (!raw) return null
+    const hidden = countdownShown(raw, token)
+    if (hidden) return hidden
+    return formatCountdown(raw, await quoteUnits(read, raw.rewardQuote), `--token ${token}${testnet ? ' --testnet' : ''}`)
+  }
   const cappedState = () => (plan.splitter && isCapped ? cappedOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const floorState = () => (plan.splitter && isFloor ? floorOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, factory: plan.factory, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
   const comboState = () => (plan.splitter && isCombo ? comboOf(read, plan.splitter, { wbnb: net.wbnb, pad: net.pad, ref: `--token ${token}${testnet ? ' --testnet' : ''}` }) : null)
@@ -1050,6 +1238,8 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     const fls = await floorState()
     // a done launch reports its module as anyone would see it: unchecked or unverified, only the warning
     if (fls) done.floor = floorShown(fls, token)
+    const cds = await countdownState()
+    if (cds) done.countdown = cds
     if (plan.splitter && isPromote) done.promote = { module: plan.splitter, next: `gang promote status --token ${token}${testnet ? ' --testnet' : ''}`, note: `your part of the pool tax comes two ways: pushed to you at once, and what the escrow holds for trades with no promoter, which stays in the module until you claim it: gang promote claim-pool --token ${token}${testnet ? ' --testnet' : ''}` }
     // 2.0: where the creator fee of a V3 token is claimed (and that a module does not get it)
     const share = kind === 'v3' ? await creatorFeeShareOf({ chainId: net.chainId, pad: net.pad, read }).catch(() => null) : null
@@ -1064,15 +1254,15 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
 
   // ---- bind the splitter / split module / LP splitter / combined or capped recipient to the token (anyone may; the launch does it right after the create)
   if (plan.splitter) {
-    const abi = isPromote ? POOL_ABI : isFloor ? FLOOR_ABI : isCapped ? CAPPED_ABI : isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
+    const abi = isPromote ? POOL_ABI : isCountdown ? COUNTDOWN_ABI : isFloor ? FLOOR_ABI : isCapped ? CAPPED_ABI : isCombo ? COMBO_ABI : isSplit ? SPLIT_ABI : isLp ? LP_ABI : SPLITTER_ABI
     const bound = await read(plan.splitter, abi, 'token')
     if (bound === zeroAddress) {
-      const sim = await (isPromote ? simulatePool : isFloor ? simulateFloor : isCapped ? simulateCapped : isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
+      const sim = await (isPromote ? simulatePool : isCountdown ? simulateCountdown : isFloor ? simulateFloor : isCapped ? simulateCapped : isCombo ? simulateCombo : isSplit ? simulateSplit : isLp ? simulateLp : simulateCall)(client, me, plan.splitter, abi, 'bind', [token])
       if (sim.failed) return out({ success: false, step: 'bind', ...tag('bind', { token }), ...sim.failed })
       const data = encodeFunctionData({ abi, functionName: 'bind', args: [token] })
       return out({
         ...step({ chainId: net.chainId }, { from: me, to: plan.splitter, data }, {
-          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo || isCapped || isPromote || isFloor ? { module: plan.splitter } : { splitter: plan.splitter }),
+          step: 'bind', chainId: Number(net.chainId), token, ...(isSplit || isCombo || isCapped || isPromote || isFloor || isCountdown ? { module: plan.splitter } : { splitter: plan.splitter }),
           ...(isFloor && floorNow && {
             redeemFeePct: floorNow.redeemFeePct, cap: floorNow.cap, payPct: floorNow.payPct,
             payees: floorNow.payees.map(({ index, payee, pctOfPayees, pctOfRecipientUntilCap }) => ({ index, payee, pctOfPayees, pctOfRecipientUntilCap })),
@@ -1085,6 +1275,8 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
           }),
           note: isPromote
             ? 'ties the promoter pool module to this token for good, reading its promoter terms. It must happen before graduation: a token bound later has no pool share'
+            : isCountdown
+            ? 'binds the countdown reward module to the token it was cloned for (it takes no other). Nothing is funded, counted or paid before this. From graduation on, buys through the module count (gang buy does that by default)'
             : isFloor
             ? `binds the floor module to the token it was cloned for (it takes no other). Nothing is split or redeemed before this. What it holds, fixed for good: ${floorNow ? floorLine({ cap: floorNow.cap?.amount, symbol: floorNow.quoteSymbol ?? floorNow.floorQuote, payBps: floorNow.payBps, redeemFeeBps: floorNow.redeemFeeBps, payees: floorNow.payees.map((p) => p.payee), shares: floorNow.payees.map((p) => p.bps) }) : 'gang floor status'}`
             : isCapped
@@ -1097,12 +1289,72 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
               ? 'ties the LP splitter to this token for good: its pair is where the liquidity goes (from graduation on)'
               : 'ties the splitter to this token for good (what it buys back and burns)',
         }, flag('calldata'), io.summarize),
-        ...tag('bind', { token, next: `${rerun}${devBuy ? ': it continues with the dev buy' : bond ? ': it continues with the bond' : ': the launch is then done'}` }),
+        ...tag('bind', { token, next: `${rerun}${cdSpec?.seed ? ': it continues with the seed' : devBuy ? ': it continues with the dev buy' : bond ? ': it continues with the bond' : ': the launch is then done'}` }),
       })
     }
     if (bound.toLowerCase() !== token.toLowerCase()) {
-      return out({ success: false, ...tag('bind', { token }), error: `the ${isPromote ? 'promoter pool module' : isFloor ? 'floor module' : isCapped ? 'capped recipient' : isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo || isCapped || isPromote || isFloor ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
+      return out({ success: false, ...tag('bind', { token }), error: `the ${isPromote ? 'promoter pool module' : isCountdown ? 'countdown reward module' : isFloor ? 'floor module' : isCapped ? 'capped recipient' : isCombo ? 'combined recipient' : isSplit ? 'split module' : isLp ? 'LP splitter' : 'splitter'} is bound to another token`, [isSplit || isCombo || isCapped || isPromote || isFloor || isCountdown ? 'module' : 'splitter']: plan.splitter, boundTo: bound })
     }
+  }
+
+  // ---- the countdown pool's seed (--cd-seed): approve (wrap first for WBNB), then fund. Read from the module's own books,
+  // never from logs (a public node can silently leave some out): what it holds for buyers (pot + reserved + credited;
+  // not the dev's part, which anyone's claimDev lowers) is recorded when the seed stage begins. Before graduation nothing else moves those books but a fund (or a
+  // stray transfer that a call books, which also lands in the pool), and nothing takes from them: held − that base ≥
+  // the seed means it landed, less means it did not. After graduation the tax moves them too, so an unconfirmed seed is
+  // never decided (or funded again) there
+  if (isCountdown && cdSpec?.seed && !plan.seeded) {
+    const cdRaw = await countdownRaw(read, plan.splitter, { factory: plan.factory, admin: net.handlerAdmin })
+    if (!cdRaw || cdRaw.verified !== true || cdRaw.partial) return fail('could not read this launch\'s countdown reward module (RPC error?)', { module: plan.splitter, retry: 'same command again' })
+    const want = await cdUnits(cdRaw.rewardQuote)
+    if (want.failed) return want.failed
+    const sym = want.units.symbol || cdRaw.rewardQuote
+    const amount = formatUnits(want.seed, want.units.decimals)
+    const fq = (x) => `${formatUnits(x, want.units.decimals)} ${sym}`
+    if (plan.seedAmount && BigInt(plan.seedAmount) !== want.seed) {
+      return fail(`this launch's seed is ${fq(BigInt(plan.seedAmount))}, not the ${amount} --cd-seed says now: run it again with that amount (a seed is added once)`, { module: plan.splitter })
+    }
+    const held = BigInt(cdRaw.pot) + BigInt(cdRaw.reservedTotal) + BigInt(cdRaw.claimTotal)
+    const graduated = (await read(net.pad, PAD_ABI, 'curves', [token]))[6]
+    const UNDECIDED = 'the token graduated before this launch saw its seed land: from graduation the pool tax moves the module\'s books too, so whether the seed landed can no longer be read from them, and no second fund is built on a guess. Check the fund tx with gang tx --hash <hash>; drop --cd-seed to finish the launch'
+    if (plan.seedBase === undefined) {
+      if (graduated) return fail(UNDECIDED, { module: plan.splitter })
+      plan = { ...plan, seedAmount: String(want.seed), seedBase: String(held) }
+      writePlan(key, plan)
+    }
+    if (graduated) return fail(UNDECIDED, { module: plan.splitter, held: fq(held), base: fq(BigInt(plan.seedBase)) })
+    const arrived = held - BigInt(plan.seedBase)
+    if (arrived < want.seed) {
+      // a fund still on its way: never a second one beside it
+      const [mined, pending] = await Promise.all([client.getTransactionCount({ address: me, blockTag: 'latest' }), client.getTransactionCount({ address: me, blockTag: 'pending' })])
+      if (pending > mined) return fail('a tx of this wallet is still pending: wait for it to land, then run the same command again (no second fund is built beside it)', { wallet: me, retry: 'same command again' })
+      // a fund preview was built before: a second one only on an explicit --cd-seed-again (the first may still be waiting
+      // for approval in the Binance App, where approving both would add the seed twice)
+      if (plan.seedAt && !flag('cd-seed-again')) {
+        return fail(`this launch built a fund of the seed before, and the module's books do not show it yet (${fq(arrived)} of ${amount} arrived since the seed stage began; no tx of this wallet is pending). That fund may still be waiting for approval in the Binance App: approve only one. If it was never sent or it failed, run the same command with --cd-seed-again to build a new one`, { module: plan.splitter, hint: 'check the Binance App first; approve only one fund' })
+      }
+      const sctx = { chainId: net.chainId, wbnb: net.wbnb, client, read }
+      const pre = await fundingStep(sctx, { me, token: cdRaw.rewardQuote, need: want.seed, spender: plan.splitter, sym, approveStep: 'approve-quote' }, flag('calldata'), io.summarize)
+      if (pre) {
+        return out({ ...pre, ...tag('seed', { token, ...(pre.success !== false && { next: `${rerun}: it then builds the fund` }) }), ...(pre.success !== false && { why: `the countdown pool's seed (${amount} ${sym}) is pulled by the module in the next step` }) })
+      }
+      const sim = await simulateCountdown(client, me, plan.splitter, COUNTDOWN_ABI, 'fund', [want.seed])
+      if (sim.failed) return out({ success: false, step: 'seed', ...tag('seed', { token }), ...sim.failed })
+      const again = !!plan.seedAt
+      plan = { ...plan, seedAt: Date.now() }
+      writePlan(key, plan)
+      const data = encodeFunctionData({ abi: COUNTDOWN_ABI, functionName: 'fund', args: [want.seed] })
+      return out({
+        ...step({ chainId: net.chainId }, { from: me, to: plan.splitter, data }, {
+          step: 'seed', chainId: Number(net.chainId), token, module: plan.splitter, amount, quote: sym,
+          ...(again && { warning: `--cd-seed-again: a second fund of the seed (the books show ${fq(arrived)} of ${amount} arrived; no tx of this wallet is pending). If the earlier one is still waiting for approval in the Binance App, approve only one of them` }),
+          note: `adds ${amount} ${sym} to the countdown reward pool, all of it for the buyers: it never comes back to you, and you take no part of it (your dev % applies to the tax only)`,
+        }, flag('calldata'), io.summarize),
+        ...tag('seed', { token, next: `${rerun}${devBuy ? ': it continues with the dev buy' : bond ? ': it continues with the bond' : ': the launch is then done'}` }),
+      })
+    }
+    plan = { ...plan, seeded: true, seededText: fq(arrived) }
+    writePlan(key, plan)
   }
 
   // ---- V3 dev buy (a 打新 dev already holds its shares' tokens)

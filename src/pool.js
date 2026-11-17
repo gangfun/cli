@@ -30,6 +30,21 @@ const ERC20_ABI = parseAbi([
 ])
 const WBNB_ABI = parseAbi(['function deposit() payable'])
 
+/** Why a pool trade's result says ref.attached: false (its calldata is the router's own call: no invite tag in it). */
+export const POOL_NO_REF = 'a PancakeSwap trade carries no invite tag (its calldata is the router call alone): gang.fun credits an invite on a first curve trade or mint'
+
+/**
+ * The `ref` a result shows (index.js adds it to every result of a run with --ref): `ref` as resolved, except on a pool
+ * trade (a pool-buy / pool-sell step, or a setup step before one), whose tx never carries the tag: attached false, said
+ * why. null when there is nothing to show.
+ */
+export function refShown(o, ref) {
+  if (!ref) return null
+  const pool = !!o && typeof o === 'object' && (o.venue === 'pancakeswap' || /^pool-/.test(String(o.step ?? '')) || /^pool-/.test(String(o.next ?? '')))
+  if (!pool || !ref.attached) return ref
+  return { attached: false, ...(ref.referrer && { referrer: ref.referrer }), reason: POOL_NO_REF }
+}
+
 /** Gas note on a taxed gang token's pool sell (it sells a chunk of the held tax right before it). */
 export const POOL_SELL_GAS_NOTE = 'this sell needs about 700k gas (it also sells one chunk of the held tax first): let the wallet estimate gas, or give at least 750k; too little gas reverts with SwapBackOutOfGas'
 

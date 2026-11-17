@@ -15,6 +15,7 @@ import { lpOf } from './lp.js'
 import { comboOf, decoyWarning } from './combo.js'
 import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
 import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModule } from './floor.js'
+import { COUNTDOWN_TYPE, countdownBuy, countdownFactoryAddress, countdownForToken, countdownSellLine, formatCountdown } from './countdown.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { BASE_LOST, BASE_NO_BOND, BASE_PAD_ABI, baseOf as baseVaultView, basePayoff, baseSupport, baseTaxLine, HINTS as BASE_HINTS, parseBase, scheduleLine } from './base.js'
 import { bnbInQuote, DEFAULT_MIN_BUY_BNB, GRAD_FLAGS, GRAD_PAD_ABI, gradBuyLine, gradCreateView, gradOf, gradSellLine, gradSupport, HINTS as GRAD_HINTS, MIN_SEED_BNB, parseGradReward } from './gradreward.js'
@@ -393,6 +394,13 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ...floorRaw,
       treasuryGets: treasuryShare({ buyTaxPct: c.buyTaxPct, sellTaxPct: c.sellTaxPct, platformTaxPct: fees.platformTaxPct, dividendPct: c.dividendPct, payBps: floorRaw.cap?.reached ? 0 : floorRaw.payBps }),
     })
+    // or its countdown reward module (countdown-v1): the dev's tax share as buyers' rewards; only one the factory made,
+    // cloned for this very token, is shown with its numbers
+    const cdSeen = c.recipient && !c.recipientIsCreator && !buyback && !split && !lp && !combo && !capped && !floorRaw
+      ? await countdownForToken(ctx, token, c.recipient) : null
+    const countdown = !cdSeen ? null : cdSeen.unread ? { error: 'could not read the token\'s countdown reward module (RPC error)', detail: cdSeen.unread, retry: `gang countdown status --token ${token}${net}` }
+      : cdSeen.warning ? { module: cdSeen.module, isThisTokensCountdown: false, warning: cdSeen.warning }
+        : { ...formatCountdown(cdSeen.raw, { symbol: c.quoteSymbol, decimals: await decimalsOf(ctx, c.quote) }, `--token ${token}${net}`), more: `gang countdown status --token ${token}${net}` }
     const lpWarn = lp && lp.token && lp.token.toLowerCase() !== token.toLowerCase()
       ? { warning: `this token pays its tax to the LP splitter, but it is bound to another token (${lp.token}): the liquidity goes to that token's pair` } : null
     const splitWarn = split && split.token && split.token.toLowerCase() !== token.toLowerCase()
@@ -417,7 +425,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
       ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
-      ...(floor && { floor }),
+      ...(floor && { floor }), ...(countdown && { countdown }),
     })
   }
 
@@ -612,6 +620,15 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (typed.floor) {
         fail('--recipient is a floor module: a token can\'t name one by hand. A floor module serves only the token address it was cloned for, so this token\'s tax would go into a module that can never bind it, and the token would have no floor. Leave --recipient out and add --floor: the launch clones a module for this token', { recipient, seenBy: typed.by })
       }
+      // a countdown reward module likewise serves the one token address it was cloned for: this token's tax would feed
+      // another token's reward pool
+      if (!typed.unlisted && !typed.unread) {
+        const cd = await typedFloorModule({ client: ctx.client, pad: ctx.pad }, recipient, countdownFactoryAddress(testnet), COUNTDOWN_TYPE)
+        if (cd.floor) {
+          fail('--recipient is a countdown reward module: a token can\'t name one by hand. It serves only the token address it was cloned for, so this token\'s tax would feed another token\'s reward pool, and this token would have no countdown. Leave --recipient out and add --countdown-reward: the launch clones a module for this token', { recipient, seenBy: cd.by })
+        }
+        if (cd.unread) fail('could not check --recipient (RPC error)', { detail: cd.unread, retry: 'same command again' })
+      }
       // the pad just took this recipient, so it is listed: a node that says otherwise is behind (or the two answers are
       // of different blocks). Not sure → nothing is built
       if (typed.unlisted) fail('could not check --recipient: the pad accepts it, but the tax handler did not show it as listed at the block it was checked on (a node may be behind)', { recipient, retry: 'same command again' })
@@ -694,10 +711,11 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const logo = launchFloor ? { logoURI: launchFloor.logoURI, uploaded: !!launchFloor.uploaded } : await resolveLogo()
     const meta = launchFloor ? { metaURI: launchFloor.metaURI, metadata: launchFloor.metadata } : await resolveMeta({ name, symbol, logoURI: logo.logoURI })
     const launch = await prepareCreate(logo.logoURI, meta.metaURI, launchFloor ? { salt: launchFloor.salt, token: launchFloor.token } : null)
+    const pinnedNoun = launchFloor?.noun ?? 'floor module'
     if (launch.mismatch) {
       return fail(launch.mismatch.got
-        ? 'this create would put the token at another address than the one its floor module was cloned for: the name, the symbol or a tax rate changed since the module was cloned. Run the launch again with what it began with, or add --restart for a new module and token'
-        : 'the pad\'s token deployer could not be read: a floor launch creates its token at the address its module was cloned for, so nothing is built without it', {
+        ? `this create would put the token at another address than the one its ${pinnedNoun} was cloned for: the name, the symbol or a tax rate changed since the module was cloned. Run the launch again with what it began with, or add --restart for a new module and token`
+        : `the pad's token deployer could not be read: a ${pinnedNoun} launch creates its token at the address its module was cloned for, so nothing is built without it`, {
         floorToken: launch.mismatch.expected, ...(launch.mismatch.got && { wouldBe: launch.mismatch.got }), retry: launch.mismatch.got ? undefined : 'same command again',
       })
     }
@@ -706,7 +724,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const sure = await simulate(ctx, me, ctx.pad, VANITY_ABI, 'createWithSalt', [launch.salt, createData(logo.logoURI, meta.metaURI)])
       if (sure.failed) return out({ success: false, step: 'create', ...sure.failed })
       if (String(sure.result).toLowerCase() !== String(launchFloor.token).toLowerCase()) {
-        return fail('the pad would create this token at another address than the one its floor module was cloned for: nothing is built. Add --restart for a new module and token', { floorToken: launchFloor.token, padSays: sure.result })
+        return fail(`the pad would create this token at another address than the one its ${pinnedNoun} was cloned for: nothing is built. Add --restart for a new module and token`, { floorToken: launchFloor.token, padSays: sure.result })
       }
     }
     let label = null
@@ -739,7 +757,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       buyTaxPct: buyTax, sellTaxPct: sellTax, dividendPct: dividend,
       recipient: recipient === zeroAddress ? null : recipient, recipientLabel: selfRecipient ? 'you (the creator)' : label, tokenIfNext: launch.token ?? dry.result,
       ...(launch.token && { addressSuffix: 'abcd' }),
-      ...(launchFloor && { floorToken: launchFloor.token, metadataFixed: 'the metadata is the one fixed when the floor module was cloned (its URL is part of the token\'s address); --logo / --description / --website / --twitter given now are not read again' }),
+      ...(launchFloor && { [launchFloor.noun === 'countdown reward module' ? 'countdownToken' : 'floorToken']: launchFloor.token, metadataFixed: `the metadata is the one fixed when the ${pinnedNoun} was cloned (its URL is part of the token's address); --logo / --description / --website / --twitter given now are not read again` }),
       split: taxed
         ? `of each ${buyTax}% buy / ${sellTax}% sell tax in the PancakeSwap pool (after graduation; the curve charges no tax): ${fees.platformTaxPct}% of volume to the platform, then ${dividend}% of the rest to holders, ${rest}% to the recipient in the quote`
           + (dividend > 0 ? '; if no holder has 10,000+ tokens when a tax is paid, the holders\' part goes to the recipient too' : '')
@@ -774,13 +792,27 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (flag('promoter')) fail('--promoter binds on the curve only, and this token has graduated: on a token with a pool share, a wallet bound on the curve keeps counting for its promoter here, inside its window', { token })
       if (!flag('amount') && !flag('bnb')) fail('--amount <quote (or BNB) to spend> required')
       const raw = parseAmount(fail, flag('amount') ? 'amount' : 'bnb', opt('amount') ?? opt('bnb'))
+      // the token's countdown reward (countdown-v1): only a buy through its module counts, so gang buy goes there
+      const me = walletFor(ctx, opt('from'))
+      const cd = await countdownForToken(ctx, token, c.recipientIsCreator ? null : c.recipient, me)
+      if (cd?.unread) fail('could not check whether this token\'s tax recipient is its countdown reward module (RPC error): nothing is built, since a buy that should count must go through the module', { token, detail: cd.unread, retry: 'same command again' })
+      if (cd?.live) {
+        // the module's buy carries no invite tag: gang.fun credits an invite on curve trades and mints
+        if (flag('ref')) fail('--ref does not apply to a buy through the countdown reward module: that buy carries no invite tag. Leave --ref out (the invite credit is for a first curve trade or mint)', { token, module: cd.raw.module })
+        return out(await countdownBuy(ctx, {
+          token, c, cd, me, amount: raw, slippage: parseSlippage(fail, opt('slippage', '1')), payBnb: poolPayBnb(ctx, c.quote, flag),
+          mustCount: !flag('cd-uncounted'), rawOnly, summarize, base: { kind: 'v3', ...notes.pool },
+        }))
+      }
+      if (flag('cd-uncounted')) fail('--cd-uncounted applies to a token whose tax recipient is its countdown reward module (countdown-v1): this one has none', { token })
       return out(await poolTrade(ctx, {
         side: 'buy', token, quote: c.quote, me: walletFor(ctx, opt('from')), amount: raw,
         slippage: parseSlippage(fail, opt('slippage', '1')), buyTaxBps: Math.round(c.buyTaxPct * 100),
         sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler, payBnb: poolPayBnb(ctx, c.quote, flag),
-        base: { kind: 'v3', pair: c.pair, ...notes.pool },
+        base: { kind: 'v3', pair: c.pair, ...notes.pool, ...(cd?.warning && { rewards: { countdown: { counts: false, warning: cd.warning } } }) },
       }, { rawOnly, summarize, revertOf }))
     }
+    if (flag('cd-uncounted')) fail('--cd-uncounted applies to pool buys after graduation: curve buys never count for the countdown reward', { token })
     const me = walletFor(ctx, opt('from'))
     if (!(await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me]))) fail('this wallet holds no Agent ID; curve trades are Agent-only', { wallet: me })
     const room = await ctx.read(ctx.pad, PAD_ABI, 'walletRoom', [token, me])
@@ -802,6 +834,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         : `the 1% wallet cap leaves this wallet room for ${formatUnits(tokensOut, 18)} more tokens only`
       return { spent: s, refund: r, cutBy: cut, cutNote: `${why}: the buy spends ${s} ${c.quoteSymbol} (fee included) and refunds ${r} ${refundAs}` }
     }
+    // a countdown reward counts pool buys through its module only: a curve buy never does (read once per command)
+    let cdCurve
+    const cdCurveLine = async () => {
+      cdCurve ??= countdownForToken(ctx, token, c.recipientIsCreator ? null : c.recipient).then((cd) => (cd?.live
+        ? { counts: false, why: 'curve buys never count: the countdown starts after graduation, for buys through the token\'s countdown module in its PancakeSwap pool (gang buy does that by default)' }
+        : cd?.unread ? { error: 'could not read the token\'s countdown reward (RPC error)', detail: cd.unread } : null))
+      return cdCurve
+    }
     // the token's buy-time rewards (3.0): what this buy means for each, one key per kind
     const rewardsOf = async (tokensOut) => {
       const { spent, cut } = await spentFor(ctx, c, quoteIn, tokensOut, room)
@@ -810,7 +850,8 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const feeBps = BigInt(Math.round((await feesOf(ctx)).curveFeePct * 100))
       const graduates = cut === 'graduation' || spent - (spent * feeBps) / 10_000n >= c.curveRaw.remaining
       const gradReward = await gradBuyLine(ctx, token, c.quote, c.quoteSymbol, me, spent, graduates)
-      return gradReward ? { rewards: { gradReward } } : {}
+      const countdown = await cdCurveLine()
+      return gradReward || countdown ? { rewards: { ...(gradReward && { gradReward }), ...(countdown && { countdown }) } } : {}
     }
     const extra = async (tokensOut, minOut, refundAs = c.quoteSymbol) => ({
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
@@ -899,10 +940,13 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       let me = null
       try { me = walletFor(ctx, opt('from')) } catch { /* no wallet configured */ }
       if (me) {
+        const cd = await countdownForToken(ctx, token, c.recipientIsCreator ? null : c.recipient)
+        const cdLine = cd?.live ? countdownSellLine(cd.raw, { symbol: c.quoteSymbol, decimals: await decimalsOf(ctx, c.quote) })
+          : cd?.unread ? { error: 'could not read the token\'s countdown reward (RPC error): a sell never touches its slots anyway', detail: cd.unread } : null
         return out(await poolTrade(ctx, {
           side: 'sell', token, quote: c.quote, me, amount: flag('all') ? null : parseAmount(fail, 'amount', opt('amount')), all: flag('all'),
           slippage, buyTaxBps: Math.round(c.buyTaxPct * 100), sellTaxBps: Math.round(c.sellTaxPct * 100), handler: c.taxHandler,
-          swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair, ...notes.pool },
+          swapBackGas: c.sellTaxPct > 0, toBnb: flag('to-bnb'), base: { kind: 'v3', pair: c.pair, ...notes.pool, ...(cdLine && { rewards: { countdown: cdLine } }) },
           bond: { testnet, breakBond: flag('break-bond'), settleFirst: flag('settle-first'), breakCallBond: flag('break-call-bond') },
         }, { rawOnly, summarize, revertOf }))
       }

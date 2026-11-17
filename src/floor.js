@@ -421,7 +421,8 @@ function revertedCall(e) {
 }
 
 /**
- * Is `recipient` — an address someone typed as the tax recipient of a token created on `pad` — a floor module?
+ * Is `recipient` — an address someone typed as the tax recipient of a token created on `pad` — a floor module (or, with
+ * `type` 'countdown-v1' and the countdown factory, a countdown reward module: the same one-token-address rule)?
  * → { floor: true, by } | { floor: false } | { unlisted: true } | { unread: <detail> }.
  * A token that names a floor module by hand lands at another address than the one the module was cloned for, and its
  * tax is stuck there for good. So "no" is said only on the chain's own evidence, and whatever a node leaves unanswered
@@ -443,7 +444,7 @@ function revertedCall(e) {
  *     not a module. A contract is asked moduleType(): `floor-v1` → a floor module; any other word (or more than a
  *     word), an empty return, or a revert (revertedCall) → not one; a piece of a word, or no answer → `unread`.
  */
-export async function typedFloorModule({ client, pad }, recipient, factory) {
+export async function typedFloorModule({ client, pad }, recipient, factory, type = FLOOR_TYPE) {
   try {
     const blockNumber = await client.getBlockNumber()
     const block = numberToHex(blockNumber)
@@ -488,7 +489,7 @@ export async function typedFloorModule({ client, pad }, recipient, factory) {
       return { floor: false }
     }
     const kind = r.length === 66 ? hexToString(r, { size: 32 }).replace(/\0+$/, '') : null
-    if (kind === FLOOR_TYPE) return { floor: true, by: 'moduleType()' }
+    if (kind === type) return { floor: true, by: 'moduleType()' }
     if (byFactory) {
       if (kind === null || !KIND_RE.test(kind)) throw new Error('a listed module did not name its kind')
       return { floor: false }

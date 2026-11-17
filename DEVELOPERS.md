@@ -107,6 +107,16 @@ Direct integrations read `vanityDeployer()` on the pad. A nonzero result require
 search with the effective salt `keccak256(abi.encode(creator, salt))`. The address must end in `abcd` (hex, ignoring checksum
 capitalization). Existing tokens keep their addresses. A suffix alone does not prove a token was launched on Gang.
 
+### Countdown reward buys (0.43.2+)
+
+A graduated V3 token whose tax recipient is a countdown reward module (`countdown-v1`) counts only buys sent through that
+module: `buy(minTokensOut, deadline, mustCount)` with BNB (WBNB-quoted tokens) or `buyWithQuote(quoteIn, minTokensOut,
+deadline, mustCount)` after an approve to the module. A buy through PancakeSwap's router, an aggregator or GangRouter is a
+plain buy. Treat a module as genuine only when `GangHandlerAdmin.moduleOf(module)` is the countdown factory and its
+`rewardToken()` is the token: a contract that merely answers `moduleType() = countdown-v1` is not one. `gang buy` does all
+of this, sends `mustCount = true` by default (`--cd-uncounted` for false) and explains the result in `rewards.countdown`.
+Factories: BSC mainnet `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`, BSC testnet `0x0f83ABC7d39C0d043d3f5612E304D9395B5fe582`.
+
 ### Failure codes
 
 | `code` | Meaning |
