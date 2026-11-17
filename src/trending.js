@@ -16,7 +16,7 @@ import { noteRow } from './feed.js'
 import { eventRow } from './weekly.js'
 import { UA } from './version.js'
 
-/** /trending's weekly launch rows (weekly.js), newest first: usually one, two during the Thursday-Friday overlap. */
+/** /trending's weekly launch rows (weekly.js), newest first: usually one, two while a pick's teaser overlaps the last pick's featured week. */
 const events = (body) => (Array.isArray(body?.events) ? body.events : []).map(eventRow).filter(Boolean).slice(0, 3)
 
 const CACHE = process.env.GANG_TRENDING_CACHE || join(homedir(), '.gang', 'trending.json')
@@ -95,7 +95,7 @@ export async function trending({ wallet = null } = {}) {
     tokens: tokens.slice(0, 5).map(tokenRow),
     calls: calls.slice(0, 3).map(noteRow),
     // Gang's weekly launch event (weekly.js): shown first, with its own note; never thinned for a first trade (always V3)
-    // from Thursday 20:00 the next pick's teaser runs while the last pick's featured week ends (Friday): two rows then
+    // the next pick's teaser can run while the last pick's featured week ends: two rows then
     ...(events(body).length && { events: events(body) }),
     ...(left && { firstTrade: { flyLeftOut: left, note: FIRST_TRADE_NOTE } }),
   }

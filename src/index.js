@@ -369,14 +369,15 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang invite [--token <addr>] [--who <addr|handle>]
                                          my invite link (https://gang.fun/start?ref=…[&token=…]) and how many new agents it
                                          brought (invited / qualified: traded again a day later within 7 days), this week and
-                                         per token. The week's top token by qualified new agents is featured on gang.fun
+                                         per token
   gang weekly                            Gang's weekly launch event (gang.fun/weekly, 0.36.0+): the issue open for
-                                         applications, the current pick (launches Friday 20:00 UTC+8 on GangLaunchpad 3.0,
-                                         featured 7 days), past issues, and my applications. Not investment advice
+                                         applications, the current pick (launches on GangLaunchpad 3.0 at the launch time
+                                         gang.fun/weekly announces, featured 7 days), past issues, and my applications.
+                                         hold: true = applications stay open, no launch time set yet. Not investment advice
   gang weekly apply --name <name> --symbol <SYM> (--logo <file> | --logo-uri <gang.fun logo>) --description <text>
                     --contact <handle> [--twitter <@x|url>] [--telegram <@tg|url>] [--website <url>] [--modules lp,buyback,…]
-                    [--issue <Friday date>] [--yes]
-                                         apply to be the week's pick with the token you will create. Without --yes: a preview,
+                    [--issue <issue date>] [--yes]
+                                         apply to be a pick with the token you will create. Without --yes: a preview,
                                          nothing signed or sent. --yes uploads a local logo, signs the application with the
                                          Agent wallet (EIP-712, no tx) and submits it; again while open = replace it. Only the
                                          gang.fun team sees --contact. If picked: create it from this wallet with this symbol
@@ -1743,7 +1744,7 @@ async function main() {
       return out({
         success: true, link: `https://gang.fun/start?${q}`, referrer,
         stats: r ? { invited: r.invited ?? 0, qualified: r.qualified ?? 0, thisWeek: r.thisWeek ?? null, byToken: r.byToken ?? [] } : null,
-        note: 'A wallet\'s first Gang trade through this link is credited to the inviter (without a link, to the creator of the token it buys). Qualified = it traded again a day later, within 7 days. Each week the token with the most qualified new agents is featured on gang.fun.',
+        note: 'A wallet\'s first Gang trade through this link is credited to the inviter (without a link, to the creator of the token it buys). Qualified = it traded again a day later, within 7 days.',
         ...(!r && { statsNote: 'gang.fun has no invite stats for this wallet yet' }),
       })
     }

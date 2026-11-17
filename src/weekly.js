@@ -1,8 +1,14 @@
 /**
- * `gang weekly`: Gang's weekly launch event (gang.fun/weekly). Each week the team picks one application; the pick launches
- * on GangLaunchpad 3.0 (V3 curve) on Friday 20:00 UTC+8 from the wallet that applied, and is featured for 7 days: on the
+ * `gang weekly`: Gang's weekly launch event (gang.fun/weekly). The team picks an application; the pick launches on
+ * GangLaunchpad 3.0 (V3 curve) at the issue's launch time from the wallet that applied, and is featured for 7 days: on the
  * gang.fun homepage, in gang.fun's X / TG posts and in the `events` rows of `gang trending` / `preflight` / `list`. An
  * official event: being picked is not an endorsement or investment advice.
+ *
+ * Two modes, from GET /api/weekly:
+ *   - the weekly cadence (`hold` false or absent): applications close Thursday, the pick launches Friday 20:00 UTC+8;
+ *   - hold (`hold: true`, or an open `apply` with a null closesAt or launchAt): an open application pool with no closing
+ *     date and no launch time. The team selects from it and contacts the pick; the launch time is announced on
+ *     gang.fun/weekly. Nothing printed then names a day, a time or a cadence.
  *
  *   gang weekly                          the issue open for applications, the current pick, past issues, my application
  *   gang weekly apply …                  preview the application; with --yes sign it with the Agent wallet and submit it
@@ -35,6 +41,19 @@ export const WEEKLY_TYPES = {
 const SIGN_TTL_S = 30 * 60 // the signature's expires: the server takes up to 1 hour ahead
 const ISSUE_RE = /^\d{4}-\d{2}-\d{2}$/
 const POST_TIMEOUT_MS = 20_000
+
+/** Hold mode: the server says so, or the open issue has no closing date or no launch time (see the header). */
+export function isHold(b) {
+  if (!b || typeof b !== 'object') return false
+  if (b.hold === true || b.apply?.hold === true) return true
+  // an open issue without a closing date or a launch time has no Thursday / Friday to name, whatever `hold` says
+  const a = b.apply
+  return !!(a && a.open && (!(a.closesAt > 0) || !(a.launchAt > 0)))
+}
+export const HOLD_NOTE = 'Applications stay open with no closing date, and no launch time is set yet. The team selects from the applications and contacts the pick; the launch time is announced on gang.fun/weekly. Teams can also launch on Gang any time on their own schedule (gang create).'
+export const HOLD_TERM_LAUNCH = (pad, w, symbol) =>
+  `If picked, the launch time is arranged with the gang.fun team and announced on gang.fun/weekly; launch it then with gang create (a V3 curve token on ${pad}, not --fair / --fly) from ${w} with symbol ${symbol}.`
+export const HOLD_SUBMITTED = 'Submitted. Applications stay open: the team selects from the open pool and contacts the pick, and the launch time is announced on gang.fun/weekly. gang weekly lists it under mine, with its status.'
 
 /** JSON with object keys sorted at every level, arrays in order, no whitespace: what the digest hashes (server does the same). */
 export function canonical(v) {
@@ -172,6 +191,7 @@ export function eventRow(e) {
     name: e.name ?? null, symbol: e.symbol ?? null, creatorHandle: e.creatorHandle ?? null,
     launchAt: e.launchAt ?? null, until: e.until ?? null,
     token: /^0x[0-9a-fA-F]{40}$/.test(e.token?.address ?? '') ? { address: e.token.address, symbol: e.token.symbol ?? e.symbol ?? null, progressPct: e.token.progressPct ?? null } : null,
+    ...(e.hold === true && { hold: true }),
     url: WEEKLY_URL, note: WEEKLY_NOTE,
   })
 }
@@ -216,7 +236,7 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
   }
   const issueOf = (b) => {
     const i = flag('issue') ? opt('issue') : b.apply?.issue
-    if (!i || !ISSUE_RE.test(i)) fail('--issue takes the issue\'s Friday date, e.g. 2026-11-13', { got: i ?? null })
+    if (!i || !ISSUE_RE.test(i)) fail('--issue takes the issue\'s date (YYYY-MM-DD), e.g. 2026-11-13', { got: i ?? null })
     return i
   }
   const mine = async (issue, w) => {
@@ -237,6 +257,7 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
     }
     // my applications: the open issue's, the week before it (closed, being picked: the previous pick may still be the
     // featured `current` then) and current's, newest first
+    const hold = isHold(b)
     const live = Array.isArray(b.live) ? b.live : b.current && ['teaser', 'launching', 'featured'].includes(b.current.status) ? [b.current] : []
     const issues = [...new Set([b.apply?.issue, weekBefore(b.apply?.issue), b.current?.issue, ...live.map((v) => v?.issue)].filter((i) => ISSUE_RE.test(i ?? '')))]
       .sort().reverse()
@@ -244,9 +265,10 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
     return out({
       success: true,
       // live: every issue in teaser / launching / featured, newest first (two from Thursday 20:00 until the last pick's week ends)
-      apply: withTimes(b.apply), current: withTimes(b.current), live: live.map(withTimes), past: (b.past || []).map(withTimes), rules: b.rules ?? null,
+      ...(hold && { hold: true }),
+      apply: hold && b.apply ? { ...withTimes(b.apply), hold: true } : withTimes(b.apply), current: withTimes(b.current), live: live.map(withTimes), past: (b.past || []).map(withTimes), rules: b.rules ?? null,
       ...(me && { mine: mineRows }),
-      url: WEEKLY_URL, note: WEEKLY_NOTE,
+      url: WEEKLY_URL, note: WEEKLY_NOTE, ...(hold && { holdNote: HOLD_NOTE }),
       next: b.apply?.open ? 'gang weekly apply --name … --symbol … --logo ./logo.png --description "…" --contact @you  (preview; add --yes to sign and submit)' : null,
     })
   }
@@ -276,21 +298,28 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
     }
     const b = await board()
     const issue = issueOf(b)
+    const hold = isHold(b)
     const open = b.apply?.issue === issue && b.apply.open
-    if (!open) fail(`applications for ${issue} are not open${b.apply?.issue ? ` (open next: ${b.apply.issue}, ${localTime(b.apply.opensAt)} – ${localTime(b.apply.closesAt)})` : ''}`, { apply: withTimes(b.apply) })
+    if (!open) {
+      const next = !b.apply?.issue ? ''
+        : hold || !(b.apply.closesAt > 0) ? ` (open: ${b.apply.issue}${b.apply.open ? ', no closing date' : b.apply.opensAt > 0 ? `, from ${localTime(b.apply.opensAt)}` : ''})`
+          : ` (open next: ${b.apply.issue}, ${localTime(b.apply.opensAt)} – ${localTime(b.apply.closesAt)})`
+      fail(`applications for ${issue} are not open${next}`, { apply: withTimes(b.apply) })
+    }
     if (!signedIn()) fail(SIGN_IN)
     // gang.fun refuses a wallet without an Agent ID (no_agent_id); the create gate checks it again at launch
     const w = wallet()
     const rules = b.rules ?? {}
+    const pad = rules.pad || 'GangLaunchpad 3.0'
     const terms = [
-      `If picked, launch it with gang create (a V3 curve token on ${rules.pad || 'GangLaunchpad 3.0'}, not --fair / --fly) from ${w} with symbol ${fields.symbol} at ${localTime(b.apply.launchAt) ?? 'Friday 20:00 UTC+8'}.`,
+      hold ? HOLD_TERM_LAUNCH(pad, w, fields.symbol) : `If picked, launch it with gang create (a V3 curve token on ${pad}, not --fair / --fly) from ${w} with symbol ${fields.symbol} at ${localTime(b.apply.launchAt) ?? 'Friday 20:00 UTC+8'}.`,
       `The pin is withdrawn early if the creator sells more than ${((rules.revokeSellBps ?? 2000) / 100).toFixed(0)}% of their holding during the 7-day featured week.`,
       'If picked: a gang.fun homepage card, X / TG posts and the first row of gang trending for the featured week.',
       'Only the gang.fun team sees contact; everything else may be shown publicly once picked.',
     ]
     if (!flag('yes')) {
       return out({
-        success: true, preview: true, issue, number: b.apply.number ?? null,
+        success: true, preview: true, issue, number: b.apply.number ?? null, ...(hold && { hold: true }),
         // what --yes signs and sends, but the logo: a local file / another host's image becomes ipfs://<cid> on upload
         application: { issue, wallet: w.toLowerCase(), ...fields, logo: ipfsCid(logoArg) ? ipfsUri(ipfsCid(logoArg)) : logoArg },
         ...(!ipfsCid(logoArg) && { logoNote: `${files.length ? 'the file' : 'the image'} is uploaded to gang.fun with --yes; the application carries its ipfs://<cid>` }),
@@ -312,7 +341,8 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
     return out({
       success: true, issue, status: r.status ?? 'pending', replaced: !!r.replaced, application,
       ...(logo.uploaded && { logoUploaded: logo.upload?.url ?? true }),
-      note: `Submitted. The team picks one application on ${b.apply.launchAt > 0 ? localTime(b.apply.launchAt - 32 * 3600) : 'Thursday 12:00 UTC+8'} and contacts the pick; the pick goes public 24 hours before the launch. gang weekly lists it under mine, with its status.`,
+      ...(hold && { hold: true }),
+      note: hold ? HOLD_SUBMITTED : `Submitted. The team picks one application on ${b.apply.launchAt > 0 ? localTime(b.apply.launchAt - 32 * 3600) : 'Thursday 12:00 UTC+8'} and contacts the pick; the pick goes public 24 hours before the launch. gang weekly lists it under mine, with its status.`,
       url: WEEKLY_URL,
     })
   }
