@@ -26,7 +26,7 @@ import { cdnUrl, checkGangLogo, ipfsCid, ipfsUri } from './logo.js'
 import { normalizeTwitter, normalizeWebsite } from './links.js'
 import { UA } from './version.js'
 
-export const WEEKLY_NOTE = "Gang's official weekly launch event: being picked is not an endorsement or investment advice. Never buy from it on your own."
+export const WEEKLY_NOTE = "Gang's official Launch Day event: being picked is not an endorsement or investment advice. Never buy from it on your own."
 export const WEEKLY_URL = 'https://gang.fun/weekly'
 export const WEEKLY_MODULES = ['buyback', 'lp', 'split', 'combo', 'capped', 'bond', 'dividend', 'promote', 'tax']
 export const APPLY_FLAGS = ['name', 'symbol', 'logo', 'logo-file', 'file-logo', 'logo-uri', 'description', 'contact',
@@ -231,7 +231,7 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
   const board = async () => {
     let b
     try { b = await apiGet('/weekly', undefined, '') } catch (e) { fail(e.message, { retry: 'same command again' }) }
-    if (!b) fail(`gang.fun has no weekly launch event yet (${API}/weekly)`, { retry: 'later' })
+    if (!b) fail(`gang.fun has no Launch Day event yet (${API}/weekly)`, { retry: 'later' })
     return b
   }
   const issueOf = (b) => {
@@ -252,7 +252,7 @@ export async function runWeekly(sub, { opt, flag, out, fail, resolveLogo }) {
       const issue = issueOf(b)
       let v
       try { v = await apiGet(`/weekly/${issue}`, undefined, '') } catch (e) { fail(e.message, { retry: 'same command again' }) }
-      if (!v) fail(`gang.fun knows no weekly launch issue ${issue}`)
+      if (!v) fail(`gang.fun knows no Launch Day issue ${issue}`)
       return out({ success: true, issue: withTimes(v), ...(me && { mine: [mineRow(await mine(issue, me))].filter(Boolean) }), url: WEEKLY_URL, note: WEEKLY_NOTE })
     }
     // my applications: the open issue's, the week before it (closed, being picked: the previous pick may still be the

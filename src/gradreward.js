@@ -14,7 +14,7 @@ import { revertOf as revertIn, step, units } from './steps.js'
  * graduate: the creator may ask for the pool back after refundAfter, and takes it only after a public 7-day notice,
  * within 3 days (else the request lapses); a graduation during the notice pays as usual.
  *
- * Not a bet: buyers buy the token as on any curve and pay nothing extra; the pool is the creator's own money.
+ * The pool is the creator's own money, paid by a fixed public rule; buyers buy the token as on any curve.
  */
 
 const TAX = '(uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address recipient)'
@@ -80,7 +80,7 @@ export const CLAIM_DAYS = 180
 export const GRAD_FLAGS = ['grad-reward', 'gr-min-buy', 'gr-entries', 'gr-last', 'gr-refund-days']
 export const GRAD_USAGE = '--grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]: the reward pool you put in at create (in the token\'s quote), the least a buy must spend to count, how many of the last buys share it, the % the graduating buy gets on top, and the days before you may ask for the pool back'
 export const GRAD_ALONE = 'a --grad-reward create stands alone in this CLI: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient, no --base, no --vault. A dev buy is its own gang buy after the create lands'
-export const NOT_A_BET = 'the reward pool is the creator\'s own money; buyers pay only the usual curve price and 1% fee, nothing extra, and get the tokens they buy. Who gets what follows a fixed public rule (the last buys counted, by what each spent): no randomness, no draw'
+export const RULE = 'the reward pool is the creator\'s own money, paid to the last buys before graduation by a fixed public rule (by what each spent); buyers pay only the usual curve price and 1% fee and get the tokens they buy'
 
 /** The --grad-reward / --gr-* flags, checked: { seed, minBuy, entries, lastBps, refundDays } (amounts as typed), or { error }. */
 export function parseGradReward(opt, flag) {
@@ -139,7 +139,7 @@ export function gradCreateView({ seed, minBuy, sym, entries, lastBps, refundDays
     sells: 'a curve sell takes out every entry that wallet has so far; a later buy of the same wallet counts again',
     claims: `buyers claim with gang grad-reward claim for ${CLAIM_DAYS} days after graduation; then anyone sweeps the unclaimed rest (and the rounding dust) back to you (to the token's countdown reward module instead, if its tax recipient is one)`,
     refund: `if the token does not graduate: ${refundDays} days after the create you may ask for the pool back (gang grad-reward refund-request). The request is public for ${NOTICE_DAYS} days; a graduation in that time pays the buyers as usual. Then you have ${WINDOW_DAYS} days to take it (gang grad-reward refund), after which the request lapses and must be made again`,
-    notABet: NOT_A_BET,
+    rule: RULE,
     risks: 'anyone watching the curve can time the last buys, and one person with several Agent IDs can fill several entries: weighting by spend means many small entries earn no more than one large one, but a push into a full list still crowds out the oldest entries. A higher --gr-min-buy and more --gr-entries make that harder',
     ...(seedFloorNote && { seedFloor: seedFloorNote }),
     warning: `PERMANENT: ${seed} ${sym} leaves this wallet in the create. You get it back only through the refund above (if the token does not graduate) or as the unclaimed rest 180 days after graduation. The size, the rules and the numbers never change`,
@@ -204,7 +204,7 @@ export async function gradBuyLine(ctx, token, quote, sym, me, spent, graduates) 
   const asOf = 'as the curve stands now: a buy landing first can change it (e.g. who graduates the token)'
   return {
     counts, why, asOf, pool: `${g.pool} ${sym}`, entries: g.entries, lastPct: g.lastPct, countedSoFar: g.counted,
-    note: `${g.entries} entries share the pool at graduation by what each spent${g.lastPct > 0 ? `, the graduating buy ${g.lastPct}% on top` : ''}. Selling on the curve before graduation takes this wallet's entries out. ${NOT_A_BET}`,
+    note: `${g.entries} entries share the pool at graduation by what each spent${g.lastPct > 0 ? `, the graduating buy ${g.lastPct}% on top` : ''}. Selling on the curve before graduation takes this wallet's entries out. ${RULE}`,
     ...(g.refund && { refund: g.refund }),
     more: `gang grad-reward status --token ${token}${ctx.chainId === '97' ? ' --testnet' : ''}`,
   }
@@ -270,7 +270,7 @@ export async function runGradReward(sub, { opt, flag, out, fail, summarize }) {
     const next = raw.state === 2 && raw.claimable > 0n ? `gang grad-reward claim --token ${token}${tn}`
       : raw.state === 2 && raw.now >= raw.gradAt + CLAIM_DAYS * 86400 ? `gang grad-reward sweep --token ${token}${tn}`
         : raw.carryOwed > 0n ? `gang grad-reward retry-carry --token ${token}${tn}` : null
-    return out({ success: true, chainId, token, pad: ctx.pad, quote: sym, creator, ...shown, notABet: NOT_A_BET, ...(next && { next }) })
+    return out({ success: true, chainId, token, pad: ctx.pad, quote: sym, creator, ...shown, rule: RULE, ...(next && { next }) })
   }
 
   if (!me) return fail('no wallet: sign in to baw, or pass --from <addr> with --calldata')

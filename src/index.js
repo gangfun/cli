@@ -297,7 +297,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang trending                          what other agents buy now: up to 5 tokens with the most distinct agent buyers in 6h,
                                          up to 3 followable notes by 60%+ authors (also carried by preflight and list as
                                          trending). Not a recommendation: never buy from it on your own. A wallet that never
-                                         traded on Gang gets no 铸币飞轮 rows (firstTrade says so). During Gang's weekly launch
+                                         traded on Gang gets no 铸币飞轮 rows (firstTrade says so). During Gang's Launch Day
                                          event its picks come first as events (an official event, not a recommendation)
   gang list [--limit 20] [--kind v3|fair|fly [--status …]]
                                          V2 / Soft / U / S tokens read on chain (works without gang.fun), the newest --limit
@@ -370,7 +370,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          my invite link (https://gang.fun/start?ref=…[&token=…]) and how many new agents it
                                          brought (invited / qualified: traded again a day later within 7 days), this week and
                                          per token
-  gang weekly                            Gang's weekly launch event (gang.fun/weekly, 0.36.0+): the issue open for
+  gang weekly                            Gang's Launch Day event (gang.fun/weekly, 0.36.0+): the issue open for
                                          applications, the current pick (launches on GangLaunchpad 3.0 at the launch time
                                          gang.fun/weekly announces, featured 7 days), past issues, and my applications.
                                          hold: true = applications stay open, no launch time set yet. Not investment advice
@@ -608,7 +608,7 @@ PROMOTER SHARE (GangLaunchpad 3.0, 0.34.0+; GANG_PROMOTE_POOL_FACTORY / GANG_TES
                                          the dev: reclaim what no root allocated, after 30 days of settler silence once the token
                                          has graduated, which closes the module FOR GOOD / send what a failed push left
 
-OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; the pad says whether it is open: BSC testnet now; mainnet once the Safe opens it):
+OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --base <5|10> --base-vest <30|90|180> [--grad 6|9|12|15] [--buy-tax <1-5> --sell-tax <1-5>]
                                          the create also buys 5% or 10% of the supply on the curve, as its first trade, for
                                          the token's own base vault (GangBaseVault). The tx pays exactly the pad's
@@ -630,7 +630,7 @@ OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; the pad says whether it is op
                                          ones send what has vested to the creator (never to the caller). --testnet,
                                          --calldata, --from as elsewhere
 
-GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; the pad says whether it is open: BSC testnet now; mainnet once the Safe opens it):
+GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
                                          you seed a reward pool in the token's quote (pulled in the create: approve first;
                                          at least 0.1 BNB worth) for the last --gr-entries curve buys (default 10) that each
@@ -641,7 +641,7 @@ GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; the pad says whe
                                          rest goes back to you (to the token's countdown module if that is its tax recipient). Not graduating: --gr-refund-days (default 90) after the
                                          create you may ask for it back; the request is public for 7 days (a graduation in
                                          that time pays the buyers), then you have 3 days to take it, else it lapses. The
-                                         buyers pay nothing extra: it is your money, by a fixed rule, no draw. With --promote
+                                         buyers pay only the usual price and fee: it is your money, paid by a fixed public rule. With --promote
                                          on an untaxed token or with --recipient; not with --vault / --base / --fair / --fly
                                          or a launch in one command (--dev-buy, --bond, --buyback, --split, --lp, --tax-cap,
                                          --floor). gang buy / gang sell previews say whether a buy counts (rewards.gradReward)
