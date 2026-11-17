@@ -30,6 +30,8 @@ import { runCombo, COMBO_EVENT_ABIS } from './combo.js'
 import { runCapped, CAPPED_EVENT_ABIS } from './capped.js'
 import { runFloor, FLOOR_ABI, FLOOR_EVENT_ABIS } from './floor.js'
 import { runBase, BASE_EVENT_ABIS } from './base.js'
+import { GRAD_ALONE, GRAD_EVENT_ABIS, GRAD_FLAGS, runGradReward } from './gradreward.js'
+import { wantsPoolModule } from './promote.js'
 import { runWeekly } from './weekly.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, REDEEM_FEE_ALONE, runLaunch, TAX_CAP_ALONE } from './launch.js'
@@ -626,6 +628,38 @@ OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; the pad says whether it is op
   gang base release --token <addr>       anyone, after graduation: the first call starts the release (sends nothing); later
                                          ones send what has vested to the creator (never to the caller). --testnet,
                                          --calldata, --from as elsewhere
+
+GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; the pad says whether it is open: BSC testnet now; mainnet once the Safe opens it):
+  gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
+                                         you seed a reward pool in the token's quote (pulled in the create: approve first;
+                                         at least 0.1 BNB worth) for the last --gr-entries curve buys (default 10) that each
+                                         actually spend --gr-min-buy (default 0.01 BNB worth), while the pad's Agent gate is
+                                         on; the buy that graduates the token counts whatever it spends and gets --gr-last % of the pool on top (default 30); all
+                                         entries, it included, split the rest by what each spent. A curve sell takes that
+                                         wallet's earlier entries out. Buyers claim for 180 days after graduation, then the
+                                         rest goes back to you (to the token's countdown module if that is its tax recipient). Not graduating: --gr-refund-days (default 90) after the
+                                         create you may ask for it back; the request is public for 7 days (a graduation in
+                                         that time pays the buyers), then you have 3 days to take it, else it lapses. The
+                                         buyers pay nothing extra: it is your money, by a fixed rule, no draw. With --promote
+                                         on an untaxed token or with --recipient; not with --vault / --base / --fair / --fly
+                                         or a launch in one command (--dev-buy, --bond, --buyback, --split, --lp, --tax-cap,
+                                         --floor). gang buy / gang sell previews say whether a buy counts (rewards.gradReward)
+                                         and what a sell takes out
+  gang grad-reward status --token <addr> the pool, the rules, the list (newest first, valid or not), the refund state and,
+                                         after graduation, what this wallet can claim
+  gang grad-reward claim --token <addr>  after graduation: this wallet's share (all its valid entries), once
+  gang grad-reward settle --token <addr> anyone, after graduation: count the valid entries (the first claim does too)
+  gang grad-reward sweep --token <addr>  anyone, 180 days after graduation: the unclaimed rest back to the creator (or the
+                                         token's countdown module); closes the reward
+  gang grad-reward retry-carry --token <addr>
+                                         anyone: resend a carry owed to the token's countdown reward module
+  gang grad-reward refund-request --token <addr>
+                                         the creator, on the curve, --gr-refund-days after the create: ask for the pool back
+                                         (starts the public 7-day notice)
+  gang grad-reward refund-cancel --token <addr>
+                                         the creator: cancel a running refund request
+  gang grad-reward refund --token <addr> the creator, within 3 days after the notice, still on the curve: take the pool back.
+                                         --testnet, --calldata, --from as elsewhere
 
 BOND (押金承诺, GangBond; any GangLaunchpad token, from create on; GANG_BOND / GANG_TESTNET_BOND = its address):
   gang bond post --token <addr> --hold <tokens|N%> --days <7-90> (--amount <quote> | --cover <coverage %>) [--use-wbnb]
@@ -1423,9 +1457,9 @@ const PREFLIGHT_NEXT = [
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
 const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
-  'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'base', 'fly', 'creator-fee', 'promote', 'call-bond'])
+  'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'base', 'grad-reward', 'fly', 'creator-fee', 'promote', 'call-bond'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
-const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...FLOOR_EVENT_ABIS, ...BASE_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
+const GANG_EVENT_ABIS = [...V3_EVENT_ABIS, ...FAIR_EVENT_ABIS, ...FLY_EVENT_ABIS, ...SPLIT_EVENT_ABIS, ...LP_EVENT_ABIS, ...COMBO_EVENT_ABIS, ...CAPPED_EVENT_ABIS, ...FLOOR_EVENT_ABIS, ...BASE_EVENT_ABIS, ...GRAD_EVENT_ABIS, ...PROMOTE_EVENT_ABIS, CALL_BOND_ABI]
 // Split with three amounts is the event of four module kinds, and the amounts mean different things in each (a buy-back
 // splitter's toBuyback / toDev, an LP splitter's toLp / toDev, a promoter pool's toEscrow / toDev, a floor module's
 // toTreasury / toPayees): gang tx asks the
@@ -1546,6 +1580,17 @@ async function main() {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${BASE_ALONE}`)
   }
+  // --grad-reward (3.0 graduation reward): a V3 create with a reward pool, alone or with --promote; no chained launch
+  const grFlag = GRAD_FLAGS.find((f) => flag(f))
+  if (grFlag && !tokenCreate) fail(`--${grFlag} only applies when creating a token (gang create --grad-reward <seed> …)`)
+  if (tokenCreate && grFlag) {
+    if (!flag('grad-reward')) fail(`--${grFlag} goes with --grad-reward <seed>`)
+    if (flyCreate || flag('fair') || cmd === 'fair') fail(`--grad-reward rewards the last buys of a V3 curve: leave --${flyCreate ? 'fly' : 'fair'} out`)
+    if (flag('base') || flag('vault')) fail(`--grad-reward and --${flag('base') ? 'base' : 'vault'} can't go together`)
+    if (wantsPoolModule('v3', flag, opt)) fail('--grad-reward with --promote on a taxed token: that --promote would start a promoter pool launch, which a --grad-reward create does not take. Add --recipient <your address> (the creator\'s own share stays in the create), or use an untaxed token')
+    const launch = LAUNCH_FLAGS.find((f) => flag(f))
+    if (launch) fail(`--${launch}: ${GRAD_ALONE}`)
+  }
   // gang weekly apply takes the same --description / --website / --twitter as a create (they describe the token to come)
   const weeklyApply = cmd === 'weekly' && args[1] === 'apply'
   for (const name of LINK_FLAGS) {
@@ -1618,6 +1663,8 @@ async function main() {
       return runFloor(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'base':
       return runBase(args[1], { opt, flag, out, fail, summarize: summarizePreview })
+    case 'grad-reward':
+      return runGradReward(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'weekly':
       return runWeekly(args[1], { opt, flag, out, fail, resolveLogo: resolveLogoUri })
     case 'capabilities':

@@ -17,6 +17,7 @@ import { cappedOf, decoyWarning as cappedDecoyWarning } from './capped.js'
 import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModule } from './floor.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { BASE_LOST, BASE_NO_BOND, BASE_PAD_ABI, baseOf as baseVaultView, basePayoff, baseSupport, baseTaxLine, HINTS as BASE_HINTS, parseBase, scheduleLine } from './base.js'
+import { bnbInQuote, DEFAULT_MIN_BUY_BNB, GRAD_FLAGS, GRAD_PAD_ABI, gradBuyLine, gradCreateView, gradOf, gradSellLine, gradSupport, HINTS as GRAD_HINTS, MIN_SEED_BNB, parseGradReward } from './gradreward.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -163,7 +164,9 @@ const VIRTUAL_TOKEN = 1_066_666_666_666_666_666_666_666_667n
 const ceilDiv = (a, b) => (a + b - 1n) / b
 
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
-const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, BASE_PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...BASE_HINTS, ...HINTS })
+// the graduation reward's create errors (its claim errors share names with other contracts': not hinted here)
+const { NothingToClaim: _gn, AlreadyClaimed: _ga, ...GRAD_CREATE_HINTS } = GRAD_HINTS
+const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, BASE_PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI, GRAD_PAD_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...BASE_HINTS, ...GRAD_CREATE_HINTS, ...HINTS })
 
 /** eth_call `data` from `from`: { result } when it passes, { failed } with the revert (or RPC error) otherwise. */
 async function simulate(ctx, from, to, abi, functionName, args, value = 0n) {
@@ -401,13 +404,16 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     // 3.0: the opening base (gang create --base): the vault, its size, period and progress
     const baseSeen = await baseVaultView(ctx, token).catch((e) => ({ raw: null, error: `could not read the token's base vault (${e.shortMessage || e.message.split('\n')[0]})`, retry: `gang base status --token ${token}${net}` }))
     const { raw: _baseRaw, ...baseField } = baseSeen ?? {}
+    // 3.0: the graduation reward (gang create --grad-reward): the pool, the rules and the list so far
+    const grSeen = await gradOf(ctx, token, c.quote).catch((e) => ({ raw: null, error: `could not read the token's graduation reward (${e.shortMessage || e.message.split('\n')[0]})` }))
+    const { raw: _grRaw, ...grField } = grSeen ?? {}
     // 3.0: the rule set the token was created under (fixed for good; an upgrade adds rules for new tokens only)
     const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, PAD_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
     const nonWbnb = c.quote.toLowerCase() !== String(ctx.wbnb).toLowerCase()
     const graduationNote = c.graduationTargetBnb != null && !c.graduated
       ? gradLine(c.graduationTargetBnb, nonWbnb ? `${c.graduationAt} ${c.quoteSymbol || 'of the quote'}` : null) : null
     return out({
-      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(baseSeen && { base: { ...baseField, ...(!baseField.error && { more: `gang base status --token ${token}${net}` }) } }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(baseSeen && { base: { ...baseField, ...(!baseField.error && { more: `gang base status --token ${token}${net}` }) } }), ...(grSeen && { gradReward: { ...grField, more: `gang grad-reward status --token ${token}${net}` } }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
       ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
@@ -515,6 +521,20 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (flag('ref-pool')) fail('--base is for WBNB-quoted tokens only: leave --ref-pool out')
       if (flag('dividend') && !/^0+(\.0+)?$/.test(opt('dividend') ?? '')) fail('--base can\'t go with a dividend: a base token takes --dividend 0 (the vault would take a share of the holders\' dividend)', { got: opt('dividend') })
     }
+    // --grad-reward: a reward pool you seed for the last buys before graduation (createWithGradReward, 3.0 once
+    // upgraded), in the token's quote. With --promote (its share rides in the same create); alone otherwise
+    const grFlag = GRAD_FLAGS.find((f) => flag(f))
+    if (grFlag && !flag('grad-reward')) fail(`--${grFlag} goes with --grad-reward <seed>`)
+    const gr = flag('grad-reward') ? parseGradReward(opt, flag) : null
+    if (gr?.error) {
+      const { error, ...extra } = gr
+      fail(error, extra)
+    }
+    if (gr) {
+      if (vault) fail('--grad-reward and --vault can\'t go together: a vault-bound token takes no graduation reward (its locks move balances outside the curve)')
+      if (base) fail('--grad-reward and --base can\'t go together (one create entry each)')
+      if (launchFloor || launchPoolModule) fail('--grad-reward goes on a plain create only: no chained launch')
+    }
     if (grad !== null && !(grad > 0)) fail('--grad must be the graduation target in BNB raised: 6, 9, 12 or 15', { got: opt('grad') ?? null })
     const buyTax = taxed ? taxOf('buy-tax') : 0
     const sellTax = taxed ? taxOf('sell-tax') : 0
@@ -571,6 +591,11 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (support.unread) fail('could not check the pad for the opening base (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
       if (!support.open) fail(`${support.why}: drop --base${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
     }
+    if (gr) {
+      const support = await gradSupport(ctx)
+      if (support.unread) fail('could not check the pad for the graduation reward (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
+      if (!support.open) fail(`${support.why}: drop --grad-reward${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
+    }
     // the recipient may be the creator itself: checkTaxConfigFor knows who creates (a pad without it: checkTaxConfig)
     const [ok, reason] = await ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfigFor', [me, tax]).catch((e) => {
       if (!noSuchFunction(e)) throw e
@@ -621,13 +646,37 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         fail(`not enough BNB for the base: the create pays exactly ${formatUnits(baseCost, 18)} BNB, plus gas`, { wallet: me, haveBnb: formatUnits(native, 18), needBnb: formatUnits(baseCost, 18) })
       }
     }
-    // createWithVault, createWithPromote and createWithBase always take the target (the pad's default when --grad is left out)
-    const fn = base ? 'createWithBase' : vault ? 'createWithVault' : promote ? 'createWithPromote' : grad !== null ? 'createWithGradTarget' : 'create'
+    // --grad-reward: the seed and the minimum buy in the quote (the minimum's default and the seed's floor are BNB
+    // amounts at the rate the graduation amount fixes); the seed is pulled in the create, so it is approved first
+    let grCfg = null, grView = null
+    if (gr) {
+      const dec = await decimalsOf(ctx, quote)
+      const sym = (await symbolOf(ctx, quote)) || 'of the quote'
+      const seedRaw = parseUnits(gr.seed, dec)
+      const minBuyRaw = gr.minBuy ? parseUnits(gr.minBuy, dec) : bnbInQuote(DEFAULT_MIN_BUY_BNB, gradAmt, targetBnb)
+      const seedFloor = bnbInQuote(MIN_SEED_BNB, gradAmt, targetBnb)
+      if (seedRaw < seedFloor) fail(`--grad-reward: the seed must be at least ${await units(ctx, quote, seedFloor)} ${sym} (${MIN_SEED_BNB} BNB at this token's rate): a smaller pool is not worth a list`, { got: gr.seed })
+      if (seedRaw >= 2n ** 128n || minBuyRaw >= 2n ** 96n || minBuyRaw === 0n) fail('--grad-reward / --gr-min-buy: amount out of range', { seed: gr.seed, minBuy: gr.minBuy })
+      grCfg = {
+        seed: seedRaw, minBuy: minBuyRaw, entries: gr.entries, lastBps: gr.lastBps, carryBps: 0, refundAfter: gr.refundDays * 86_400,
+        promoteBps: promote?.shareBps ?? 0, promoteWindow: promote?.window ?? 0,
+      }
+      grView = gradCreateView({
+        seed: await units(ctx, quote, seedRaw), minBuy: await units(ctx, quote, minBuyRaw), sym, entries: gr.entries, lastBps: gr.lastBps,
+        refundDays: gr.refundDays, targetBnb, gateOn: await ctx.read(ctx.pad, GRAD_PAD_ABI, 'agentGateEnabled'),
+        ...(!gr.minBuy && { seedFloorNote: `--gr-min-buy left out: ${DEFAULT_MIN_BUY_BNB} BNB at this token's rate` }),
+      })
+      const pre = await fundingStep(ctx, me, quote, seedRaw, sym, 'approve-quote', rawOnly, summarize)
+      if (pre) return out(pre.success ? { ...pre, why: `the create pulls the ${grView.pool} reward pool from this wallet` } : pre)
+    }
+    // createWithVault, createWithPromote, createWithBase and createWithGradReward always take the target (the pad's
+    // default when --grad is left out)
+    const fn = base ? 'createWithBase' : gr ? 'createWithGradReward' : vault ? 'createWithVault' : promote ? 'createWithPromote' : grad !== null ? 'createWithGradTarget' : 'create'
     const argsOf = (logoURI, metaURI) => (base
       ? [name, symbol, logoURI, metaURI, tax, parseUnits(String(targetBnb), 18), { baseBps: base.baseBps, vestDays: base.vestDays }]
       : [name, symbol, logoURI, metaURI, quote, refPool, tax,
-        ...(vault ? [parseUnits(String(targetBnb), 18), vault] : promote ? [parseUnits(String(targetBnb), 18), promote.shareBps, promote.window] : grad !== null ? [parseUnits(String(grad), 18)] : [])])
-    const createAbi = base ? BASE_PAD_ABI : PAD_ABI
+        ...(gr ? [parseUnits(String(targetBnb), 18), grCfg] : vault ? [parseUnits(String(targetBnb), 18), vault] : promote ? [parseUnits(String(targetBnb), 18), promote.shareBps, promote.window] : grad !== null ? [parseUnits(String(grad), 18)] : [])])
+    const createAbi = base ? BASE_PAD_ABI : gr ? GRAD_PAD_ABI : PAD_ABI
     const createData = (logoURI, metaURI) => encodeFunctionData({ abi: createAbi, functionName: fn, args: argsOf(logoURI, metaURI) })
     const vanity = await vanityDeployer(ctx)
     const handler = vanity && taxed ? (await taxContracts(ctx)).handler : zeroAddress
@@ -705,6 +754,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         },
       }),
       ...(base && { base: baseView }),
+      ...(grView && { gradReward: grView }),
       ...(vault && {
         padGen: ctx.gen, pad: ctx.pad, vault,
         vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming. A vault-bound token takes no GangBond (gang bond post refuses it): a lock moves tokens out of the creator\'s wallet, which would forfeit a bond',
@@ -752,9 +802,20 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
         : `the 1% wallet cap leaves this wallet room for ${formatUnits(tokensOut, 18)} more tokens only`
       return { spent: s, refund: r, cutBy: cut, cutNote: `${why}: the buy spends ${s} ${c.quoteSymbol} (fee included) and refunds ${r} ${refundAs}` }
     }
+    // the token's buy-time rewards (3.0): what this buy means for each, one key per kind
+    const rewardsOf = async (tokensOut) => {
+      const { spent, cut } = await spentFor(ctx, c, quoteIn, tokensOut, room)
+      // the pad graduates the token once the curve holds its graduation amount (realQuote >= gradAmt): a buy whose net
+      // reaches what is left graduates it, cut or not
+      const feeBps = BigInt(Math.round((await feesOf(ctx)).curveFeePct * 100))
+      const graduates = cut === 'graduation' || spent - (spent * feeBps) / 10_000n >= c.curveRaw.remaining
+      const gradReward = await gradBuyLine(ctx, token, c.quote, c.quoteSymbol, me, spent, graduates)
+      return gradReward ? { rewards: { gradReward } } : {}
+    }
     const extra = async (tokensOut, minOut, refundAs = c.quoteSymbol) => ({
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
       minTokensOut: formatUnits(minOut, 18), ...(await cutOf(tokensOut, refundAs)), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
+      ...(await rewardsOf(tokensOut)),
     })
     // a follow on a token with promoter terms binds the note's author as this wallet's promoter (spec
     // docs/SPEC-AGENT-CALLS-2026-11-09.md §4), when the pad would bind them; --no-promoter keeps it a plain buy
@@ -873,6 +934,8 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     const pre = await fundingStep(ctx, me, token, amount, c.quoteSymbol, 'approve', rawOnly, summarize)
     if (pre) return out(pre.success ? { ...pre, ...notes.skipped() } : pre)
+    // a graduation reward: this sell takes the seller's entries in its list out
+    const grSell = await gradSellLine(ctx, token, c.quote, c.quoteSymbol, me)
     const sim = await simulate(ctx, me, ctx.pad, PAD_ABI, 'sell', [token, amount, 0n])
     if (sim.failed) return out({ success: false, step: 'sell', ...sim.failed })
     const minOut = minOf(sim.result, slippage)
@@ -880,7 +943,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       step: 'sell', chainId: Number(ctx.chainId), token, amount: formatUnits(amount, 18), quote: c.quoteSymbol,
       expectOut: await units(ctx, c.quote, sim.result), minOut: await units(ctx, c.quote, minOut), curveTaxPct: 0,
       ...(c.sellTaxPct > 0 && { poolSellTaxPct: c.sellTaxPct }),
-      curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info, ...callGuard?.info,
+      curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info, ...callGuard?.info, ...(grSell && { rewards: { gradReward: grSell } }),
       note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
     }, 'sell'))
   }
