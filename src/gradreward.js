@@ -55,7 +55,7 @@ export const GRAD_EVENT_ABIS = [GRAD_PAD_ABI]
 
 export const HINTS = {
   GradNotOpen: 'the graduation reward is closed on this pad: drop --grad-reward',
-  BadGradConfig: '--grad-reward out of bounds: a seed above 0, --gr-min-buy above 0, --gr-entries 1–20, --gr-last 0–50, --gr-refund-days 30–180',
+  BadGradConfig: '--grad-reward out of bounds: a seed above 0, --gr-min-buy above 0, --gr-entries 1–20, --gr-last 0–50, --gr-refund-days 30–180, --gr-carry 0–50',
   BadCountdown: 'the tax recipient is a countdown reward module made for another token or quote (or a carry was asked without one)',
   NotGradState: 'the reward is not in the state this needs (on the curve for a refund; graduated for a claim, a settle or a sweep)',
   RefundNotDue: 'a refund needs: --gr-refund-days passed since the create to ask; then a 7-day public notice; then 3 days to take it, after which the request lapses',
@@ -69,7 +69,7 @@ export const revertOf = (e) => revertIn(e, [GRAD_PAD_ABI], HINTS)
 
 export const STATES = ['none', 'on the curve', 'graduated: claims open', 'refunded to the creator', 'closed']
 export const MAX_ENTRIES = 20
-export const DEFAULTS = { entries: 10, lastPct: 30, refundDays: 90 }
+export const DEFAULTS = { entries: 10, lastPct: 30, refundDays: 90, carryPct: 20 }
 // in BNB, converted into the quote at the pad's own rate (graduation amount ÷ target)
 export const DEFAULT_MIN_BUY_BNB = '0.01'
 export const MIN_SEED_BNB = '0.1'
@@ -77,9 +77,9 @@ export const NOTICE_DAYS = 7
 export const WINDOW_DAYS = 3
 export const CLAIM_DAYS = 180
 
-export const GRAD_FLAGS = ['grad-reward', 'gr-min-buy', 'gr-entries', 'gr-last', 'gr-refund-days']
-export const GRAD_USAGE = '--grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]: the reward pool you put in at create (in the token\'s quote), the least a buy must spend to count, how many of the last buys share it, the % the graduating buy gets on top, and the days before you may ask for the pool back'
-export const GRAD_ALONE = 'a --grad-reward create stands alone in this CLI: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient, no --base, no --vault. A dev buy is its own gang buy after the create lands'
+export const GRAD_FLAGS = ['grad-reward', 'gr-min-buy', 'gr-entries', 'gr-last', 'gr-refund-days', 'gr-carry']
+export const GRAD_USAGE = '--grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>] [--gr-carry <0-50>, with --countdown-reward]: the reward pool you put in at create (in the token\'s quote), the least a buy must spend to count, how many of the last buys share it, the % the graduating buy gets on top, the days before you may ask for the pool back, and (with --countdown-reward) the % of the pool carried into the token\'s countdown reward at graduation (default 20)'
+export const GRAD_ALONE = 'a --grad-reward create goes alone or with --countdown-reward only: no chained dev buy, GangBond or buy-back / split / LP / combined / floor / capped recipient, no --base, no --vault. A dev buy is its own gang buy after the create lands'
 export const RULE = 'the reward pool is the creator\'s own money, paid to the last buys before graduation by a fixed public rule (by what each spent); buyers pay only the usual curve price and 1% fee and get the tokens they buy'
 
 /** The --grad-reward / --gr-* flags, checked: { seed, minBuy, entries, lastBps, refundDays } (amounts as typed), or { error }. */
@@ -104,7 +104,9 @@ export function parseGradReward(opt, flag) {
   if (l.error) return l
   const r = int('gr-refund-days', DEFAULTS.refundDays, 30, 180, 'days after the create before you may ask for the pool back')
   if (r.error) return r
-  return { seed: String(seed).trim(), minBuy: minBuy && String(minBuy).trim(), entries: e.v, lastBps: l.v * 100, refundDays: r.v }
+  const c = int('gr-carry', null, 0, 50, '% of the pool carried into the token\'s countdown reward at graduation')
+  if (c.error) return c
+  return { seed: String(seed).trim(), minBuy: minBuy && String(minBuy).trim(), entries: e.v, lastBps: l.v * 100, refundDays: r.v, carryBps: c.v == null ? null : c.v * 100 }
 }
 
 /** Whether `ctx.pad` takes a graduation reward now: { open: true } / { open: false, why } / { unread }. */
@@ -119,6 +121,27 @@ export async function gradSupport(ctx) {
   return { open: true, countdownFactory: deps[2] }
 }
 
+/** Why a carry can't be asked of this pad (its countdown factory is not this CLI's), or null. */
+export const carryClosed = (padFactory, cliFactory) => (cliFactory && String(padFactory ?? '').toLowerCase() === cliFactory.toLowerCase()
+  ? null
+  : `--gr-carry: the pad has not opened the graduation reward's carry into the countdown reward yet (its countdown factory is ${padFactory ?? 'unset'}, this CLI's is ${cliFactory ?? 'none'}): add --gr-carry 0 to launch both without a carry`)
+
+/**
+ * Before a --countdown-reward launch clones its module (gas, and the metadata fixed for good): what the create would
+ * refuse later about its --grad-reward, as { error, ...details }, or null.
+ */
+export async function gradLaunchCheck(read, pad, testnet, gr, cliFactory) {
+  let deps
+  try { deps = await read(pad, GRAD_PAD_ABI, 'gradRewardDeps') } catch (e) {
+    if (missingRead(e)) return { error: `GangLaunchpad 3.0 on ${testnet ? 'the BSC testnet' : 'BSC mainnet'} has no graduation reward yet (the pad is not upgraded for it): drop --grad-reward`, pad }
+    return { error: 'could not check the pad for the graduation reward (RPC error)', pad, detail: e.shortMessage || e.message.split('\n')[0], retry: 'same command again' }
+  }
+  if (!deps[0]) return { error: 'the graduation reward is closed on this pad: drop --grad-reward', pad }
+  const carryBps = gr.carryBps ?? DEFAULTS.carryPct * 100
+  const closed = carryBps > 0 ? carryClosed(deps[2], cliFactory) : null
+  return closed ? { error: closed, pad } : null
+}
+
 /** `amountBnb` (a decimal string) in the quote, at the rate the curve's graduation amount fixes (gradAmt ÷ target BNB). */
 export const bnbInQuote = (amountBnb, gradAmt, targetBnb) =>
   (parseUnits(String(amountBnb), 18) * gradAmt) / parseUnits(String(targetBnb), 18)
@@ -127,22 +150,26 @@ const iso = (s) => (Number(s) > 0 ? new Date(Number(s) * 1000).toISOString() : n
 const pctOf = (bps) => Number(bps) / 100
 
 /** What the create preview says about the reward (pure; amounts as display strings). */
-export function gradCreateView({ seed, minBuy, sym, entries, lastBps, refundDays, targetBnb, seedFloorNote, gateOn }) {
+export function gradCreateView({ seed, minBuy, sym, entries, lastBps, refundDays, targetBnb, seedFloorNote, gateOn, carryBps = 0, toModule = false }) {
   const last = pctOf(lastBps)
+  const carry = pctOf(carryBps)
+  const pool = carry > 0 ? `the payout (the pool less the ${carry}% carry)` : 'the pool'
+  const rest = toModule ? 'to the token\'s countdown reward module (its reward pool)' : 'back to you'
   return {
     pool: `${seed} ${sym}`, payWithThisTx: `${seed} ${sym}, pulled from this wallet in the create (approve the pad for it first)`,
     minBuy: `${minBuy} ${sym}`, entries, lastPct: last, refundDays,
     who: `the last ${entries} curve buys that each actually spend at least ${minBuy} ${sym} (after a wallet-cap or graduation cut); the buy that graduates the token at ${targetBnb} BNB counts whatever it spends. Only while the pad's Agent gate is on (${gateOn ? 'it is on now' : 'IT IS OFF NOW: no buy would count until gang turns it back on'}): with it off, no buy counts`,
+    ...(carry > 0 && { carryPct: carry, carry: `at graduation ${carry}% of the pool goes into this token's countdown reward module, as its reward pool (through the module's receiveCarry; the pad found the module from the token's tax recipient, nobody types its address). If the module takes less (it refuses, or the gas runs short), the rest is owed and anyone resends it with gang grad-reward retry-carry. The last buys share the rest` }),
     split: last > 0
-      ? `at graduation the buy that graduates it gets ${last}% of the pool on top; then all ${entries} entries, it included, split the rest by what each spent (a wallet with several entries adds them up)`
-      : `at graduation all ${entries} entries split the pool by what each spent (a wallet with several entries adds them up)`,
+      ? `at graduation the buy that graduates it gets ${last}% of ${pool} on top; then all ${entries} entries, it included, split the rest by what each spent (a wallet with several entries adds them up)`
+      : `at graduation all ${entries} entries split ${pool} by what each spent (a wallet with several entries adds them up)`,
     sells: 'a curve sell takes out every entry that wallet has so far; a later buy of the same wallet counts again',
-    claims: `buyers claim with gang grad-reward claim for ${CLAIM_DAYS} days after graduation; then anyone sweeps the unclaimed rest (and the rounding dust) back to you (to the token's countdown reward module instead, if its tax recipient is one)`,
+    claims: `buyers claim with gang grad-reward claim for ${CLAIM_DAYS} days after graduation; then anyone sweeps the unclaimed rest (and the rounding dust) ${rest}`,
     refund: `if the token does not graduate: ${refundDays} days after the create you may ask for the pool back (gang grad-reward refund-request). The request is public for ${NOTICE_DAYS} days; a graduation in that time pays the buyers as usual. Then you have ${WINDOW_DAYS} days to take it (gang grad-reward refund), after which the request lapses and must be made again`,
     rule: RULE,
     risks: 'anyone watching the curve can time the last buys, and one person with several Agent IDs can fill several entries: weighting by spend means many small entries earn no more than one large one, but a push into a full list still crowds out the oldest entries. A higher --gr-min-buy and more --gr-entries make that harder',
     ...(seedFloorNote && { seedFloor: seedFloorNote }),
-    warning: `PERMANENT: ${seed} ${sym} leaves this wallet in the create. You get it back only through the refund above (if the token does not graduate) or as the unclaimed rest 180 days after graduation. The size, the rules and the numbers never change`,
+    warning: `PERMANENT: ${seed} ${sym} leaves this wallet in the create. You get it back only through the refund above (if the token does not graduate)${toModule ? '' : ' or as the unclaimed rest 180 days after graduation'}. The size, the rules and the numbers never change`,
   }
 }
 

@@ -567,7 +567,7 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          through the module count. PERMANENT: every setting. Steps: the token's address
                                          first (as --floor), clone your module for it → create → bind → seed → the rest of
                                          the launch. Not with --floor / --buyback / --lp / --split / --tax-cap / --recipient /
-                                         --vault / --grad-reward (both rewards on one token: a later version); with --promote the promoter share stays on the curve. Quote: WBNB, GANG or
+                                         --vault; with --grad-reward too (0.44.0+), --gr-carry % of that pool (default 20) goes into the module at graduation; with --promote the promoter share stays on the curve. Quote: WBNB, GANG or
                                          one listed in the pad's QuoteRegistry
   gang create --fair … [--shares <n>] --bond <quote> [--bond-hold …] --bond-days <7-90>
                                          打新: create (the dev's --shares are bought in it) → bond. Progress is read from the
@@ -658,17 +658,21 @@ OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; open on BSC mainnet and testn
 
 GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
+    [--countdown-reward … --gr-carry <0-50>]
                                          you seed a reward pool in the token's quote (pulled in the create: approve first;
                                          at least 0.1 BNB worth) for the last --gr-entries curve buys (default 10) that each
                                          actually spend --gr-min-buy (default 0.01 BNB worth), while the pad's Agent gate is
-                                         on; the buy that graduates the token counts whatever it spends and gets --gr-last % of the pool on top (default 30); all
+                                         on; the buy that graduates the token counts whatever it spends and gets --gr-last % of the payout (the pool less any --gr-carry) on top (default 30); all
                                          entries, it included, split the rest by what each spent. A curve sell takes that
                                          wallet's earlier entries out. Buyers claim for 180 days after graduation, then the
                                          rest goes back to you (to the token's countdown module if that is its tax recipient). Not graduating: --gr-refund-days (default 90) after the
                                          create you may ask for it back; the request is public for 7 days (a graduation in
                                          that time pays the buyers), then you have 3 days to take it, else it lapses. The
                                          buyers pay only the usual price and fee: it is your money, paid by a fixed public rule. With --promote
-                                         on an untaxed token or with --recipient; not with --vault / --base / --fair / --fly
+                                         on an untaxed token or with --recipient; with --countdown-reward (a taxed launch whose
+                                         recipient is the token's countdown reward module) --gr-carry % of the pool (default
+                                         20) goes into that module's reward pool at graduation, and the unclaimed rest goes
+                                         there too, not back to you; not with --vault / --base / --fair / --fly
                                          or a launch in one command (--dev-buy, --bond, --buyback, --split, --lp, --tax-cap,
                                          --floor). gang buy / gang sell previews say whether a buy counts (rewards.gradReward)
                                          and what a sell takes out
@@ -1638,9 +1642,11 @@ async function main() {
     if (!flag('grad-reward')) fail(`--${grFlag} goes with --grad-reward <seed>`)
     if (flyCreate || flag('fair') || cmd === 'fair') fail(`--grad-reward rewards the last buys of a V3 curve: leave --${flyCreate ? 'fly' : 'fair'} out`)
     if (flag('base') || flag('vault')) fail(`--grad-reward and --${flag('base') ? 'base' : 'vault'} can't go together`)
-    if (flag('countdown-reward')) fail('--grad-reward and --countdown-reward can\'t go together in this CLI version: running both rewards on one token (the graduation reward carried into the countdown pool) comes in a later version. Launch with one of them')
     if (wantsPoolModule('v3', flag, opt)) fail('--grad-reward with --promote on a taxed token: that --promote would start a promoter pool launch, which a --grad-reward create does not take. Add --recipient <your address> (the creator\'s own share stays in the create), or use an untaxed token')
-    const launch = LAUNCH_FLAGS.find((f) => flag(f))
+    if (flag('gr-carry') && !flag('countdown-reward')) fail('--gr-carry carries part of the pool into the token\'s countdown reward: add --countdown-reward, or leave --gr-carry out')
+    // the one launch it goes with: --countdown-reward (and its --cd-* settings, --restart)
+    const cdOk = (f) => flag('countdown-reward') && (f === 'countdown-reward' || f === 'restart' || CD_FLAGS.includes(f))
+    const launch = LAUNCH_FLAGS.find((f) => flag(f) && !cdOk(f))
     if (launch) fail(`--${launch}: ${GRAD_ALONE}`)
   }
   // gang weekly apply takes the same --description / --website / --twitter as a create (they describe the token to come)

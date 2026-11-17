@@ -18,7 +18,7 @@ import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModu
 import { COUNTDOWN_TYPE, countdownBuy, countdownFactoryAddress, countdownForToken, countdownSellLine, formatCountdown } from './countdown.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { BASE_LOST, BASE_NO_BOND, BASE_PAD_ABI, baseOf as baseVaultView, basePayoff, baseSupport, baseTaxLine, HINTS as BASE_HINTS, parseBase, scheduleLine } from './base.js'
-import { bnbInQuote, DEFAULT_MIN_BUY_BNB, GRAD_FLAGS, GRAD_PAD_ABI, gradBuyLine, gradCreateView, gradOf, gradSellLine, gradSupport, HINTS as GRAD_HINTS, MIN_SEED_BNB, parseGradReward } from './gradreward.js'
+import { bnbInQuote, carryClosed, DEFAULT_MIN_BUY_BNB, DEFAULTS as GRAD_DEFAULTS, GRAD_FLAGS, GRAD_PAD_ABI, gradBuyLine, gradCreateView, gradOf, gradSellLine, gradSupport, HINTS as GRAD_HINTS, MIN_SEED_BNB, parseGradReward } from './gradreward.js'
 
 /**
  * `gang v3 …` — LaunchpadV3 (tax recipient): a token with its own buy / sell tax (1–5% each), a dividend share and a
@@ -541,8 +541,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     if (gr) {
       if (vault) fail('--grad-reward and --vault can\'t go together: a vault-bound token takes no graduation reward (its locks move balances outside the curve)')
       if (base) fail('--grad-reward and --base can\'t go together (one create entry each)')
-      if (launchFloor || launchPoolModule) fail('--grad-reward goes on a plain create only: no chained launch')
+      // the one launch it goes with: --countdown-reward (the module cloned for this token takes the tax; the carry goes there)
+      if ((launchFloor && launchFloor.noun !== 'countdown reward module') || launchPoolModule) fail('--grad-reward goes on a plain create, or a --countdown-reward launch only')
     }
+    const cdLaunch = launchFloor?.noun === 'countdown reward module'
+    const carryBps = gr ? (gr.carryBps ?? (cdLaunch ? GRAD_DEFAULTS.carryPct * 100 : 0)) : 0
+    if (gr && carryBps > 0 && !cdLaunch) fail('--gr-carry carries part of the pool into the token\'s countdown reward: add --countdown-reward (the launch clones the module), or leave --gr-carry out')
     if (grad !== null && !(grad > 0)) fail('--grad must be the graduation target in BNB raised: 6, 9, 12 or 15', { got: opt('grad') ?? null })
     const buyTax = taxed ? taxOf('buy-tax') : 0
     const sellTax = taxed ? taxOf('sell-tax') : 0
@@ -599,10 +603,16 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (support.unread) fail('could not check the pad for the opening base (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
       if (!support.open) fail(`${support.why}: drop --base${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
     }
+    // with --countdown-reward, the pad knows the module (the carry's and the sweep's destination) only once gang opened
+    // the carry with this CLI's countdown factory
+    let grToModule = false
     if (gr) {
       const support = await gradSupport(ctx)
       if (support.unread) fail('could not check the pad for the graduation reward (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
       if (!support.open) fail(`${support.why}: drop --grad-reward${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
+      const cf = countdownFactoryAddress(testnet)
+      grToModule = cdLaunch && !!cf && String(support.countdownFactory ?? '').toLowerCase() === cf.toLowerCase()
+      if (carryBps > 0 && !grToModule) fail(carryClosed(support.countdownFactory, cf), { pad: ctx.pad })
     }
     // the recipient may be the creator itself: checkTaxConfigFor knows who creates (a pad without it: checkTaxConfig)
     const [ok, reason] = await ctx.read(ctx.pad, PAD_ABI, 'checkTaxConfigFor', [me, tax]).catch((e) => {
@@ -675,12 +685,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       if (seedRaw < seedFloor) fail(`--grad-reward: the seed must be at least ${await units(ctx, quote, seedFloor)} ${sym} (${MIN_SEED_BNB} BNB at this token's rate): a smaller pool is not worth a list`, { got: gr.seed })
       if (seedRaw >= 2n ** 128n || minBuyRaw >= 2n ** 96n || minBuyRaw === 0n) fail('--grad-reward / --gr-min-buy: amount out of range', { seed: gr.seed, minBuy: gr.minBuy })
       grCfg = {
-        seed: seedRaw, minBuy: minBuyRaw, entries: gr.entries, lastBps: gr.lastBps, carryBps: 0, refundAfter: gr.refundDays * 86_400,
+        seed: seedRaw, minBuy: minBuyRaw, entries: gr.entries, lastBps: gr.lastBps, carryBps, refundAfter: gr.refundDays * 86_400,
         promoteBps: promote?.shareBps ?? 0, promoteWindow: promote?.window ?? 0,
       }
       grView = gradCreateView({
         seed: await units(ctx, quote, seedRaw), minBuy: await units(ctx, quote, minBuyRaw), sym, entries: gr.entries, lastBps: gr.lastBps,
-        refundDays: gr.refundDays, targetBnb, gateOn: await ctx.read(ctx.pad, GRAD_PAD_ABI, 'agentGateEnabled'),
+        refundDays: gr.refundDays, targetBnb, gateOn: await ctx.read(ctx.pad, GRAD_PAD_ABI, 'agentGateEnabled'), carryBps, toModule: grToModule,
         ...(!gr.minBuy && { seedFloorNote: `--gr-min-buy left out: ${DEFAULT_MIN_BUY_BNB} BNB at this token's rate` }),
       })
       const pre = await fundingStep(ctx, me, quote, seedRaw, sym, 'approve-quote', rawOnly, summarize)
@@ -700,12 +710,15 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const prepareCreate = (logoURI, metaURI, fixed = null) => vanityCreate(ctx, me, createData(logoURI, metaURI), {
       args: [name, symbol, metaURI, handler, tax.buyTaxBps, tax.sellTaxBps, false], fixed,
     })
-    // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing
-    const probe = await prepareCreate('', '')
+    // the logo / metadata strings never decide a revert: dry-run without them, so a create that would fail uploads nothing.
+    // A pinned launch (floor / countdown module cloned for one address) has them fixed already: its dry run uses them and
+    // the pinned salt, since a carry checks that the module was made for this very token address
+    const pinned = launchFloor ? [launchFloor.logoURI, launchFloor.metaURI] : ['', '']
+    const probe = await prepareCreate(...pinned, launchFloor ? { salt: launchFloor.salt, token: launchFloor.token } : null)
     // createWithSalt (abcd) or the entry itself; a base create sends exactly its cost either way
-    const dry = await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : createAbi,
-      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData('', '')] : argsOf('', ''), baseCost)
-    if (dry.failed) return out({ success: false, step: 'create', ...dry.failed })
+    const dry = probe.mismatch ? null : await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : createAbi,
+      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData(...pinned)] : argsOf(...pinned), baseCost)
+    if (dry?.failed) return out({ success: false, step: 'create', ...dry.failed })
     // a floor launch: the module was cloned for one token address, so the create reuses the metadata and the salt that
     // give it, and is refused when anything that decides the address (name, symbol, tax rates) changed since
     const logo = launchFloor ? { logoURI: launchFloor.logoURI, uploaded: !!launchFloor.uploaded } : await resolveLogo()

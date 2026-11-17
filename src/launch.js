@@ -15,7 +15,7 @@ import { claimCmd, notThroughModule } from './creatorfee.js'
 import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotDeployed, comboOf, comboParts, parseComboSpec, PERMANENT_NOTE, simulateCombo } from './combo.js'
 import { FLOOR_ABI, FLOOR_FACTORY_ABI, FLOOR_NOTE, floorFactoryAddress, floorLine, floorNotDeployed, floorOf, floorShown, OTHER_ASSETS_NOTE as FLOOR_OTHER_ASSETS_NOTE, parseFloorSpec, PERMANENT_NOTE as FLOOR_PERMANENT_NOTE, simulateFloor, treasuryShare } from './floor.js'
 import { mineToken } from './vanity.js'
-import { GRAD_FLAGS } from './gradreward.js'
+import { gradLaunchCheck, parseGradReward } from './gradreward.js'
 import { CD_ALONE, CD_FLAGS, COUNTDOWN_ABI, COUNTDOWN_FACTORY_ABI, countdownConfig, countdownCreateView, countdownFactoryAddress, countdownNotLive, countdownRaw, countdownShown, formatCountdown, parseCountdownSpec, sameConfig, simulateCountdown } from './countdown.js'
 import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappedNotDeployed, cappedOf, cappedParts, capUnits, capVolume, COVERAGE_NOTE, OTHER_ASSETS_NOTE, parseCappedSpec, PERMANENT_NOTE as CAPPED_PERMANENT_NOTE, quoteUnits, simulateCapped, splitPcts } from './capped.js'
 
@@ -223,9 +223,6 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (!countdown) {
     const f = CD_FLAGS.find((x) => flag(x))
     if (f) fail(`--${f}: ${CD_ALONE}`)
-  }
-  if (countdown && ['grad-reward', ...GRAD_FLAGS].some((x) => flag(x))) {
-    fail('--grad-reward and --countdown-reward can\'t go together in this CLI version: running both rewards on one token (the graduation reward carried into the countdown pool) comes in a later version. Launch with one of them')
   }
   if (countdown) {
     const other = ['floor', 'redeem-fee', 'buyback', 'buyback-to', 'lp', 'lp-to', 'split', 'tax-cap', 'tax-cap-share', 'after-cap', 'recipient', 'vault'].find((x) => flag(x))
@@ -982,6 +979,16 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       if ((await client.getCode({ address: cdSpec.factory }) ?? '0x') === '0x') {
         const env = testnet ? 'GANG_TESTNET_COUNTDOWN_FACTORY' : 'GANG_COUNTDOWN_FACTORY'
         return fail(`GangCountdownRewardFactory has no code at ${cdSpec.factory} on ${testnet ? 'the BSC testnet' : 'BSC mainnet'}: launch without --countdown-reward for now${process.env[env] ? ` (or fix ${env})` : ''}`, { factory: cdSpec.factory })
+      }
+      // --grad-reward with it: what its create would refuse is refused before the clone (gas, metadata fixed for good)
+      if (flag('grad-reward')) {
+        const gr = parseGradReward(opt, flag)
+        if (gr.error) return fail(gr.error, { got: gr.got })
+        const no = await gradLaunchCheck(read, net.pad, testnet, gr, cdSpec.factory)
+        if (no) {
+          const { error, ...extra } = no
+          return fail(error, extra)
+        }
       }
       const vctx = { ...net, client, read }
       const handler = await read(net.pad, FLOOR_PAD_ABI, 'taxHandler')
