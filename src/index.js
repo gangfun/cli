@@ -390,9 +390,11 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
   gang campaign [<slug>]                 gang.fun's reward campaigns (gang.fun/campaign/<slug>, 0.45.0+): the live ones; with
                                          a slug (or when one is live) its rules summary, tickets, lottery and my progress.
                                          Rewards follow the campaign's public rules; not investment advice
-  gang campaign join [<slug>] [--yes]    the free sign-up (base ticket without a trade). Without --yes: a preview, nothing
-                                         signed or sent. --yes signs it with the Agent wallet (EIP-712, no tx, no gas) and
-                                         submits it. Never trade only to earn tickets
+  gang campaign join [<slug>] [--yes]    the free sign-up (base ticket without a trade), while the campaign has it open.
+                                         Without --yes: a preview, nothing signed or sent. --yes signs it with the Agent
+                                         wallet (EIP-712, no tx, no gas) and submits it. Once a campaign closed it (0.45.1+:
+                                         gang campaign shows signUp closed and the page notice): nothing is signed, earlier
+                                         sign-ups keep their ticket. Never trade only to earn tickets, nor on your own
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 
