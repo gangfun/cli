@@ -6,10 +6,12 @@
  *                                          tickets and lottery, and the signed-in wallet's progress
  *   gang campaign join [<slug>] [--yes]    the free sign-up, while the campaign has it open: a preview (nothing signed
  *                                          or sent); --yes signs it with the Agent wallet (EIP-712 typed data, no
- *                                          transaction, no gas) and submits it
+ *                                          transaction, no gas) and submits it. Without a slug: the live campaign that
+ *                                          takes sign-ups, when exactly one does
  *
- * The sign-up proves which Agent wallet joins without a trade. A campaign's config can close it (rules.ticket.join =
- * false): then nothing is signed, earlier sign-ups keep their ticket, and the notes say where the base ticket comes from
+ * The sign-up proves which Agent wallet joins without a trade. It is open only while the campaign's config says so
+ * (rules.ticket.join = true, as the server checks; a config without the key is closed): otherwise nothing is signed,
+ * earlier sign-ups keep their ticket, and the notes say where the base ticket comes from
  * now. Either way an agent never trades only to earn campaign tickets, and never on its own.
  */
 import { get as apiGet } from './discover.js'
@@ -21,7 +23,7 @@ const RULES_NOTE = 'A gang.fun reward campaign: rewards follow its public rules 
 const NO_TICKET_TRADES = "Never trade only to earn tickets, and never on your own: any trade is the user's decision, previewed and confirmed."
 /** The note while the campaign's free sign-up is open. */
 export const CAMPAIGN_NOTE = `${RULES_NOTE} Never trade only to earn tickets: the free sign-up (gang campaign join) gives the same base ticket.`
-/** The note once the campaign closed its sign-up (rules.ticket.join = false). */
+/** The note once the campaign closed its sign-up (rules.ticket.join not true). */
 export const CAMPAIGN_NOTE_CLOSED = `${RULES_NOTE} The free sign-up is closed: tickets now come as the campaign's rules say (see notice and the campaign page); wallets that signed up earlier keep theirs. ${NO_TICKET_TRADES}`
 /** The note for a list of campaigns (each may have its sign-up open or closed). */
 export const CAMPAIGN_NOTE_LIST = `${RULES_NOTE} ${NO_TICKET_TRADES}`
@@ -47,8 +49,10 @@ export function joinTypedData(wallet, campaign, expires) {
   }
 }
 
-/** Did the campaign's config close its free sign-up? */
-export const joinClosed = (c) => c?.rules?.ticket?.join === false
+/** Is the campaign's free sign-up closed? Open only with rules.ticket.join = true (the server refuses otherwise). */
+export const joinClosed = (c) => c?.rules?.ticket?.join !== true
+/** Does this campaign (GET /campaigns/:slug) take a free sign-up now? Live, with tickets, its sign-up not closed. */
+export const takesJoin = (c) => c?.status === 'live' && c.tickets != null && !joinClosed(c)
 /** The note that fits this campaign's sign-up state. */
 export const noteFor = (c) => (joinClosed(c) ? CAMPAIGN_NOTE_CLOSED : CAMPAIGN_NOTE)
 const noticeOf = (c) => {
@@ -102,15 +106,23 @@ export async function runCampaign(sub, rest, { flag, out, fail }) {
   const read = async (path) => {
     try { return await apiGet(path, undefined, '') } catch (e) { return fail(e.message, { retry: 'same command again' }) }
   }
-  // the campaign this command is about: the slug given, else the only live one
+  // without a slug: the live campaigns' slugs, said on every "no live campaign takes a sign-up" refusal
+  let liveSlugs = null
+  // the campaign this command is about: the slug given, else the only live one; several live: status lists them all,
+  // and join takes the one that accepts a sign-up (asks for a slug only when several do)
   const pick = async () => {
     if (slugArg) return slugArg
     const l = await read('/campaigns?status=live')
     const items = Array.isArray(l?.items) ? l.items : []
+    liveSlugs = items.map((i) => i.slug)
     if (items.length === 1) return items[0].slug
     if (!items.length) return null
     if (!join) { out({ success: true, live: items.map((i) => ({ slug: i.slug, title: titleOf(i.title), status: i.status, url: campaignUrl(i.slug) })), note: CAMPAIGN_NOTE_LIST }); return PRINTED }
-    return fail(`several campaigns are live: name one (${items.map((i) => i.slug).join(', ')})`, { campaigns: items.map((i) => i.slug) })
+    const open = []
+    for (const c of await Promise.all(items.map((i) => read(`/campaigns/${i.slug}`)))) if (takesJoin(c)) open.push(c.slug)
+    if (open.length === 1) return open[0]
+    if (!open.length) return fail(`no live gang.fun campaign takes a free sign-up now (live: ${liveSlugs.join(', ')}); gang campaign <slug> shows how its tickets come. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', campaigns: liveSlugs })
+    return fail(`several live campaigns take a free sign-up: name one (gang campaign join <slug>: ${open.join(', ')})`, { campaigns: open })
   }
   const mine = async (slug, w) => {
     if (!w) return null
@@ -145,7 +157,10 @@ export async function runCampaign(sub, rest, { flag, out, fail }) {
   // an earlier sign-up keeps its ticket, also once the sign-up closed or the campaign ended; an excluded wallet has none
   if (excluded) fail(`${w} is not eligible for ${slug}`, { apiCode: 'not_eligible', code: 'ERROR' })
   if (me?.joined) return out({ success: true, campaign: slug, wallet: w.toLowerCase(), alreadyJoined: true, mine: me, url: campaignUrl(slug) })
-  if (closed && c.status === 'live') fail(CLOSED_MSG(slug), { apiCode: 'closed', code: 'ERROR', campaign: summary(c), note: CAMPAIGN_NOTE_CLOSED })
+  // the only live campaign takes no sign-up: the same refusal as when several are live and none does (live slugs in campaigns)
+  const listed = liveSlugs && { campaigns: liveSlugs }
+  if (closed && c.status === 'live') fail(CLOSED_MSG(slug), { apiCode: 'closed', code: 'ERROR', ...listed, campaign: summary(c), note: CAMPAIGN_NOTE_CLOSED })
+  if (!joinOpen && c.status === 'live' && listed) fail(`no live gang.fun campaign takes a free sign-up now (live: ${slug}); gang campaign ${slug} shows how its tickets come. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', ...listed, campaign: summary(c) })
   if (!joinOpen) fail(`${slug} is not open for sign-up (status ${c.status})`, { campaign: summary(c) })
   if (!w) fail(SIGN_IN)
   if (notNew) fail(`${w} traded on Gang before ${slug} started: the sign-up is for new wallets (invites still earn tickets)`, { apiCode: 'not_new', code: 'ERROR' })

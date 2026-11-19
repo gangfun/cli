@@ -89,7 +89,7 @@ Each command prints one JSON object on stdout. The exceptions: `gang watch` prin
 | `txHash`, `status`, `pendingConfirmation` | On `gang execute`. With neither `txHash` nor `pendingConfirmation`, even on `success: true`, don't count the trade as sent: read `status`, and check your balance before trying again | Yes |
 | `tx` | With `--calldata`: `{ chainId, from, to, data, value }`, to send when there is no `steps`. When it has `gas`, use that as the gas limit | Yes |
 | `steps[]` | With `--calldata`, when it takes several transactions: `{ step, tx }` items to send in order. `tx` is then only the first | Yes |
-| `issues[].code`, `issues[].fix` | On `gang preflight` | Yes |
+| `issues[].code`, `issues[].fix`, `issues[].url` | On `gang preflight` (`url` 0.46.0+) | Yes |
 | `next` | A command to try next, for people and agents. Don't parse it | Field yes, text no |
 | `update` | This CLI is old: `{ current, latest, cmd, skill }`. Tell the user and stop trading | Yes |
 

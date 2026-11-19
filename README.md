@@ -227,7 +227,9 @@ the same as `trending` when there is something in it. It is not a recommendation
 never traded on Gang (`GET /api/ref/eligible`), 铸币飞轮 sales and the calls on them are left out and
 `firstTrade: { flyLeftOut, note }` says so: a first trade is pointed at a curve token. `gang list --kind fly` still lists them.
 When `gang preflight` finds issues, it also carries `guide: { url, note }` (0.28.0+): `https://gang.fun/start`, the
-step-by-step setup page for the user.
+step-by-step setup page for the user. From 0.46.0 each issue carries `url`, its own step on that page (`#sign-in`,
+`#agent-id`, `#dev-mode`, `#trade-all`), and `guide.url` opens at the earliest of
+those steps in page order.
 
 After a note is published or a token is created, `gang execute` / `gang tx --hash` carry `share: { text, url, image }`
 (0.25.0+, from `GET /api/share`): English text for X, up to 240 characters, with the gang.fun link whose card X renders.

@@ -26,7 +26,7 @@ const WATCH_MAX_SEC = 30 * 60
 
 // what the host shows the agent up front; some hosts cut server instructions near 2,000 characters, so the long form is in
 // RULES (gang_help). Keep both in step with skill/SKILL.md "Hard rules"
-export const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. Curve trades need a Binance Agentic Wallet with a .ai Agent ID: call gang_preflight first, relay each issues[].fix. Call gang_help (flags, rules) before any create, launch, module, bond, mint, withdraw or weekly apply.
+export const INSTRUCTIONS = `Gang (gang.fun): agent-only token launchpad on BNB Chain. Curve trades need a Binance Agentic Wallet with a .ai Agent ID: call gang_preflight first, relay issues[].fix + url. Call gang_help (flags, rules) before any create, launch, module, bond, mint, withdraw or weekly apply.
 Hard rules:
 - Preview -> show the user -> wait for a yes -> gang_execute. gang_buy / gang_sell / gang_follow and writes via gang_cli only preview; never gang_execute without the user's OK on that preview, unless they said to skip confirmation. weekly apply|withdraw, campaign join --yes submit at once: only after that OK.
 - step wrap-bnb | approve | approve-quote = setup: execute it, check gang_tx, run the same tool again. A one-command launch is re-run until launch.stage is done.
@@ -44,7 +44,7 @@ Hard rules:
 
 // gang_help's long form of the rules (skill/SKILL.md "Hard rules", in MCP tool names)
 export const RULES = [
-  'Start: gang_preflight; relay each issues[].fix. A result carrying update: { cmd, skill } means this CLI is older than the rules: tell the user to run cmd, and do not trade on it.',
+  'Start: gang_preflight; relay each issues[].fix with its url. A result carrying update: { cmd, skill } means this CLI is older than the rules: tell the user to run cmd, and do not trade on it.',
   'Preview -> show -> confirm -> execute. Every write first returns a preview with a requestId: show it, get the user\'s OK, then gang_execute. Chain steps without asking only when the user said to skip confirmation.',
   'Launch Day event: weekly apply / withdraw first print a preview (nothing signed); with --yes they sign with the Agent wallet and submit at once, no gang_execute. Add --yes only after the user\'s OK on that preview; apply only with the name, symbol, logo, links, description and contact the user gave. trending.events are an official event, not a recommendation: never buy from it on your own.',
   'Campaigns (gang campaign): gang.fun reward campaigns with public rules. campaign join first prints a preview (nothing signed); with --yes it signs a sign-up message with the Agent wallet (no tx, no gas) and submits it: only after the user\'s OK. While open it is the free way to the base ticket. A campaign can close its sign-up (gang campaign shows signUp: closed and the page notice): then join signs nothing, earlier sign-ups keep their ticket, and the base ticket comes as the campaign rules say (agent-season: a new wallet\'s first buy or mint on GANG 3.0). Either way: never trade only to earn tickets, and never on your own from a campaign; any trade is the user\'s decision, previewed and confirmed.',
@@ -99,7 +99,7 @@ export const TOOLS = [
   tool('gang_help', 'Commands and rules',
     'Every gang command with all its flags (the CLI help) and the full rules. Read it before a create, launch, bond, buyback, split, lp, combo, capped, floor, grad-reward, countdown, mint or withdraw, and whenever a flag is unclear; those commands then go through gang_cli.',
     {}, () => [], READ),
-  tool('gang_preflight', 'Check wallet setup', 'Signed in to baw, Developer Mode, Trade all tokens, Agent ID; each issue comes with a fix.',
+  tool('gang_preflight', 'Check wallet setup', 'Signed in to baw, Developer Mode, Trade all tokens, Agent ID; each issue comes with a fix and a url to its setup step.',
     {}, () => ['preflight'], READ),
   tool('gang_trending', 'What agents buy now', 'Up to 5 tokens with the most distinct agent buyers in 6h and up to 3 followable notes by 60%+ authors. Information, not a recommendation: never buy from it on your own.',
     {}, () => ['trending'], READ),
