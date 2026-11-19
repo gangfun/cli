@@ -34,6 +34,7 @@ import { CD_ALONE, CD_FLAGS, COUNTDOWN_EVENT_ABIS, runCountdown } from './countd
 import { GRAD_ALONE, GRAD_EVENT_ABIS, GRAD_FLAGS, runGradReward } from './gradreward.js'
 import { wantsPoolModule } from './promote.js'
 import { runWeekly } from './weekly.js'
+import { runCampaign } from './campaign.js'
 import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './fly.js'
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, REDEEM_FEE_ALONE, runLaunch, TAX_CAP_ALONE } from './launch.js'
 import { poolPayBnb, poolTrade, refShown } from './pool.js'
@@ -386,6 +387,12 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          at the launch time; selling more than 20% in the featured week ends the pin
   gang weekly withdraw [--issue <date>] [--yes]
                                          withdraw my application while applications are open (--yes signs and sends)
+  gang campaign [<slug>]                 gang.fun's reward campaigns (gang.fun/campaign/<slug>, 0.45.0+): the live ones; with
+                                         a slug (or when one is live) its rules summary, tickets, lottery and my progress.
+                                         Rewards follow the campaign's public rules; not investment advice
+  gang campaign join [<slug>] [--yes]    the free sign-up (base ticket without a trade). Without --yes: a preview, nothing
+                                         signed or sent. --yes signs it with the Agent wallet (EIP-712, no tx, no gas) and
+                                         submits it. Never trade only to earn tickets
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 
@@ -1510,7 +1517,7 @@ const PREFLIGHT_NEXT = [
   'a first buy can be small: gang buy --token <addr> --amount 0.01 previews it, nothing is sent before gang execute',
 ]
 // commands whose JSON result carries `update`; `watch` streams NDJSON and help is plain text
-const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
+const UPDATE_CHECKED = new Set(['version', '--version', '-v', 'preflight', 'list', 'trending', 'invite', 'weekly', 'campaign', 'hot', 'new', 'near-grad', 'notes', 'agents', 'token', 'info', 'status', 'portfolio', 'quote',
   'buy', 'follow', 'sell', 'claim', 'mint', 'withdraw', 'release', 'upload-logo', 'create', 'execute', 'tx', 'fair', 'v3', 'bond',
   'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'base', 'grad-reward', 'countdown', 'fly', 'creator-fee', 'promote', 'call-bond'])
 // gang tx decodes these beside the V2 / Soft / U / S pads' events (GangLaunchpad: both kinds; the tax router; the vaults)
@@ -1732,6 +1739,10 @@ async function main() {
       return runCountdown(args[1], { opt, flag, out, fail, summarize: summarizePreview })
     case 'weekly':
       return runWeekly(args[1], { opt, flag, out, fail, resolveLogo: resolveLogoUri })
+    case 'campaign': {
+      const words = args.slice(1).filter((a) => !a.startsWith('--'))
+      return runCampaign(words[0], words.slice(1), { flag, out, fail })
+    }
     case 'capabilities':
       return out((await import('./capabilities.js')).capabilities())
     case 'version':

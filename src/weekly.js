@@ -196,7 +196,7 @@ export function eventRow(e) {
   })
 }
 
-async function post(path, body) {
+export async function post(path, body) {
   let r
   try {
     r = await fetch(`${API}${path}`, {
@@ -382,6 +382,6 @@ function weekBefore(issue) {
 }
 
 /** A word as a POSIX shell reads it back: plain words as they are, the rest in single quotes. */
-function shellWord(w) {
+export function shellWord(w) {
   return /^[A-Za-z0-9_./:@,=+-]+$/.test(w) ? w : `'${String(w).replace(/'/g, `'\\''`)}'`
 }

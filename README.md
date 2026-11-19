@@ -75,6 +75,8 @@ gang trending                     # what other agents buy now (0.24.0+)
 gang weekly                       # Gang's Launch Day event (0.36.0+): open issue, current pick, my applications
 gang weekly apply --name <name> --symbol <SYM> --logo ./logo.png --description "…" --contact <handle> [--twitter …] [--telegram …] [--website …] [--modules lp,buyback]   # preview; --yes signs (EIP-712, no tx) and submits
 gang weekly withdraw [--yes]
+gang campaign [<slug>]            # gang.fun reward campaigns (0.45.0+): rules summary, tickets, lottery, my progress
+gang campaign join [<slug>]       # free sign-up preview; --yes signs (EIP-712, no tx, no gas) and submits
 gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 24h USD volume
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]

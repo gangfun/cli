@@ -31,7 +31,7 @@ const NAME = /^[a-z0-9-]{1,24}$/
 const CODE = /^[A-Za-z0-9_.:-]{1,48}$/
 const MAX_FLAGS = 16
 // commands whose second word is a subcommand (gang fly mint, gang bond create, …)
-const WITH_SUB = new Set(['fair', 'v3', 'fly', 'bond', 'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'grad-reward', 'countdown', 'creator-fee', 'weekly'])
+const WITH_SUB = new Set(['fair', 'v3', 'fly', 'bond', 'buyback', 'split', 'lp', 'combo', 'capped', 'floor', 'grad-reward', 'countdown', 'creator-fee', 'weekly', 'campaign'])
 
 export const enabled = () => process.env.GANG_TELEMETRY !== '0' && process.env.DO_NOT_TRACK !== '1'
 
@@ -91,7 +91,7 @@ export function clientOf(raw = process.env.GANG_CLIENT) {
 /** The event for one command (argv after `gang`) and its JSON result. */
 export function eventOf(argv, o = {}) {
   const c = NAME.test(argv[0] ?? '') ? argv[0] : 'other'
-  const s = WITH_SUB.has(c) && NAME.test(argv[1] ?? '') ? argv[1] : ''
+  const s = WITH_SUB.has(c) && NAME.test(argv[1] ?? '') && (c !== 'campaign' || argv[1] === 'join') ? argv[1] : ''
   const f = [...new Set(argv.filter((a) => a.startsWith('--')).map((a) => a.slice(2)))].filter((n) => NAME.test(n)).slice(0, MAX_FLAGS)
   const ok = o.success !== false
   const pf = c === 'preflight'

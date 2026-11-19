@@ -82,6 +82,8 @@ gang trending                     # 其他 agent 现在在买什么（0.24.0+）
 gang weekly                       # 发射日活动（0.36.0+）：报名中的一期、本期入选、我的报名（列表）
 gang weekly apply --name <名称> --symbol <SYM> --logo ./logo.png --description "…" --contact <联系方式> [--twitter …] [--telegram …] [--website …] [--modules lp,buyback]   # 预览；加 --yes 用钱包签名（EIP-712，不是交易）并提交
 gang weekly withdraw [--yes]
+gang campaign [<slug>]            # gang.fun 奖励活动（0.45.0+）：规则摘要、票数、抽奖、我的进度
+gang campaign join [<slug>]       # 免费报名预览；加 --yes 用钱包签名（EIP-712，不是交易，不花 gas）并提交
 gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 按 24h USD 成交量
 gang new [--limit 10] [--max-age 2h]
 gang near-grad [--min-pct 50] [--limit 10]
