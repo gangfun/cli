@@ -89,7 +89,7 @@ gang execute --request-id <id>         发送
 | `txHash`、`status`、`pendingConfirmation` | `gang execute` 的结果。既没有 `txHash` 也没有 `pendingConfirmation` 时，即使 `success: true`，也不要当作已发送：先看 `status`，再查余额，然后才考虑重试 | 是 |
 | `tx` | 加 `--calldata` 时输出：`{ chainId, from, to, data, value }`，没有 `steps` 时发送它。带 `gas` 时，用它作为 gas limit | 是 |
 | `steps[]` | 加 `--calldata` 且需要多笔交易时输出：`{ step, tx }` 列表，按顺序发送。此时 `tx` 只是第一笔 | 是 |
-| `issues[].code`、`issues[].fix`、`issues[].url` | `gang preflight` 的结果（`url` 0.46.0+） | 是 |
+| `issues[].code`、`issues[].fix`、`issues[].url` | `gang preflight` 的结果（`url` 0.46.1+） | 是 |
 | `next` | 建议的下一条命令，给人和 Agent 看，不要解析 | 字段稳定，文字不稳定 |
 | `update` | CLI 版本过旧：`{ current, latest, cmd, skill }`。要告诉用户并停止交易 | 是 |
 

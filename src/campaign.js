@@ -2,27 +2,36 @@
  * `gang campaign`: gang.fun's reward campaigns (gang.fun/campaign/<slug>), e.g. Agent Season (`agent-season`). A
  * campaign's rules are public and fixed per version; rewards follow those rules and are not investment advice.
  *
- *   gang campaign [<slug>]                 live campaigns; with a slug (or when one is live) its rules summary, its
- *                                          tickets and lottery, and the signed-in wallet's progress
+ *   gang campaign [<slug>]                 live campaigns (each with its kind and sign-up); with a slug (or when one is
+ *                                          live) its rules summary, its tickets and lottery or its cash rewards, and the
+ *                                          signed-in wallet's progress
  *   gang campaign join [<slug>] [--yes]    the free sign-up, while the campaign has it open: a preview (nothing signed
  *                                          or sent); --yes signs it with the Agent wallet (EIP-712 typed data, no
  *                                          transaction, no gas) and submits it. Without a slug: the live campaign that
- *                                          takes sign-ups, when exactly one does
+ *                                          takes sign-ups, when exactly one does (--yes needs the slug when several are live)
+ *
+ * Two kinds (0.47.0+): a ticket campaign (tickets and a lottery, maybe a free sign-up) and a campaign with cash rewards
+ * (no tickets: rules.new_user tiers pay an amount per wallet that enters by its counted buys / mints, and again on a
+ * come-back buy; a DEV board per period). A cash campaign has no sign-up: counted trades enter by themselves. A
+ * campaign can have both (kind cash+tickets): it shows both blocks, and its sign-up is the ticket one.
  *
  * The sign-up proves which Agent wallet joins without a trade. It is open only while the campaign's config says so
  * (rules.ticket.join = true, as the server checks; a config without the key is closed): otherwise nothing is signed,
  * earlier sign-ups keep their ticket, and the notes say where the base ticket comes from
- * now. Either way an agent never trades only to earn campaign tickets, and never on its own.
+ * now. Either way an agent never trades only to earn campaign rewards or tickets, and never on its own.
  */
 import { get as apiGet } from './discover.js'
 import { bawAddress, bawStatus } from './baw.js'
 import { localTime } from './follow.js'
+import { gangGens, VAULT_GEN } from './gangpad.js'
 import { bawSignTyped, post, shellWord } from './weekly.js'
 
 const RULES_NOTE = 'A gang.fun reward campaign: rewards follow its public rules and are not investment advice.'
-const NO_TICKET_TRADES = "Never trade only to earn tickets, and never on your own: any trade is the user's decision, previewed and confirmed."
+const NO_TICKET_TRADES = "Never trade only to earn campaign rewards or tickets, and never on your own: any trade is the user's decision, previewed and confirmed."
 /** The note while the campaign's free sign-up is open. */
-export const CAMPAIGN_NOTE = `${RULES_NOTE} Never trade only to earn tickets: the free sign-up (gang campaign join) gives the same base ticket.`
+export const CAMPAIGN_NOTE = `${RULES_NOTE} Never trade only to earn campaign rewards or tickets: the free sign-up (gang campaign join) gives the same base ticket.`
+/** The note for a campaign with cash rewards: no sign-up. */
+export const CAMPAIGN_NOTE_CASH = `${RULES_NOTE} No sign-up: counted trades (buys and mints; sells never count) enter automatically; see rewards. ${NO_TICKET_TRADES}`
 /** The note once the campaign closed its sign-up (rules.ticket.join not true). */
 export const CAMPAIGN_NOTE_CLOSED = `${RULES_NOTE} The free sign-up is closed: tickets now come as the campaign's rules say (see notice and the campaign page); wallets that signed up earlier keep theirs. ${NO_TICKET_TRADES}`
 /** The note for a list of campaigns (each may have its sign-up open or closed). */
@@ -53,8 +62,16 @@ export function joinTypedData(wallet, campaign, expires) {
 export const joinClosed = (c) => c?.rules?.ticket?.join !== true
 /** Does this campaign (GET /campaigns/:slug) take a free sign-up now? Live, with tickets, its sign-up not closed. */
 export const takesJoin = (c) => c?.status === 'live' && c.tickets != null && !joinClosed(c)
+/** A campaign with cash rewards (no tickets; rules.new_user pays per wallet) rather than a ticket campaign. */
+/** Does the campaign pay cash per wallet (rules.new_user.cash not false)? Alone (isCash) or beside tickets. */
+export const hasCash = (c) => c?.rules?.new_user != null && c.rules.new_user.cash !== false
+/** A campaign with cash rewards only (no tickets): it has no sign-up. */
+export const isCash = (c) => c != null && c.tickets == null && hasCash(c)
+export const kindOf = (c) => (isCash(c) ? 'cash' : hasCash(c) ? 'cash+tickets' : 'tickets')
+/** open | closed | none (a cash campaign has no sign-up). */
+export const signUpOf = (c) => (isCash(c) ? 'none' : joinClosed(c) ? 'closed' : 'open')
 /** The note that fits this campaign's sign-up state. */
-export const noteFor = (c) => (joinClosed(c) ? CAMPAIGN_NOTE_CLOSED : CAMPAIGN_NOTE)
+export const noteFor = (c) => (isCash(c) ? CAMPAIGN_NOTE_CASH : joinClosed(c) ? CAMPAIGN_NOTE_CLOSED : CAMPAIGN_NOTE)
 const noticeOf = (c) => {
   const n = c?.rules?.page?.notice_en
   return typeof n === 'string' && n.trim() ? n.trim().slice(0, 500) : null
@@ -62,14 +79,91 @@ const noticeOf = (c) => {
 
 const titleOf = (t) => (t && typeof t === 'object' ? t.en || t.zh || null : t ?? null)
 const when = (ts) => (Number(ts) > 0 ? localTime(Number(ts)) : null)
+const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v))
+/**
+ * A threshold for people, in whole U: the smallest whole U at or above the real threshold (rounded to 6 decimals for
+ * float noise), so it is never shown lower than it is. Amounts are counted net of fees, so a "1 U" rule is often stored
+ * a little lower: 0.95 → 1, 1.004 → 2, 1.05 → 2, 0.004 → 1, 0 → 0 (any amount).
+ */
+export const wholeU = (u) => (num(u) == null ? null : Math.ceil(Math.round(Number(u) * 1e6) / 1e6))
+const atLeast = (u) => (wholeU(u) ? `≥${wholeU(u)} U` : 'any amount')
+const span = (s) => {
+  const n = num(s)
+  if (n == null) return null
+  if (n % 86400 === 0) return `${n / 86400} d`
+  return `${Math.round((n / 3600) * 10) / 10} h`
+}
+
+// the quotes the CLI can name (BSC mainnet); others are listed by address
+const QUOTE_SYMBOLS = {
+  '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'WBNB', '0x55d398326f99059ff775485246999027b3197955': 'USDT',
+  '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d': 'USDC', '0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d': 'USD1',
+}
+const TRACK_NAMES = { v3: 'GangLaunchpad curve tokens', fair: '打新 fair mint', fly: '铸币飞轮 Mint Flywheel', v2: 'LaunchpadV2', soft: 'Soft' }
+/** A counted pad's name, from this CLI's mainnet pad list (null for one it does not know). */
+const padName = (a) => {
+  const g = gangGens(false).find((x) => x.pad && x.pad.toLowerCase() === String(a).toLowerCase())
+  if (!g?.gen) return null
+  return g.gen === VAULT_GEN ? 'GangLaunchpad 2.0 vault' : `GangLaunchpad ${g.gen}`
+}
+const listOf = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs.at(-1)}` : xs[0] ?? '')
+
+/** What counts and who can enter (rules.count, require_agent_id): pads / quotes null = any. */
+function countedOf(c) {
+  const k = c.rules.count ?? {}
+  const kinds = (k.kinds ?? ['buy', 'mint']).filter((x) => x === 'buy' || x === 'mint')
+  const tracks = Array.isArray(k.tracks) ? k.tracks : null
+  const pads = Array.isArray(k.pads) && k.pads.length ? k.pads.map((a) => ({ address: a, name: padName(a) })) : null
+  const quotes = Array.isArray(k.quotes) && k.quotes.length ? k.quotes.map((a) => ({ address: a, symbol: QUOTE_SYMBOLS[String(a).toLowerCase()] ?? null })) : null
+  return { kinds: kinds.length ? kinds : ['buy', 'mint'], tracks, pads, quotes, agentId: c.rules.require_agent_id === true }
+}
+
+/** The cash rewards of a campaign that pays cash (GET /campaigns/:slug rules + slots + periods), or null. */
+export function rewardsOf(c) {
+  if (!hasCash(c)) return null
+  const n = c.rules.new_user
+  const asset = c.rules.payout?.user_asset ?? null
+  const counted = countedOf(c)
+  const counts = counted.kinds.map((k) => `${k}s`).join(' and ')
+  const where = [
+    counted.tracks && `of ${listOf(counted.tracks.map((t) => TRACK_NAMES[t] ?? t))}`,
+    counted.pads && `on ${listOf(counted.pads.map((p) => p.name ?? p.address))}`,
+    counted.quotes && `paid in ${listOf(counted.quotes.map((q) => q.symbol ?? q.address))}`,
+  ].filter(Boolean).join(', ')
+  const who = `a new wallet (its first Gang trade is in the window; one that traded on Gang before gets nothing)${counted.agentId ? ' holding an Agent ID' : ''}`
+  const tiers = Array.isArray(n.tiers) ? n.tiers : []
+  const board = c.rules.dev_board
+  const prizes = Array.isArray(board?.prizes_u) ? board.prizes_u.map(Number) : []
+  const periods = Array.isArray(c.periods) ? c.periods.length : null
+  return {
+    asset,
+    counts: `${counts} only (sells never count), net of fees${where ? `, ${where}` : ''}`,
+    counted,
+    who: { newWalletsOnly: true, agentId: counted.agentId, text: who },
+    entry: { minU: wholeU(n.threshold_u), text: `${who}, whose counted ${counts}${where ? ` ${where}` : ''} reach ${atLeast(n.threshold_u)} in total (net of fees)` },
+    perWallet: tiers.map((t) => ({ slots: num(t.slots), firstU: num(t.first_u), comeBackU: num(t.revisit_u) })),
+    comeBack: {
+      minU: wholeU(n.revisit_min_u), after: span(n.revisit_after_s), within: span(n.revisit_within_s),
+      text: `a counted buy or mint of ${atLeast(n.revisit_min_u)} from ${span(n.revisit_after_s)} to ${span(n.revisit_within_s)} after the wallet's first trade`,
+    },
+    ...(c.slots && { slots: { total: num(c.slots.total), open: num(c.slots.open), left: num(c.slots.left), entered: num(c.slots.entered) } }),
+    ...(prizes.length && {
+      devBoard: {
+        prizesU: prizes, perPeriod: true, periods, asset: c.rules.payout?.dev_asset ?? asset,
+        metric: board.metric ?? null, minCount: num(board.min_count),
+      },
+    }),
+  }
+}
 
 /** The parts of GET /campaigns/:slug an agent needs (the page has the rest). */
 export function summary(c) {
   const w = c.window ?? {}
   return {
-    slug: c.slug, title: titleOf(c.title), status: c.status,
+    slug: c.slug, title: titleOf(c.title), status: c.status, kind: kindOf(c),
     start: when(w.start), end: when(w.ended_at ?? w.end),
-    ...(noticeOf(c) && { notice: noticeOf(c) }), ...(joinClosed(c) && { signUp: 'closed' }),
+    ...(noticeOf(c) && { notice: noticeOf(c) }), ...(signUpOf(c) !== 'open' && { signUp: signUpOf(c) }),
+    ...(hasCash(c) && { rewards: rewardsOf(c) }),
     ...(c.tickets && { tickets: { total: c.tickets.total ?? 0, holders: c.tickets.holders ?? 0, prizesNow: c.tickets.prizes_now ?? 0 } }),
     ...(c.lottery && {
       lottery: {
@@ -82,8 +176,8 @@ export function summary(c) {
   }
 }
 
-/** The signed-in wallet's row (GET /campaigns/:slug/wallet/:address), or null. */
-export function mineOf(m) {
+/** The signed-in wallet's row (GET /campaigns/:slug/wallet/:address), or null; c (the campaign) adds its cash progress. */
+export function mineOf(m, c) {
   if (!m || typeof m !== 'object') return null
   const t = m.tickets ?? {}
   return {
@@ -92,6 +186,14 @@ export function mineOf(m) {
     joined: !!m.joined_at, ...(m.joined_at && { joinedAt: when(m.joined_at) }),
     ...(m.revisit && { revisit: { from: when(m.revisit.due_from), until: when(m.revisit.due_until), done: !!m.revisit.done } }),
     ...(m.won && { won: m.won }),
+    ...(hasCash(c) && {
+      cash: {
+        status: m.status ?? null, slot: m.slot ?? null, tier: m.tier ?? null, amountU: num(m.amount_u) ?? 0,
+        firstU: num(m.first_u), comeBackU: num(m.revisit_u),
+        comeBack: m.revisit ? { from: when(m.revisit.due_from), until: when(m.revisit.due_until), minU: wholeU(m.revisit.min_u), done: !!m.revisit.done } : null,
+        earnedU: num(m.earned_u) ?? 0, paidU: num(m.paid) ?? 0, asset: c.rules.payout?.user_asset ?? null,
+      },
+    }),
   }
 }
 
@@ -117,16 +219,30 @@ export async function runCampaign(sub, rest, { flag, out, fail }) {
     liveSlugs = items.map((i) => i.slug)
     if (items.length === 1) return items[0].slug
     if (!items.length) return null
-    if (!join) { out({ success: true, live: items.map((i) => ({ slug: i.slug, title: titleOf(i.title), status: i.status, url: campaignUrl(i.slug) })), note: CAMPAIGN_NOTE_LIST }); return PRINTED }
-    const open = []
-    for (const c of await Promise.all(items.map((i) => read(`/campaigns/${i.slug}`)))) if (takesJoin(c)) open.push(c.slug)
+    if (!join) {
+      // each row's kind and sign-up come from its own view (null when it could not be read)
+      const views = await Promise.all(items.map((i) => apiGet(`/campaigns/${i.slug}`, undefined, '').catch(() => null)))
+      out({
+        success: true,
+        live: items.map((i, k) => ({
+          slug: i.slug, title: titleOf(i.title), status: i.status,
+          kind: views[k] ? kindOf(views[k]) : null, signUp: views[k] ? signUpOf(views[k]) : null, url: campaignUrl(i.slug),
+        })),
+        note: CAMPAIGN_NOTE_LIST,
+      })
+      return PRINTED
+    }
+    const views = await Promise.all(items.map((i) => read(`/campaigns/${i.slug}`)))
+    const open = views.filter(takesJoin).map((c) => c.slug)
+    // --yes signs at once: with several live, only the slug the user OK'd (the preview's confirm names it)
+    if (flag('yes') && open.length) return fail(`several campaigns are live: name the one to sign up for (gang campaign join <slug> --yes, as the preview's confirm says: ${open.join(', ')})`, { code: 'USAGE', campaigns: open })
     if (open.length === 1) return open[0]
-    if (!open.length) return fail(`no live gang.fun campaign takes a free sign-up now (live: ${liveSlugs.join(', ')}); gang campaign <slug> shows how its tickets come. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', campaigns: liveSlugs })
+    if (!open.length) return fail(`no live gang.fun campaign takes a free sign-up now (live: ${liveSlugs.join(', ')}); gang campaign <slug> shows how its ${views.some(hasCash) ? 'rewards or tickets work' : 'tickets come'}. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', campaigns: liveSlugs })
     return fail(`several live campaigns take a free sign-up: name one (gang campaign join <slug>: ${open.join(', ')})`, { campaigns: open })
   }
-  const mine = async (slug, w) => {
+  const mine = async (slug, w, c) => {
     if (!w) return null
-    try { return mineOf(await apiGet(`/campaigns/${slug}/wallet/${w.toLowerCase()}`, undefined, '')) } catch { return null }
+    try { return mineOf(await apiGet(`/campaigns/${slug}/wallet/${w.toLowerCase()}`, undefined, ''), c) } catch { return null }
   }
   const wallet = () => (signedIn() ? (() => { try { return bawAddress() } catch { return null } })() : null)
 
@@ -139,7 +255,7 @@ export async function runCampaign(sub, rest, { flag, out, fail }) {
   const c = await read(`/campaigns/${slug}`)
   if (!c) fail(`gang.fun has no campaign ${slug}`)
   const w = wallet()
-  const me = await mine(slug, w)
+  const me = await mine(slug, w, c)
   // can this wallet sign up at all? (the server refuses otherwise, after the user approved a signature for nothing)
   const closed = joinClosed(c)
   const joinOpen = c.status === 'live' && c.tickets != null && !closed
@@ -154,13 +270,15 @@ export async function runCampaign(sub, rest, { flag, out, fail }) {
     })
   }
 
+  // a campaign with cash rewards has no sign-up at all: nothing to sign, and no reason to trade for it
+  if (isCash(c)) fail(`this campaign has no sign-up (${slug}): counted trades are recorded automatically (gang campaign ${slug} shows its rewards). Nothing was signed or sent. ${NO_TICKET_TRADES}`, { apiCode: 'no_signup', code: 'ERROR', ...(liveSlugs && { campaigns: liveSlugs }), campaign: summary(c), note: CAMPAIGN_NOTE_CASH })
   // an earlier sign-up keeps its ticket, also once the sign-up closed or the campaign ended; an excluded wallet has none
   if (excluded) fail(`${w} is not eligible for ${slug}`, { apiCode: 'not_eligible', code: 'ERROR' })
   if (me?.joined) return out({ success: true, campaign: slug, wallet: w.toLowerCase(), alreadyJoined: true, mine: me, url: campaignUrl(slug) })
   // the only live campaign takes no sign-up: the same refusal as when several are live and none does (live slugs in campaigns)
   const listed = liveSlugs && { campaigns: liveSlugs }
   if (closed && c.status === 'live') fail(CLOSED_MSG(slug), { apiCode: 'closed', code: 'ERROR', ...listed, campaign: summary(c), note: CAMPAIGN_NOTE_CLOSED })
-  if (!joinOpen && c.status === 'live' && listed) fail(`no live gang.fun campaign takes a free sign-up now (live: ${slug}); gang campaign ${slug} shows how its tickets come. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', ...listed, campaign: summary(c) })
+  if (!joinOpen && c.status === 'live' && listed) fail(`no live gang.fun campaign takes a free sign-up now (live: ${slug}); gang campaign ${slug} shows how its ${hasCash(c) ? 'rewards or tickets work' : 'tickets come'}. ${NO_TICKET_TRADES}`, { apiCode: 'closed', code: 'ERROR', ...listed, campaign: summary(c) })
   if (!joinOpen) fail(`${slug} is not open for sign-up (status ${c.status})`, { campaign: summary(c) })
   if (!w) fail(SIGN_IN)
   if (notNew) fail(`${w} traded on Gang before ${slug} started: the sign-up is for new wallets (invites still earn tickets)`, { apiCode: 'not_new', code: 'ERROR' })

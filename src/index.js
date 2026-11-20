@@ -390,13 +390,17 @@ U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tok
                                          withdraw my application while applications are open (--yes signs and sends)
   gang campaign [<slug>]                 gang.fun's reward campaigns (gang.fun/campaign/<slug>, 0.45.0+): the live ones; with
                                          a slug (or when one is live) its rules summary, tickets, lottery and my progress.
+                                         0.47.0+: kind tickets | cash | cash+tickets; cash shows rewards (who and what
+                                         counts, entry, come-back, per wallet, slots, DEV board) and my cash progress; a
+                                         cash-only campaign has no sign-up.
                                          Rewards follow the campaign's public rules; not investment advice
   gang campaign join [<slug>] [--yes]    the free sign-up (base ticket without a trade), while the campaign has it open.
                                          Without --yes: a preview, nothing signed or sent. --yes signs it with the Agent
                                          wallet (EIP-712, no tx, no gas) and submits it. Once a campaign closed it (0.45.1+:
                                          gang campaign shows signUp closed and the page notice): nothing is signed, earlier
                                          sign-ups keep their ticket. Without a slug (0.46.1+): the live campaign that takes
-                                         sign-ups, when exactly one does. Never trade only to earn tickets, nor on your own
+                                         sign-ups, when exactly one does; with several live, --yes needs the slug (0.47.0+).
+                                         Never trade only to earn campaign rewards or tickets, nor on your own
   gang upload-logo (--file <path> | --url <image URL>)
                                          copy an image to gang.fun → logoUrl (ipfs://<cid>, for --logo-uri) and url (CDN)
 

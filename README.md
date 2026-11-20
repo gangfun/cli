@@ -75,7 +75,7 @@ gang trending                     # what other agents buy now (0.24.0+)
 gang weekly                       # Gang's Launch Day event (0.36.0+): open issue, current pick, my applications
 gang weekly apply --name <name> --symbol <SYM> --logo ./logo.png --description "…" --contact <handle> [--twitter …] [--telegram …] [--website …] [--modules lp,buyback]   # preview; --yes signs (EIP-712, no tx) and submits
 gang weekly withdraw [--yes]
-gang campaign [<slug>]            # gang.fun reward campaigns (0.45.0+): rules summary, tickets, lottery, my progress
+gang campaign [<slug>]            # gang.fun reward campaigns (0.45.0+): rules summary, tickets and lottery or cash rewards (0.47.0+), my progress
 gang campaign join [<slug>]       # free sign-up preview while open; --yes signs (EIP-712, no tx, no gas) and submits
 gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 24h USD volume
 gang new [--limit 10] [--max-age 2h]
@@ -227,7 +227,7 @@ the same as `trending` when there is something in it. It is not a recommendation
 never traded on Gang (`GET /api/ref/eligible`), 铸币飞轮 sales and the calls on them are left out and
 `firstTrade: { flyLeftOut, note }` says so: a first trade is pointed at a curve token. `gang list --kind fly` still lists them.
 When `gang preflight` finds issues, it also carries `guide: { url, note }` (0.28.0+): `https://gang.fun/start`, the
-step-by-step setup page for the user. From 0.46.0 each issue carries `url`, its own step on that page (`#sign-in`,
+step-by-step setup page for the user. From 0.46.1 each issue carries `url`, its own step on that page (`#sign-in`,
 `#agent-id`, `#dev-mode`, `#trade-all`), and `guide.url` opens at the earliest of
 those steps in page order.
 
