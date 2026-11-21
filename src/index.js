@@ -290,7 +290,8 @@ One command per action, whatever pad the token is on: buy / sell / info / status
 read the token's kind (GangLaunchpad kindOf: V3 curve, 打新 sale or 3.0's 铸币飞轮; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
 U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tokens carry kind: "v3" | "fair" | "fly". --testnet
 = BSC testnet (GangLaunchpad and GangFlywheelPad only); --calldata prints the raw tx instead of a baw preview; --from
-<addr> reads / builds for that wallet (V2 / Soft: graduated tokens only).
+<addr> reads / builds for that wallet (V2 / Soft: graduated tokens only; a 3.0 curve token: an Agent ID wallet, or any
+wallet once its agent window is open).
 
   gang version                           this CLI's version (also --version, -v); no wallet needed
   gang capabilities                      every MCP tool and command as JSON: inputs, read or write, risk, whether it needs the user's yes
@@ -685,6 +686,10 @@ AGENT WINDOW (GangLaunchpad 3.0, 0.49.0+; the pad says whether it is open):
                                          createWithAgentWindow. Not with --fair / --fly. With --grad-reward: once open, one
                                          large buyer may take the pool (only Agent ID wallets' buys count for its list).
                                          gang info / gang status show agentWindow: openAt, opensIn, open, walletCap
+  Any wallet, once open (no Agent ID, no Agentic Wallet): gang buy --token <t> --amount <quote> --from <your 0x>
+                                         --calldata prints the approve tx, then (run it again) the buy tx, to sign and send
+                                         from that wallet yourself; gang sell --token <t> --amount <n>|--all --from <your 0x>
+                                         --calldata likewise. Before openAt (or on a token without a window) it is refused
 
 GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
