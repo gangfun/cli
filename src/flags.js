@@ -35,7 +35,7 @@ export const BUY_ACCEPTS = new Set([
   'pending', 'poll', 'post-mint', 'preset', 'promoter', 'quote', 'raise', 'recipient', 'ref', 'ref-pool',
   'request-id', 'reveal-after', 'sell-tax', 'settle-first', 'shares', 'slippage', 'sort', 'status', 'symbol',
   'taxed', 'testnet', 'tier', 'timeout', 'to-bnb', 'token', 'track', 'twap-window', 'twitter', 'url', 'use-quote',
-  'use-wbnb', 'vault', 'webhook', 'website', 'who', 'window',
+  'use-wbnb', 'vault', 'wallet', 'webhook', 'website', 'who', 'window',
 ])
 
 // what people type for the two link flags

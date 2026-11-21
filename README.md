@@ -295,6 +295,39 @@ gang watch --notes --agent lazy.ai --timeout 2h
 gang agents --window 30d --sort follow
 ```
 
+## Your own wallet: WalletConnect (0.50.0+)
+
+`gang buy` / `gang sell` can trade from a wallet app of the user's (MetaMask, OKX, Trust, …) over WalletConnect v2:
+the CLI shows a pairing QR code, and the user confirms every transaction in the wallet. The CLI never holds a key.
+The WalletConnect project ID comes from gang.fun (`GET https://gang.fun/api/walletconnect`, kept in memory for the run);
+`GANG_WC_PROJECT_ID` overrides it.
+
+```bash
+gang wallet connect                 # QR code + uri; approve in the wallet app (BSC; --testnet: BSC testnet)
+gang buy --token 0x… --amount 0.05 --wallet wc
+gang execute --request-id wc-…      # the wallet asks the user to confirm; then the receipt
+gang wallet status                  # address, chain, wallet app, expiresAt
+gang wallet disconnect
+```
+
+- Same steps as the Agentic Wallet: a wrap / approve (exactly this trade's amount) first, then run the command again
+  for the trade. The preview's `request` is the decoded call (token, amount, `minTokensOut` / `minOut`, spender, BNB
+  sent); a request lasts 10 minutes and is sent once at most.
+- What it trades is the chain's rule: a GangLaunchpad 3.0 curve token once its agent window is open (or from a wallet
+  with an Agent ID), or a graduated token in its PancakeSwap pool through GangRouter. Everything else (create, bonds,
+  call bonds, promoter binding, follows, vault locks, 打新 / 铸币飞轮 mints, …) needs the Agentic Wallet and is refused
+  (`AGENTIC_ONLY`).
+- The session must be on the trade's chain (`WC_WRONG_CHAIN` otherwise: pick the network in the wallet, then
+  `gang wallet disconnect` and `gang wallet connect`); the CLI never switches the wallet's network. It is kept in
+  `~/.gang/wc` (directory 0700, files 0600) for 24 hours at most, then ended on the relay too.
+- An approve is only sent when it is exactly the next trade's (same spender, token and amount, within the balance).
+  `gang execute` again with the same id never sends twice (`WC_ALREADY_SENT`, with the hash); `gang wallet status`
+  lists the last requests. `sent: "unknown"` means it may still land: check before building the trade again.
+- The wallet's name and url (`walletSelfReported`) are its own claim: check the address in the wallet app. The pairing
+  uri is shown once and kept nowhere.
+- Only calls of `approve`, WBNB `deposit`, the pad's `buy` / `sell`, GangRouter's `v3Buy*` / `pool*` and a token's
+  countdown module buy, to a gang pad, router or that module, are ever sent this way.
+
 ## MCP server (0.17.0+)
 
 `gang mcp` serves the same commands as an [MCP](https://modelcontextprotocol.io) server on stdio, for agent hosts that
@@ -307,7 +340,8 @@ take MCP servers instead of a shell (Claude Desktop / Code, Cursor, …). Each t
 | `gang_tx` | `gang tx --hash …`: decode a tx, publish its queued note; `pending: true` = `gang tx --pending`, the trades approved in the Binance App (no hash needed) |
 | `gang_watch` | `gang watch` until `maxEvents` (default 1) or `timeout` (default 50s, at most 30m): returns `{ events, meta }`, `timedOut: true` when nothing came; call it again to keep waiting |
 | `gang_buy`, `gang_sell`, `gang_follow` | the trade previews (nothing is sent), with all their flags: `useWbnb` / `useQuote` / `payBnb`, `settleFirst`, … |
-| `gang_execute` | `gang execute --request-id …`: only after the user's yes on that preview |
+| `gang_execute` | `gang execute --request-id …`: only after the user's yes on that preview (a `wc-…` request: the wallet app then asks the user too) |
+| `gang_wallet_connect`, `gang_wallet_status`, `gang_wallet_disconnect` | `gang wallet connect --no-wait` (returns `uri` and `qr` at once; show them, then `gang_wallet_status` until `connected: true`), `status`, `disconnect` (0.50.0+); `gang_buy` / `gang_sell` take `wallet: "wc"` |
 | `gang_cli` | every other command as an argument list: `create` (also `--fair` and a launch in one command), `mint`, `withdraw`, `claim`, `release`, `quote`, `list`, `upload-logo`, `bond …`, `buyback …`, `split …`, `lp …`, `v3 income`, `version`, and the flags no other tool takes (`--calldata`, `--from`, …) |
 
 ```json
@@ -357,6 +391,8 @@ timed-out `gang_execute`, check `gang_status` / the wallet history instead of ex
 | `GANG_CDN_BASE` | CDN serving uploads as `<base>/ipfs/<cid>` (default `https://cdn.gang.fun`) |
 | `GANG_API` | Indexer API for discovery and note publishing (default `https://gang.fun/api`) |
 | `GANG_NOTES_DIR` | Local note queue, one file per note: salt and send status, kept 24h (default `~/.gang/notes`); `previews/` in it records what each trade preview carried (note, follow) for `gang execute`, also kept 24h |
+| `GANG_WC_PROJECT_ID` | WalletConnect / Reown Cloud project ID for `--wallet wc` (0.50.0+). Overrides the one gang.fun serves (`<GANG_API>/walletconnect`); never printed or written to disk |
+| `GANG_WC_DIR` | Where the WalletConnect session and its keys are kept (default `~/.gang/wc`; directory 0700, files 0600) |
 | `GANG_STREAM` | `0`: `gang watch` market mode polls instead of using the server's stream (same as `--poll`) |
 | `GANG_TELEMETRY` | `0` turns off the anonymous usage counts (0.24.0+; `DO_NOT_TRACK=1` too). See [Telemetry](#telemetry) |
 | `GANG_CLIENT` | The agent host's name in the usage counts (0.31.0+). `gang mcp` fills it in from the MCP client unless you set it |

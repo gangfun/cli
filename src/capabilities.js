@@ -21,10 +21,11 @@ const ACCESS = {
   preview: 'builds and simulates a transaction and returns a requestId; no transaction is sent until gang execute. A create also uploads its logo and metadata here',
   execute: 'broadcasts a transaction that was previewed',
   dispatch: 'runs another command: its entry in commands says what it does',
+  session: 'pairs (or unpairs) a wallet app the user approves in that app over WalletConnect; sends no transaction',
 }
 
 // first CLI with each tool (the git history of mcp.js); gang_* tools start at 0.17.0
-const TOOL_SINCE = { gang_help: '0.17.2', gang_trending: '0.24.0', gang_portfolio: '0.17.6' }
+const TOOL_SINCE = { gang_help: '0.17.2', gang_trending: '0.24.0', gang_portfolio: '0.17.6', gang_wallet_connect: '0.50.0', gang_wallet_status: '0.50.0', gang_wallet_disconnect: '0.50.0' }
 const TOOL_KIND = {
   gang_buy: ['preview', 'medium'], gang_follow: ['preview', 'medium'],
   gang_sell: ['preview', 'medium', { breakBond: { risk: 'high', why: 'gives up the whole bond' }, breakCallBond: { risk: 'high', why: 'gives up the whole call bond' }, confirmOut: { risk: 'high', why: 'ends the holder reward (Mint Flywheel: until the next mint)' } }],
@@ -32,6 +33,7 @@ const TOOL_KIND = {
   gang_execute: ['execute', 'high'],
   gang_tx: ['publish', 'low'],
   gang_cli: ['dispatch', 'high'], // up to the riskiest command it can run
+  gang_wallet_connect: ['session', 'low'], gang_wallet_disconnect: ['session', 'low'],
 }
 
 const c = (command, access, risk, since, summary, extra = {}) => ({ command, access, risk, sinceCli: since, summary, ...extra })
@@ -51,6 +53,9 @@ const ratioModule = (name, since, sweepSince) => baseModule(name, since, 'Dev on
 
 export const COMMANDS = [
   c('capabilities', 'read', 'none', '0.33.0', 'This document'),
+  c('wallet connect', 'session', 'low', '0.50.0', "Pair the user's own wallet app over WalletConnect (BSC / --testnet) for gang buy / sell --wallet wc: a QR code and uri, approved in the app; kept 24 h at most"),
+  c('wallet status', 'read', 'none', '0.50.0', 'The connected WalletConnect wallet: address, chain, app, expiry'),
+  c('wallet disconnect', 'session', 'low', '0.50.0', 'End the WalletConnect session and delete its keys'),
   c('version', 'read', 'none', '0.16.5', 'CLI version'),
   c('list', 'read', 'none', '0.1.0', 'Tokens read from the chain, or sales with --kind'),
   c('quote', 'read', 'none', '0.1.0', 'Quote a V2 / Soft curve buy'),
