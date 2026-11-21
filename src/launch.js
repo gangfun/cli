@@ -16,6 +16,8 @@ import { COMBO_ABI, COMBO_FACTORY_ABI, comboFactoryAddress, comboLine, comboNotD
 import { FLOOR_ABI, FLOOR_FACTORY_ABI, FLOOR_NOTE, floorFactoryAddress, floorLine, floorNotDeployed, floorOf, floorShown, OTHER_ASSETS_NOTE as FLOOR_OTHER_ASSETS_NOTE, parseFloorSpec, PERMANENT_NOTE as FLOOR_PERMANENT_NOTE, simulateFloor, treasuryShare } from './floor.js'
 import { mineToken } from './vanity.js'
 import { gradLaunchCheck, parseGradReward } from './gradreward.js'
+import { AGENT_WINDOW_ABI, agentWindowSupport, parseAgentWindow } from './agentwindow.js'
+import { missingRead } from './base.js'
 import { CD_ALONE, CD_FLAGS, COUNTDOWN_ABI, COUNTDOWN_FACTORY_ABI, countdownConfig, countdownCreateView, countdownFactoryAddress, countdownNotLive, countdownRaw, countdownShown, formatCountdown, parseCountdownSpec, sameConfig, simulateCountdown } from './countdown.js'
 import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappedNotDeployed, cappedOf, cappedParts, capUnits, capVolume, COVERAGE_NOTE, OTHER_ASSETS_NOTE, parseCappedSpec, PERMANENT_NOTE as CAPPED_PERMANENT_NOTE, quoteUnits, simulateCapped, splitPcts } from './capped.js'
 
@@ -159,6 +161,9 @@ export const isLaunch = (kind, flag, opt = () => undefined) => flag('bond') || f
 const MODULE_FLAGS = ['buyback', 'split', 'lp']
 /** How a module's flags read in a message. */
 const MOD_FLAG = { buyback: '--buyback', split: '--split', lp: '--lp', combo: 'more than one of --buyback / --lp / --split', capped: '--tax-cap', floor: '--floor', countdown: '--countdown-reward', promote: '--promote on a taxed token' }
+
+/** "a 30-minute agent window" / "no agent window". */
+const windowWords = (m) => (m ? `a ${m}-minute agent window` : 'no agent window')
 
 const planPath = (key) => join(LAUNCH_DIR, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 
@@ -477,6 +482,17 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     if (!tiers) fail(`--grad: GangLaunchpad ${net.gen ?? net.pad} has no graduation target to pick: leave --grad out`)
     if (!tiers.includes(Number(opt('grad')))) fail(`--grad must be one of ${tiers.join(' / ')} (BNB raised)`, { got: opt('grad') ?? null })
   }
+  // --agent-window (3.0): the pad must serve it before a module is cloned (gas, and the metadata fixed for good)
+  // the window this run asks for (0 = none): a launch keeps the one its create was built with (checked below)
+  const awMinutes = kind === 'v3' && flag('agent-window') ? (parseAgentWindow(opt('agent-window')).minutes ?? 0) : 0
+  if (kind === 'v3' && flag('agent-window')) {
+    const aw = parseAgentWindow(opt('agent-window'))
+    if (aw.error) fail(aw.error, { got: aw.got })
+    const support = await agentWindowSupport({ gen: net.gen, chainId: net.chainId, pad: net.pad, read })
+    if (support.unread) fail('could not check the pad for the agent window (RPC error)', { pad: net.pad, detail: support.unread, retry: 'same command again' })
+    if (!support.open) fail(`${support.why}: drop --agent-window`, { pad: net.pad })
+    if (aw.minutes < support.min || aw.minutes > support.max) fail(`--agent-window must be ${support.min}–${support.max} minutes on this pad`, { got: aw.minutes })
+  }
   const key = [net.chainId, net.pad, me.toLowerCase(), kind, name, symbol].join('|')
   const cloneStep = { buyback: 'buyback-splitter', split: 'split-module', lp: 'lp-splitter', combo: 'combo-module', capped: 'capped-module', floor: 'floor-module', countdown: 'countdown-module', promote: 'promote-module' }[mod]
   const steps = [...(mod ? [cloneStep] : []), kind === 'v3' ? 'create' : 'create (dev shares included)', ...(mod ? ['bind'] : []),
@@ -527,6 +543,11 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
       created = false
       rebuilt = true
     }
+  }
+  // a create built again (its token not on chain yet) uses the window it was first built with: the first create may
+  // still land, and two creates with different windows would leave the dev unsure which one is on chain
+  if (rebuilt && plan.agentWindow !== undefined && plan.agentWindow !== awMinutes) {
+    return fail(`this launch built its create with ${windowWords(plan.agentWindow)}: run it again with ${plan.agentWindow ? `--agent-window ${plan.agentWindow}` : 'no --agent-window'}, or add --restart for a new module and token`, { module: plan.splitter })
   }
   // the module this plan cloned: 'split' / 'lp' / 'combo' / 'capped' when it says so, else a --buyback splitter (plans from before --split)
   const planMod = plan?.salt ? (['split', 'lp', 'combo', 'capped', 'floor', 'countdown', 'promote'].includes(plan.module) ? plan.module : 'buyback') : null
@@ -1101,7 +1122,7 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
         // the plan starts with the create tx itself: a wrap / approve step before it (or a failed preview) leaves none,
         // so the next run builds the create again
         const built = o.success && o.step === 'create'
-        if (built) writePlan(key, { ...base, ...(plan?.splitter && { salt: plan.salt, splitter: plan.splitter, factory: plan.factory, ...(plan.module && { module: plan.module }), ...(plan.floor && { floor: plan.floor }), ...(plan.countdown && { countdown: plan.countdown }) }), startCount })
+        if (built) writePlan(key, { ...base, ...(kind === 'v3' && { agentWindow: awMinutes }), ...(plan?.splitter && { salt: plan.salt, splitter: plan.splitter, factory: plan.factory, ...(plan.module && { module: plan.module }), ...(plan.floor && { floor: plan.floor }), ...(plan.countdown && { countdown: plan.countdown }) }), startCount })
         const after = steps[steps.indexOf(kind === 'v3' ? 'create' : 'create (dev shares included)') + 1]
         return out({
           ...o,
@@ -1156,6 +1177,19 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
     })
     if (Number(share) !== want.shareBps || Number(window) !== want.window) {
       return fail(`this launch's token has ${Number(share) ? `a ${Number(share) / 100}% promoter share for ${Number(window) / 86_400} days` : 'no promoter terms'}, fixed at its create: run it again without changing them, or add --restart for a new token`, { token })
+    }
+  }
+
+  // a launch keeps the agent window its create was built with: a changed --agent-window after the create is refused (left
+  // out, the token goes on as it was created). The pad's openAt says whether the token has one; the plan, how long
+  if (flag('agent-window') && kind === 'v3') {
+    const openAt = await read(net.pad, AGENT_WINDOW_ABI, 'agentOpenAt', [token]).then(Number).catch((e) => {
+      if (missingRead(e)) return 0
+      return fail('could not read this launch\'s agent window (RPC error)', { token, retry: 'same command again' })
+    })
+    const had = openAt ? (plan.agentWindow || null) : 0
+    if (!openAt || (had !== null && had !== awMinutes)) {
+      return fail(`this launch's token has ${openAt ? (had ? windowWords(had) : 'an agent window') : 'no agent window'}, fixed at its create: run it again without changing it, or add --restart for a new token`, { token, ...(openAt && { openAt: new Date(openAt * 1000).toISOString() }) })
     }
   }
 

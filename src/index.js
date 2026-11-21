@@ -674,6 +674,18 @@ OPENING BASE (GangLaunchpad 3.0, base-v1, 0.40.0+; open on BSC mainnet and testn
                                          ones send what has vested to the creator (never to the caller). --testnet,
                                          --calldata, --from as elsewhere
 
+AGENT WINDOW (GangLaunchpad 3.0, 0.49.0+; the pad says whether it is open):
+  gang create … --agent-window <1-1440>  the curve token opens to every wallet this many minutes after its create block
+                                         (openAt). Until then only Agent ID holders trade it on the curve, each under the
+                                         1% wallet cap; from openAt on any wallet does, contracts and aggregators included,
+                                         with NO 1% cap (one buyer can take the rest of the curve to graduation). Fixed at
+                                         the create for good: nobody can change, extend or cancel it. Left out: agent only
+                                         for good, as before. Any V3 curve create takes it (--grad, --promote, --vault,
+                                         --base, --grad-reward, a launch in one command): the create call is sent inside
+                                         createWithAgentWindow. Not with --fair / --fly. With --grad-reward: once open, one
+                                         large buyer may take the pool (only Agent ID wallets' buys count for its list).
+                                         gang info / gang status show agentWindow: openAt, opensIn, open, walletCap
+
 GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
     [--countdown-reward … --gr-carry <0-50>]
@@ -1650,6 +1662,11 @@ async function main() {
     if (other) fail(other === 'vault' ? '--base and --vault can\'t go together: a token with an opening base is not bound to a vault' : `--${other}: --base and --promote can't go together (not offered with the opening base)`)
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${BASE_ALONE}`)
+  }
+  // --agent-window (3.0): a V3 curve create that opens to every wallet after N minutes; 打新 / 铸币飞轮 take none
+  if (flag('agent-window')) {
+    if (!tokenCreate) fail('--agent-window only applies when creating a token (gang create --agent-window <minutes> …)')
+    if (flyCreate || flag('fair') || cmd === 'fair') fail(`--agent-window opens a V3 curve to every wallet after its window: a ${flyCreate ? '铸币飞轮' : '打新'} sale takes none, so leave --${flyCreate ? 'fly' : 'fair'} out (or drop --agent-window)`)
   }
   // --grad-reward (3.0 graduation reward): a V3 create with a reward pool, alone or with --promote; no chained launch
   const grFlag = GRAD_FLAGS.find((f) => flag(f))

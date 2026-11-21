@@ -18,6 +18,7 @@ import { floorFactoryAddress, floorOf, floorShown, treasuryShare, typedFloorModu
 import { COUNTDOWN_TYPE, countdownBuy, countdownFactoryAddress, countdownForToken, countdownSellLine, formatCountdown } from './countdown.js'
 import { VANITY_ABI, vanityCreate, vanityDeployer } from './vanity.js'
 import { BASE_LOST, BASE_NO_BOND, BASE_PAD_ABI, baseOf as baseVaultView, basePayoff, baseSupport, baseTaxLine, HINTS as BASE_HINTS, parseBase, scheduleLine } from './base.js'
+import { AGENT_WINDOW_ABI, agentWindowOf, agentWindowSupport, GRAD_OPEN_WARNING, HINTS as WINDOW_HINTS, parseAgentWindow, shownWindow, windowCreateView, wrapCreate } from './agentwindow.js'
 import { bnbInQuote, carryClosed, DEFAULT_MIN_BUY_BNB, DEFAULTS as GRAD_DEFAULTS, GRAD_FLAGS, GRAD_PAD_ABI, gradBuyLine, gradCreateView, gradOf, gradSellLine, gradSupport, HINTS as GRAD_HINTS, MIN_SEED_BNB, parseGradReward } from './gradreward.js'
 
 /**
@@ -140,7 +141,7 @@ const HINTS = {
 const VAULT_PAD_ONLY = 'the 2.0 金库版 pad creates only with --vault <vault>: gang create --vault <the vault gang listed for you> …'
 
 /** What `gang tx` decodes a V3 trade's logs with (the pad and its 2.0 creator fee, the tax router, the dividend vault). */
-export const V3_EVENT_ABIS = [PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, VAULT_ABI]
+export const V3_EVENT_ABIS = [PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, VAULT_ABI, AGENT_WINDOW_ABI]
 /** For test/gens.mjs: the pad ABI (2.0 金库版 entries included) and the hints its errors get. */
 export const _vaultTest = { PAD_ABI, HINTS }
 
@@ -167,7 +168,7 @@ const ceilDiv = (a, b) => (a + b - 1n) / b
 /** Revert name (+ BadTaxConfig reason) of a failed call, or null when it was the RPC. */
 // the graduation reward's create errors (its claim errors share names with other contracts': not hinted here)
 const { NothingToClaim: _gn, AlreadyClaimed: _ga, ...GRAD_CREATE_HINTS } = GRAD_HINTS
-const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, BASE_PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI, GRAD_PAD_ABI], { BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...BASE_HINTS, ...GRAD_CREATE_HINTS, ...HINTS })
+const revertOf = (e) => revertIn(e, [PAD_ABI, VANITY_ABI, BASE_PAD_ABI, PROMOTE_PAD_ABI, CREATOR_FEE_ABI, GRAD_TARGET_ABI, TAX_ROUTER_ABI, GANG_ROUTER_ABI, MERGED_ERRORS_ABI, GRAD_PAD_ABI, AGENT_WINDOW_ABI], { ...WINDOW_HINTS, BadPromoteTerms: PROMOTE_HINTS.BadPromoteTerms, TraderNotOrigin: PROMOTE_HINTS.TraderNotOrigin, ...MERGED_HINTS, ...ROUTER_HINTS, ...BASE_HINTS, ...GRAD_CREATE_HINTS, ...HINTS })
 
 /** eth_call `data` from `from`: { result } when it passes, { failed } with the revert (or RPC error) otherwise. */
 async function simulate(ctx, from, to, abi, functionName, args, value = 0n) {
@@ -415,13 +416,19 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     // 3.0: the graduation reward (gang create --grad-reward): the pool, the rules and the list so far
     const grSeen = await gradOf(ctx, token, c.quote).catch((e) => ({ raw: null, error: `could not read the token's graduation reward (${e.shortMessage || e.message.split('\n')[0]})` }))
     const { raw: _grRaw, ...grField } = grSeen ?? {}
+    // 3.0: the agent window (gang create --agent-window): when the curve opens to every wallet, and whether the 1% cap applies
+    const windowSeen = await agentWindowOf(ctx, token, { graduated: c.graduated })
+    const agentWindow = windowSeen && {
+      ...shownWindow(windowSeen),
+      ...(windowSeen.set && grSeen?.raw && !c.graduated && { gradReward: GRAD_OPEN_WARNING }),
+    }
     // 3.0: the rule set the token was created under (fixed for good; an upgrade adds rules for new tokens only)
     const tokenVersion = ctx.gen === PAD3_GEN ? await ctx.read(ctx.pad, PAD_ABI, 'tokenVersionOf', [token]).then(Number).catch(() => null) : null
     const nonWbnb = c.quote.toLowerCase() !== String(ctx.wbnb).toLowerCase()
     const graduationNote = c.graduationTargetBnb != null && !c.graduated
       ? gradLine(c.graduationTargetBnb, nonWbnb ? `${c.graduationAt} ${c.quoteSymbol || 'of the quote'}` : null) : null
     return out({
-      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(baseSeen && { base: { ...baseField, ...(!baseField.error && { more: `gang base status --token ${token}${net}` }) } }), ...(grSeen && { gradReward: { ...grField, more: `gang grad-reward status --token ${token}${net}` } }), ...(tokenVersion != null && { tokenVersion }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
+      success: true, chainId: Number(ctx.chainId), ...fees, ...pub, ...gen, ...(promote && { promote }), ...(baseSeen && { base: { ...baseField, ...(!baseField.error && { more: `gang base status --token ${token}${net}` }) } }), ...(grSeen && { gradReward: { ...grField, more: `gang grad-reward status --token ${token}${net}` } }), ...(tokenVersion != null && { tokenVersion }), ...(agentWindow && { agentWindow }), ...(vault && { vault }), ...(graduationNote && { graduationNote }), taxNote, ...(swapBack && { swapBack }), ...(buyback && { buyback }),
       ...(split && { split: { ...split, ...splitWarn } }), ...(lp && { lp: { ...lp, ...lpWarn } }),
       ...(combo && { combo: { ...combo, ...(comboWarning && { warning: comboWarning }) } }),
       ...(capped && { capped: { ...capped, ...(cappedWarning && { warning: cappedWarning }) } }),
@@ -444,10 +451,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const promote = await promoteField(ctx, token, { recipient: c.recipient, dividendPct: c.dividendPct, testnet })
     // a token with a vault (2.0 金库版, 3.0 --vault), before graduation: what this wallet has in it, counted in its 1% cap
     const locked = !c.graduated && (await vaultOfToken(ctx, token).catch(() => null)) ? await ctx.read(ctx.pad, PAD_ABI, 'lockedOf', [token, me]) : null
+    // 3.0: the agent window, and whether this wallet may trade the curve now (canTradeCurve)
+    const windowSeen = c.graduated ? null : await agentWindowOf(ctx, token)
+    const canTrade = windowSeen && !windowSeen.error ? await ctx.read(ctx.pad, AGENT_WINDOW_ABI, 'canTradeCurve', [token, me]).catch(() => null) : null
     return out({
       success: true, chainId: Number(ctx.chainId), wallet: me, token, quote: c.quoteSymbol, graduated: c.graduated,
       balance: formatUnits(bal, 18), ...(locked !== null && { lockedInVault: formatUnits(locked, 18) }), dividendPct: c.dividendPct, ...(creatorFee && { creatorFee }), ...(promote && { promote }),
       graduationTargetBnb: c.graduationTargetBnb, graduationAt: c.graduationAt, progressPct: c.progressPct,
+      ...(windowSeen && { agentWindow: { ...shownWindow(windowSeen), ...(canTrade !== null && { youCanTrade: canTrade }) } }),
       ...(q && {
         poolSellAll: {
           expectOut: await units(ctx, c.quote, q.out), minOut: await units(ctx, c.quote, minOf(q.out, slippage)), slippagePct: slippage,
@@ -547,6 +558,10 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const cdLaunch = launchFloor?.noun === 'countdown reward module'
     const carryBps = gr ? (gr.carryBps ?? (cdLaunch ? GRAD_DEFAULTS.carryPct * 100 : 0)) : 0
     if (gr && carryBps > 0 && !cdLaunch) fail('--gr-carry carries part of the pool into the token\'s countdown reward: add --countdown-reward (the launch clones the module), or leave --gr-carry out')
+    // --agent-window: the curve opens to every wallet this many minutes after the create (createWithAgentWindow around the
+    // create call, 3.0 once upgraded); fixed for good. Any curve create takes it
+    const aw = flag('agent-window') ? parseAgentWindow(opt('agent-window')) : null
+    if (aw?.error) fail(aw.error, { got: aw.got })
     if (grad !== null && !(grad > 0)) fail('--grad must be the graduation target in BNB raised: 6, 9, 12 or 15', { got: opt('grad') ?? null })
     const buyTax = taxed ? taxOf('buy-tax') : 0
     const sellTax = taxed ? taxOf('sell-tax') : 0
@@ -602,6 +617,13 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const support = await baseSupport(ctx)
       if (support.unread) fail('could not check the pad for the opening base (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
       if (!support.open) fail(`${support.why}: drop --base${testnet ? '' : ' (it is on the BSC testnet: --testnet)'}`, { pad: ctx.pad })
+    }
+    // --agent-window: asked of the pad before anything is uploaded (mainnet before its upgrade has no window)
+    if (aw) {
+      const support = await agentWindowSupport(ctx)
+      if (support.unread) fail('could not check the pad for the agent window (RPC error)', { pad: ctx.pad, detail: support.unread, retry: 'same command again' })
+      if (!support.open) fail(`${support.why}: drop --agent-window`, { pad: ctx.pad })
+      if (aw.minutes < support.min || aw.minutes > support.max) fail(`--agent-window must be ${support.min}–${support.max} minutes on this pad`, { got: aw.minutes })
     }
     // with --countdown-reward, the pad knows the module (the carry's and the sweep's destination) only once gang opened
     // the carry with this CLI's countdown factory
@@ -715,9 +737,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     // the pinned salt, since a carry checks that the module was made for this very token address
     const pinned = launchFloor ? [launchFloor.logoURI, launchFloor.metaURI] : ['', '']
     const probe = await prepareCreate(...pinned, launchFloor ? { salt: launchFloor.salt, token: launchFloor.token } : null)
-    // createWithSalt (abcd) or the entry itself; a base create sends exactly its cost either way
-    const dry = probe.mismatch ? null : await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : createAbi,
-      probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData(...pinned)] : argsOf(...pinned), baseCost)
+    // createWithSalt (abcd) or the entry itself; a base create sends exactly its cost either way. --agent-window: that same
+    // call inside createWithAgentWindow (the pad delegatecalls it as this wallet, value and all)
+    const dry = probe.mismatch ? null : aw
+      ? await simulate(ctx, me, ctx.pad, AGENT_WINDOW_ABI, 'createWithAgentWindow', [aw.minutes, probe.data], baseCost)
+      : await simulate(ctx, me, ctx.pad, probe.salt ? VANITY_ABI : createAbi,
+        probe.salt ? 'createWithSalt' : fn, probe.salt ? [probe.salt, createData(...pinned)] : argsOf(...pinned), baseCost)
     if (dry?.failed) return out({ success: false, step: 'create', ...dry.failed })
     // a floor launch: the module was cloned for one token address, so the create reuses the metadata and the salt that
     // give it, and is refused when anything that decides the address (name, symbol, tax rates) changed since
@@ -734,7 +759,9 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     if (launchFloor) {
       // the last check before the tx: the pad itself says where this exact call puts the token
-      const sure = await simulate(ctx, me, ctx.pad, VANITY_ABI, 'createWithSalt', [launch.salt, createData(logo.logoURI, meta.metaURI)])
+      const sure = aw
+        ? await simulate(ctx, me, ctx.pad, AGENT_WINDOW_ABI, 'createWithAgentWindow', [aw.minutes, launch.data])
+        : await simulate(ctx, me, ctx.pad, VANITY_ABI, 'createWithSalt', [launch.salt, createData(logo.logoURI, meta.metaURI)])
       if (sure.failed) return out({ success: false, step: 'create', ...sure.failed })
       if (String(sure.result).toLowerCase() !== String(launchFloor.token).toLowerCase()) {
         return fail(`the pad would create this token at another address than the one its ${pinnedNoun} was cloned for: nothing is built. Add --restart for a new module and token`, { floorToken: launchFloor.token, padSays: sure.result })
@@ -761,7 +788,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       wallet: 'the release always goes to the wallet that creates (this one), for good: if it is lost, the base goes there anyway. That wallet can still buy up to 1% on the curve on its own',
       warning: `PERMANENT: ${formatUnits(baseCost, 18)} BNB is spent in this create; if the token never graduates, it and the base are locked for good. The size, the period and the recipient never change`,
     }
-    return out(notes.step(ctx, { from: me, to: ctx.pad, data: launch.data, ...(base && { value: baseCost }) }, {
+    return out(notes.step(ctx, { from: me, to: ctx.pad, data: aw ? wrapCreate(aw.minutes, launch.data) : launch.data, ...(base && { value: baseCost }) }, {
       step: 'create', chainId: Number(ctx.chainId), name, symbol, logoURI: logo.logoURI, ...(logo.uploaded && { uploaded: true }),
       metaURI: meta.metaURI, metadata: meta.metadata,
       quote: (await symbolOf(ctx, quote)) || quote, graduationTargetBnb: targetBnb, graduationAt: await units(ctx, quote, gradAmt),
@@ -786,11 +813,12 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       }),
       ...(base && { base: baseView }),
       ...(grView && { gradReward: grView }),
+      ...(aw && { agentWindow: windowCreateView(aw.minutes, { gradReward: !!gr, vault: !!vault, promote: !!promote }) }),
       ...(vault && {
         padGen: ctx.gen, pad: ctx.pad, vault,
         vaultNote: 'the token is bound to this vault for good. Until graduation the token moves only through the pad: the vault locks a holder\'s tokens (counted in that holder\'s 1% cap) and releases them through the pad, for the holder that sends the tx and holds an Agent ID; after graduation it is a plain token. This create uses up the wallet\'s naming for the vault: one token per naming. A vault-bound token takes no GangBond (gang bond post refuses it): a lock moves tokens out of the creator\'s wallet, which would forfeit a bond',
       }),
-      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. ${launch.token ? 'The CREATE2 address ends in abcd and is fixed for this transaction.' : 'tokenIfNext changes if another create lands first: the real address is the Created event from `gang tx --hash …`.'}`,
+      note: `${taxed ? 'tax rates and recipient are' : 'untaxed is'} fixed at create. Curve trades pay only the ${fees.curveFeePct}% fee, no tax${taxed ? ': the tax starts in the pool after graduation' : ''}. ${launch.token ? 'The CREATE2 address ends in abcd and is fixed for this transaction.' : 'tokenIfNext changes if another create lands first: the real address is the Created event from `gang tx --hash …`.'}${aw ? ` Agent window: ${aw.minutes} min, then open to every wallet with no 1% cap, for good (see agentWindow).` : ''}`,
     }, 'create'))
   }
 
@@ -827,7 +855,25 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     }
     if (flag('cd-uncounted')) fail('--cd-uncounted applies to pool buys after graduation: curve buys never count for the countdown reward', { token })
     const me = walletFor(ctx, opt('from'))
-    if (!(await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me]))) fail('this wallet holds no Agent ID; curve trades are Agent-only', { wallet: me })
+    // 3.0 agent window: who may trade the curve and whether the 1% cap applies are the pad's per-token answers
+    // a window that can't be read is not assumed: the pad's isAgent decides, as on a pad without it (the pad itself checks again)
+    const winRead = await agentWindowOf(ctx, token)
+    const win = winRead?.error ? null : winRead
+    const agent = await ctx.read(ctx.pad, PAD_ABI, 'isAgent', [me])
+    if (win?.set) {
+      if (!(await ctx.read(ctx.pad, AGENT_WINDOW_ABI, 'canTradeCurve', [token, me]))) {
+        fail(win.open ? 'this wallet can\'t trade this token on the curve (a token\'s own vault never does)'
+          : `this wallet holds no Agent ID: this token is agent only until ${win.openAt} (${win.opensIn} from now); from then on any wallet can buy it on the curve`, { wallet: me, token, openAt: win.openAt })
+      }
+    } else if (!agent) fail('this wallet holds no Agent ID; curve trades are Agent-only', { wallet: me })
+    const capOff = !!win?.set && !win.raw.capOn
+    const windowLine = win?.set ? {
+      agentWindow: {
+        openAt: win.openAt, open: win.open, ...(win.opensIn && { opensIn: win.opensIn }), walletCap: win.raw.capOn,
+        note: capOff ? 'open to every wallet: no 1% wallet cap on this token (only the graduation cut trims a buy); anyone, contracts included, may buy the rest of the curve'
+          : 'agent only until openAt, under the 1% wallet cap; from openAt on anyone trades it with no cap',
+      },
+    } : {}
     const room = await ctx.read(ctx.pad, PAD_ABI, 'walletRoom', [token, me])
     if (room === 0n) fail(HINTS.WalletCapReached)
     if (!flag('amount') && !flag('bnb')) fail('--amount <quote to spend> required (the 1% curve fee included; no tax on the curve)')
@@ -862,14 +908,20 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       // reaches what is left graduates it, cut or not
       const feeBps = BigInt(Math.round((await feesOf(ctx)).curveFeePct * 100))
       const graduates = cut === 'graduation' || spent - (spent * feeBps) / 10_000n >= c.curveRaw.remaining
-      const gradReward = await gradBuyLine(ctx, token, c.quote, c.quoteSymbol, me, spent, graduates)
+      const grLine = await gradBuyLine(ctx, token, c.quote, c.quoteSymbol, me, spent, graduates)
+      // E-4: with a window, only Agent ID wallets' buys count once it opens, and one large buyer may take the pool
+      const gradReward = grLine && !grLine.error && win?.set ? {
+        ...grLine,
+        ...(win.open && !agent && { counts: false, why: 'the token is open to every wallet, but only Agent ID wallets\' buys count for the list: this wallet holds none' }),
+        openWarning: GRAD_OPEN_WARNING,
+      } : grLine
       const countdown = await cdCurveLine()
       return gradReward || countdown ? { rewards: { ...(gradReward && { gradReward }), ...(countdown && { countdown }) } } : {}
     }
     const extra = async (tokensOut, minOut, refundAs = c.quoteSymbol) => ({
       step: 'buy', chainId: Number(ctx.chainId), token, spend: raw, quote: c.quoteSymbol, expectTokens: formatUnits(tokensOut, 18),
       minTokensOut: formatUnits(minOut, 18), ...(await cutOf(tokensOut, refundAs)), curveTaxPct: 0, ...(c.buyTaxPct > 0 && { poolBuyTaxPct: c.buyTaxPct }),
-      ...(await rewardsOf(tokensOut)),
+      ...windowLine, ...(await rewardsOf(tokensOut)),
     })
     // a follow on a token with promoter terms binds the note's author as this wallet's promoter (spec
     // docs/SPEC-AGENT-CALLS-2026-11-09.md §4), when the pad would bind them; --no-promoter keeps it a plain buy
@@ -926,7 +978,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       const data = encodeFunctionData({ abi: GANG_ROUTER_ABI, functionName: 'v3BuyBNB', args: [token, minOut, routerDeadline()] })
       return out(notes.step(ctx, { from: me, to: ctx.router, data, value: quoteIn }, {
         ...(await extra(sim.result, minOut, 'WBNB (not BNB)')), via: 'router', curveFeePct: (await feesOf(ctx)).curveFeePct, ...warned,
-        note: 'paid in BNB through GangRouter; spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap or the graduation cut the excess comes back to this wallet as WBNB (not BNB)',
+        note: `paid in BNB through GangRouter; spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at ${capOff ? 'the graduation cut (no 1% wallet cap on this open token)' : 'the 1% wallet cap or the graduation cut'} the excess comes back to this wallet as WBNB (not BNB)`,
       }, 'buy', await priced(sim.result)))
     }
     const pre = await fundingStep(ctx, me, c.quote, quoteIn, c.quoteSymbol, 'approve-quote', rawOnly, summarize)
@@ -936,7 +988,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const minOut = minOf(sim.result, slippage)
     return out(notes.step(ctx, { from: me, to: ctx.pad, data: encodeFunctionData({ abi: PAD_ABI, functionName: 'buy', args: [token, quoteIn, minOut] }) }, {
       ...(await extra(sim.result, minOut)), curveFeePct: (await feesOf(ctx)).curveFeePct, ...warned,
-      note: 'spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); at the 1% wallet cap the excess is refunded',
+      note: `spend includes the 1% curve fee (no tax on the curve; the buy tax applies only in the pool after graduation); ${capOff ? 'no 1% wallet cap on this open token: only the graduation cut refunds the excess' : 'at the 1% wallet cap the excess is refunded'}`,
     }, 'buy', await priced(sim.result)))
   }
 
@@ -980,6 +1032,14 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
     const me = walletFor(ctx, opt('from'))
     const bal = await ctx.read(token, ERC20_ABI, 'balanceOf', [me])
     if (bal === 0n) fail('no balance to sell')
+    // 3.0 agent window: in the window only Agent ID holders sell on the curve; once open, anyone
+    // a window that can't be read is not assumed: the pad's isAgent decides, as on a pad without it (the pad itself checks again)
+    const winRead = await agentWindowOf(ctx, token)
+    const win = winRead?.error ? null : winRead
+    if (win?.set && !(await ctx.read(ctx.pad, AGENT_WINDOW_ABI, 'canTradeCurve', [token, me]))) {
+      fail(win.open ? 'this wallet can\'t trade this token on the curve (a token\'s own vault never does)'
+        : `this wallet holds no Agent ID: this token is agent only until ${win.openAt} (${win.opensIn} from now); from then on any wallet can sell it on the curve`, { wallet: me, token, openAt: win.openAt })
+    }
     const amount = flag('all') ? bal : parseUnits(parseAmount(fail, 'amount', opt('amount')), 18)
     if (amount > bal) fail('amount exceeds balance', { balance: formatUnits(bal, 18) })
     // a bond posted on the curve already binds: a creator's curve sell below X breaks it
@@ -1001,6 +1061,7 @@ export async function runV3(sub, { opt, flag, out, fail, summarize, resolveLogo,
       expectOut: await units(ctx, c.quote, sim.result), minOut: await units(ctx, c.quote, minOut), curveTaxPct: 0,
       ...(c.sellTaxPct > 0 && { poolSellTaxPct: c.sellTaxPct }),
       curveFeePct: (await feesOf(ctx)).curveFeePct, ...guard?.info, ...callGuard?.info, ...(grSell && { rewards: { gradReward: grSell } }),
+      ...(win?.set && { agentWindow: { openAt: win.openAt, open: win.open, ...(win.opensIn && { opensIn: win.opensIn }), walletCap: win.raw.capOn } }),
       note: 'expectOut is after the 1% curve fee only (no tax on the curve; the sell tax applies only in the pool after graduation)',
     }, 'sell'))
   }

@@ -24,6 +24,8 @@
 
 **开盘底仓（0.40.0+，BSC 主网和测试网可用）：** `gang create … --base <5|10> --base-vest <30|90|180> [--grad 6|9|12|15]` 在 GangLaunchpad 3.0 上建一个曲线币，它的第一笔成交就是给这个币专属的底仓金库（GangBaseVault，`base-v1`）买入总量的 5% 或 10%。建币交易按 pad 的 `previewBaseCost` 正好付这么多 BNB（5% 在 6 / 9 / 12 / 15 BNB 档：0.0994 / 0.1490 / 0.1987 / 0.2484 BNB；10%：0.2090 / 0.3135 / 0.4180 / 0.5225；含 1% 手续费，其中 70% 作为创建人手续费返还给你）。金库不交易：毕业前底仓锁住；毕业后第一次有人调 `gang base release`（谁都可以调）开始计时，之后在 `--base-vest` 天里匀速释放到创建人的钱包（5%：30 / 90 / 180 天；10%：90 / 180 天；写死不能改）。**如果代币永远不毕业，底仓和为它付的钱永远锁着，收不回来。** 预览里有花费、释放节奏和规格里的收益表（最少能拿多少、按毕业价算多少、几天收回成本、每天释放量、其他买家多付多少），并说明保证金约束不了底仓（金库一直往创建人钱包里补币，保证金不代表对底仓的任何承诺）。只支持 WBNB 计价，不能带分红，不能和 `--vault` / `--promote` / `--fair` / `--fly` 或一条命令发射一起用；带税时收款人通常就是创建人自己。开启 abcd 时建币经 `createWithSalt` 带上 BNB 发出。CLI 会先问 pad（`baseVaultImpl`），没开放的地方直接拒绝 `--base`。`gang base status --token 0x…` 显示金库、底仓大小、释放期、开始时间（或未开始）、总量、已释放、可释放和未释放（按时间算）；`gang base release --token 0x…` 第一次调用开始计时，之后把已经到期的部分转给创建人。
 
+**Agent 专属窗口（0.49.0+，GangLaunchpad 3.0；哪条链能用由 pad 决定，CLI 构建交易前会先问 pad）：** `gang create … --agent-window <1-1440>` 建一个曲线币，建币区块之后这么多分钟（`openAt`）对所有钱包开放。开放前只有持 Agent ID 的钱包能在曲线上买卖，每个钱包受 1% 上限；`openAt` 起任何钱包都能买卖，包括合约和聚合器，而且没有 1% 上限，一个买家就能把剩下的曲线买到毕业。窗口在建币时写死，之后谁都改不了、延不了、撤不了；不带这个参数就永远 agent 专属。所有曲线发币方式都能带（`--grad`、`--promote`、`--vault`、`--base`、`--grad-reward`、一条命令发射），`--fair` / `--fly` 不能带。和 `--grad-reward` 一起用时：开放后奖励池可能被一个大户拿走，名单只计持 Agent ID 的钱包的买入。`gang info` / `gang status` 显示 `agentWindow`（`openAt`、`opensIn`、`open`、`walletCap`），买卖预览里也有。
+
 **冲毕业奖励（0.42.0+，BSC 主网和测试网 2026-11-17 起可用；和 `--countdown-reward` 一起用、转一部分给倒计时奖励要 0.44.0+，主网和测试网 2026-11-17 起已开）：** `gang create … --grad-reward <种子钱> [--gr-min-buy <金额>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]` 在 GangLaunchpad 3.0 上建一个曲线币，同时用这个币的报价币放进一笔奖励池。种子钱在建币时拉走，所以 CLI 会先让你批准；至少值 0.1 BNB。
 
 - **谁能分**：pad 记下最后 `--gr-entries` 笔（默认 10）曲线买入，每笔都要实际花掉 `--gr-min-buy`（默认值 0.01 BNB），而且 Agent 门槛开着；把币推过毕业线的那一笔一律计入。
@@ -152,6 +154,7 @@ gang create … --buy-tax 3 --sell-tax 3 --floor [--redeem-fee 2] [--tax-cap 20 
 gang floor status|redeem|distribute|release|set-payee|bind --token 0x… [--amount <数量>|all] [--to 0x…] [--asset 0x…] [--index <i>] [--break-bond] [--break-call-bond] [--settle-first]  # 底价模块：金库、每枚能赎回多少、手续费、上限和收款人；redeem 把代币打进 0xdead，换回金库里按比例的一份
 gang create … --base 5|10 --base-vest 30|90|180 [--grad 6|9|12|15]  # 3.0 开盘底仓：建币时用 BNB 给底仓金库买 5% / 10%；毕业前锁住（不毕业就永远锁着），毕业后匀速释放给你
 gang base status|release --token 0x…  # 底仓金库：大小、释放期、开始时间、已释放、可释放、未释放；release 第一次开始计时，之后把到期的部分转给创建人
+gang create … --agent-window <1-1440>  # 3.0：前 N 分钟只限 agent，之后对所有钱包开放、取消 1% 上限，不可撤销
 gang create … --grad-reward <种子钱> [--gr-min-buy <金额>] [--gr-entries 1-20] [--gr-last 0-50] [--gr-refund-days 30-180]  # 3.0 冲毕业奖励：你出钱奖励毕业前最后几笔买入，按花费分
 gang grad-reward status|claim|settle|sweep|retry-carry|refund-request|refund-cancel|refund --token 0x…  # 奖励池、名单和领取；创建人撤回要先公示 7 天
 gang create … --buy-tax 3 --sell-tax 3 --countdown-reward --cd-max-payout 1 [--cd-* …] [--cd-seed 0.2]  # V3 倒计时奖励：你那份税变成买家的奖励
