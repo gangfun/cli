@@ -406,6 +406,88 @@ stops a trade: it goes untagged and `tool` says why.
 The tag is public and anyone can write any id, so it counts usage and proves nothing about who sent a trade. Leave
 `GANG_TOOL` unset and nothing is added.
 
+## Buy an open agent-window token from your own script
+
+Once a GangLaunchpad 3.0 token's agent window is open, any wallet can trade its curve on chain: no Agent ID, no Agentic Wallet, no gang CLI needed. Call the pad directly (BSC mainnet):
+
+| Contract | Address |
+| --- | --- |
+| GangLaunchpad 3.0 (call it, approve it) | `0x2bEbED4be8c8F46C17776C71D7a6A45dbC5CAB29` |
+| GangRouter (BNB-quoted tokens only) | `0xec9717E5C68b9F18fA76D3961C9Cd7e67b5E61e7` |
+
+1. `canTradeCurve(token, you)` must be `true`: the token has an agent window and it is open.
+2. Quote with `tryBuy(token, you, 0, funds)`. `quote` is the token's quote (`0x0` = BNB-quoted), `estimatedAmount` the tokens you'd get. Set your minimum out, e.g. 97% of it.
+3. Buy:
+   - **ERC-20 quote** (e.g. ANTB): `approve(pad, funds)` on the quote, exactly this amount, then `pad.buy(token, funds, minTokensOut)`.
+   - **BNB quote**: `router.v3BuyBNB(token, minTokensOut, deadline)` with `value = funds`. This path needs a plain wallet (EOA) as the sender.
+4. Sell: `approve(pad, amount)` on the token, quote with `trySell(token, amount)` (it returns `funds`, after the fee), then `pad.sell(token, amount, minQuoteOut)`.
+
+```js
+// npm i viem   ·   PRIVATE_KEY=0x… RPC_URL=https://bsc-dataseed.bnbchain.org node buy.mjs
+import { createPublicClient, createWalletClient, http, parseAbi, parseUnits, zeroAddress } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { bsc } from 'viem/chains'
+
+const PAD = '0x2bEbED4be8c8F46C17776C71D7a6A45dbC5CAB29'    // GangLaunchpad 3.0
+const ROUTER = '0xec9717E5C68b9F18fA76D3961C9Cd7e67b5E61e7' // GangRouter (BNB-quoted tokens only)
+const TOKEN = '0x…'       // an open agent-window token
+const SPEND = '0.05'      // in the token's quote (BNB for a BNB-quoted token)
+const SLIPPAGE_BPS = 300n // 3%
+
+const padAbi = parseAbi([
+  'function canTradeCurve(address token, address account) view returns (bool)',
+  'function tryBuy(address token, address trader, uint256 amount, uint256 funds) view returns (address tokenManager, address quote, uint256 estimatedAmount, uint256 estimatedCost, uint256 estimatedFee, uint256 amountMsgValue, uint256 amountApproval, uint256 amountFunds)',
+  'function buy(address token, uint256 quoteIn, uint256 minTokensOut) returns (uint256)',
+])
+const erc20 = parseAbi([
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+])
+const routerAbi = parseAbi(['function v3BuyBNB(address token, uint256 minTokensOut, uint256 deadline) payable returns (uint256)'])
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY)
+const pub = createPublicClient({ chain: bsc, transport: http(process.env.RPC_URL) })
+const wallet = createWalletClient({ account, chain: bsc, transport: http(process.env.RPC_URL) })
+const me = account.address
+
+// 1. the window must be open for this wallet
+if (!(await pub.readContract({ address: PAD, abi: padAbi, functionName: 'canTradeCurve', args: [TOKEN, me] })))
+  throw new Error('this wallet cannot trade this token yet (not open, or no agent window)')
+
+// 2. quote (quote = 0x0 means BNB-quoted)
+const [, quote] = await pub.readContract({ address: PAD, abi: padAbi, functionName: 'tryBuy', args: [TOKEN, me, 0n, 1n] })
+const isBnb = quote === zeroAddress
+const decimals = isBnb ? 18 : await pub.readContract({ address: quote, abi: erc20, functionName: 'decimals' })
+const funds = parseUnits(SPEND, decimals)
+const [, , est] = await pub.readContract({ address: PAD, abi: padAbi, functionName: 'tryBuy', args: [TOKEN, me, 0n, funds] })
+if (est === 0n) throw new Error('zero quote')
+const minOut = (est * (10_000n - SLIPPAGE_BPS)) / 10_000n
+
+// 3. buy
+let hash
+if (isBnb) {
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 600)
+  hash = await wallet.writeContract({ address: ROUTER, abi: routerAbi, functionName: 'v3BuyBNB', args: [TOKEN, minOut, deadline], value: funds })
+} else {
+  const allowance = await pub.readContract({ address: quote, abi: erc20, functionName: 'allowance', args: [me, PAD] })
+  if (allowance < funds) {
+    const a = await wallet.writeContract({ address: quote, abi: erc20, functionName: 'approve', args: [PAD, funds] }) // exactly this buy
+    await pub.waitForTransactionReceipt({ hash: a })
+  }
+  hash = await wallet.writeContract({ address: PAD, abi: padAbi, functionName: 'buy', args: [TOKEN, funds, minOut] })
+}
+const rc = await pub.waitForTransactionReceipt({ hash })
+console.log(rc.status, `https://bscscan.com/tx/${hash}`)
+```
+
+Notes:
+- Keep the private key in your own environment. Never put it in a file you share.
+- Before `openAt`, or on a token without a window, the pad reverts `NotAgent`.
+- Once open there is no 1% wallet cap. A buy that reaches graduation is cut and the rest refunded: in the quote for an ERC-20 quote, in **WBNB** (not BNB) for a BNB quote.
+- Gang campaigns, call bonds, rankings, badges and graduation-reward lists count Agent ID buys only.
+- Rather not quote it yourself? `gang buy --token … --amount … --from <your address> --calldata` prints the approve tx and then (run it again) the buy tx, as `{ to, data, value }` for your own `sendTransaction`.
+
 ## Building on Gang
 
 [DEVELOPERS.md](DEVELOPERS.md) has a first testnet trade, the JSON and failure-code contract, and safety rules. `gang capabilities` (0.33.0+) lists every tool and command as JSON. [`examples/`](https://github.com/gangfun/cli/tree/main/examples) has programs to copy.

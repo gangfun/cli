@@ -367,6 +367,88 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 这个标记是公开的，任何人都能写任意 ID，所以只用于统计使用量，不能证明交易是谁发的。不设置 `GANG_TOOL` 就不会附加任何内容。
 
+## 用自己的脚本买 agent window 已开放的币
+
+GangLaunchpad 3.0 的币开放后，任何钱包都能直接在链上交易它的内盘，不需要 Agent ID、Agentic Wallet，也不需要 gang CLI。直接调用 pad（BSC 主网）：
+
+| 合约 | 地址 |
+| --- | --- |
+| GangLaunchpad 3.0（调用和授权都用它） | `0x2bEbED4be8c8F46C17776C71D7a6A45dbC5CAB29` |
+| GangRouter（只有 BNB 计价的币才用） | `0xec9717E5C68b9F18fA76D3961C9Cd7e67b5E61e7` |
+
+1. `canTradeCurve(token, 你的地址)` 必须返回 `true`：这个币有 agent window，并且已经开放。
+2. 用 `tryBuy(token, 你的地址, 0, funds)` 报价。`quote` 是报价币（`0x0` 表示 BNB 计价），`estimatedAmount` 是预计到手的代币数量。按滑点定最少到手量，比如取它的 97%。
+3. 买入：
+   - **ERC-20 计价**（比如 ANTB）：先在报价币上 `approve(pad, funds)`，只授权这次的金额；再调 `pad.buy(token, funds, minTokensOut)`。
+   - **BNB 计价**：调 `router.v3BuyBNB(token, minTokensOut, deadline)`，`value = funds`。这条路径要求发交易的是普通钱包（EOA）。
+4. 卖出：在代币上 `approve(pad, amount)`，用 `trySell(token, amount)` 报价（返回扣手续费后的 `funds`），再调 `pad.sell(token, amount, minQuoteOut)`。
+
+```js
+// npm i viem   ·   PRIVATE_KEY=0x… RPC_URL=https://bsc-dataseed.bnbchain.org node buy.mjs
+import { createPublicClient, createWalletClient, http, parseAbi, parseUnits, zeroAddress } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { bsc } from 'viem/chains'
+
+const PAD = '0x2bEbED4be8c8F46C17776C71D7a6A45dbC5CAB29'    // GangLaunchpad 3.0
+const ROUTER = '0xec9717E5C68b9F18fA76D3961C9Cd7e67b5E61e7' // GangRouter（只有 BNB 计价的币才用）
+const TOKEN = '0x…'       // 一个已开放的 agent window 币
+const SPEND = '0.05'      // 花多少报价币（BNB 计价的币就是 BNB）
+const SLIPPAGE_BPS = 300n // 3%
+
+const padAbi = parseAbi([
+  'function canTradeCurve(address token, address account) view returns (bool)',
+  'function tryBuy(address token, address trader, uint256 amount, uint256 funds) view returns (address tokenManager, address quote, uint256 estimatedAmount, uint256 estimatedCost, uint256 estimatedFee, uint256 amountMsgValue, uint256 amountApproval, uint256 amountFunds)',
+  'function buy(address token, uint256 quoteIn, uint256 minTokensOut) returns (uint256)',
+])
+const erc20 = parseAbi([
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+])
+const routerAbi = parseAbi(['function v3BuyBNB(address token, uint256 minTokensOut, uint256 deadline) payable returns (uint256)'])
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY)
+const pub = createPublicClient({ chain: bsc, transport: http(process.env.RPC_URL) })
+const wallet = createWalletClient({ account, chain: bsc, transport: http(process.env.RPC_URL) })
+const me = account.address
+
+// 1. 必须已经对这个钱包开放
+if (!(await pub.readContract({ address: PAD, abi: padAbi, functionName: 'canTradeCurve', args: [TOKEN, me] })))
+  throw new Error('这个钱包现在不能交易这个币（还没开放，或者没有 agent window）')
+
+// 2. 报价（quote 为 0x0 表示 BNB 计价）
+const [, quote] = await pub.readContract({ address: PAD, abi: padAbi, functionName: 'tryBuy', args: [TOKEN, me, 0n, 1n] })
+const isBnb = quote === zeroAddress
+const decimals = isBnb ? 18 : await pub.readContract({ address: quote, abi: erc20, functionName: 'decimals' })
+const funds = parseUnits(SPEND, decimals)
+const [, , est] = await pub.readContract({ address: PAD, abi: padAbi, functionName: 'tryBuy', args: [TOKEN, me, 0n, funds] })
+if (est === 0n) throw new Error('报价为 0')
+const minOut = (est * (10_000n - SLIPPAGE_BPS)) / 10_000n
+
+// 3. 买入
+let hash
+if (isBnb) {
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 600)
+  hash = await wallet.writeContract({ address: ROUTER, abi: routerAbi, functionName: 'v3BuyBNB', args: [TOKEN, minOut, deadline], value: funds })
+} else {
+  const allowance = await pub.readContract({ address: quote, abi: erc20, functionName: 'allowance', args: [me, PAD] })
+  if (allowance < funds) {
+    const a = await wallet.writeContract({ address: quote, abi: erc20, functionName: 'approve', args: [PAD, funds] }) // 只授权这次的金额
+    await pub.waitForTransactionReceipt({ hash: a })
+  }
+  hash = await wallet.writeContract({ address: PAD, abi: padAbi, functionName: 'buy', args: [TOKEN, funds, minOut] })
+}
+const rc = await pub.waitForTransactionReceipt({ hash })
+console.log(rc.status, `https://bscscan.com/tx/${hash}`)
+```
+
+注意：
+- 私钥只放在你自己机器的环境变量里，不要写进会分享出去的文件。
+- `openAt` 之前，或者没有 agent window 的币，pad 会回滚 `NotAgent`。
+- 开放后没有 1% 单钱包上限。买到毕业线时会被截断，多出的资金退回：ERC-20 计价退回报价币，BNB 计价退回 **WBNB**（不是 BNB）。
+- Gang 的活动、喊单、排行、徽章和冲毕业奖励名单，只计持 Agent ID 的钱包的买入。
+- 不想自己报价，可以用 `gang buy --token … --amount … --from <你的地址> --calldata`：先打印授权交易，再跑一次打印买入交易，都是 `{ to, data, value }`，交给你自己的 `sendTransaction` 发出即可。
+
 ## 在 Gang 上开发
 
 [DEVELOPERS.zh-CN.md](DEVELOPERS.zh-CN.md) 包含测试网第一笔交易、JSON 和失败代码约定，以及安全规则。`gang capabilities`（0.33.0+）以 JSON 列出所有工具和命令。[`examples/`](https://github.com/gangfun/cli/tree/main/examples) 里有可以直接拿来改的程序。
