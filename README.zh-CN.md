@@ -1,5 +1,7 @@
 # Gang CLI（`gang`）
 
+> **0.50.0 带了 WalletConnect 支持，因许可原因已在 0.50.1 撤回。如果你装了 0.50.0，请升级：`npm i -g @gangfun/cli@latest`**
+
 **Pad 3.0 地址后缀（0.38.0+）：** owner 启用 `abcd` 部署器后，曲线、打新和铸币飞轮新币地址统一以 `abcd` 结尾（忽略校验和大小写）。CLI 会在最终元数据确定后自动计算 salt，`--grad`、`--vault`、`--promote` 发币也包含在内，`tokenIfNext` 显示确定的预测地址。请在启用前升级 CLI：启用后旧的直接发币调用会被拒绝。旧币地址和交易不变；启用前，新 CLI 仍走原有发币流程。
 
 用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
@@ -273,33 +275,6 @@ gang watch --notes --agent lazy.ai --timeout 2h
 gang agents --window 30d --sort follow
 ```
 
-## 用自己的钱包：WalletConnect（0.50.0+）
-
-`gang buy` / `gang sell` 可以通过 WalletConnect v2 用用户自己的钱包 App（MetaMask、OKX、Trust 等）交易：CLI 显示配对二维码，
-每一笔交易都由用户在钱包里确认。CLI 不持有任何私钥。
-WalletConnect 项目 ID 从 gang.fun 读取（`GET https://gang.fun/api/walletconnect`，只在本次运行的内存里保留）；设置了 `GANG_WC_PROJECT_ID` 时以它为准。
-
-```bash
-gang wallet connect                 # 二维码 + uri；在钱包 App 里批准（BSC；--testnet：BSC 测试网）
-gang buy --token 0x… --amount 0.05 --wallet wc
-gang execute --request-id wc-…      # 钱包请用户确认，之后等回执
-gang wallet status                  # 地址、链、钱包 App、到期时间
-gang wallet disconnect
-```
-
-- 步骤和 Agentic Wallet 一样：先 wrap / 授权（只授权这笔交易的数量），再运行同一条命令做交易。预览里的 `request` 是解码后的调用
-  （代币、数量、`minTokensOut` / `minOut`、授权对象、附带的 BNB）；一个请求有效 10 分钟，最多发送一次。
-- 能交易什么由链上规则决定：GangLaunchpad 3.0 内盘币在 agent window 开放之后（或者钱包有 Agent ID），以及毕业后经 GangRouter 在
-  PancakeSwap 外盘交易的币。其余操作（发币、押金、喊单押金、推广绑定、跟单、金库锁仓、打新 / 铸币飞轮认购等）都需要 Agentic
-  Wallet，会被拒绝（`AGENTIC_ONLY`）。
-- 会话必须在这笔交易的链上（否则 `WC_WRONG_CHAIN`：先在钱包里选好网络，再 `gang wallet disconnect`、`gang wallet connect`）；
-  CLI 不会替用户切换钱包网络。会话保存在 `~/.gang/wc`（目录 0700，文件 0600），最长 24 小时，到期后也会在 relay 上结束。
-- 只有和下一步交易完全对应的授权才会发出（同一个授权对象、同一个代币和数量，且不超过余额）。同一个 id 再执行一次不会重复发送
-  （返回 `WC_ALREADY_SENT` 和交易哈希）；`gang wallet status` 会列出最近的请求。`sent: "unknown"` 表示交易仍可能上链：重建交易前先确认。
-- 钱包的名称和网址（`walletSelfReported`）是钱包自己报的：请在钱包 App 里核对地址。配对 uri 只显示一次，不会保存。
-- 通过这种方式只会发送 `approve`、WBNB `deposit`、pad 的 `buy` / `sell`、GangRouter 的 `v3Buy*` / `pool*` 和代币倒计时模块的买入，
-  且目标只能是 gang 的 pad、路由或该模块。
-
 ## MCP 服务（0.17.0+）
 
 `gang mcp` 把同一套命令以 [MCP](https://modelcontextprotocol.io) 服务的形式跑在 stdio 上，给只接 MCP、不开 shell 的 Agent
@@ -312,8 +287,7 @@ gang wallet disconnect
 | `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法；`pending: true` 即 `gang tx --pending`，找出在 Binance App 里批准过的交易（不用哈希） |
 | `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
 | `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送），对应命令的参数都有：`useWbnb` / `useQuote` / `payBnb`、`settleFirst` 等 |
-| `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调（`wc-…` 请求：之后钱包 App 还会请用户确认） |
-| `gang_wallet_connect`、`gang_wallet_status`、`gang_wallet_disconnect` | `gang wallet connect --no-wait`（立即返回 `uri` 和 `qr`：给用户看，然后调 `gang_wallet_status` 直到 `connected: true`）、`status`、`disconnect`（0.50.0+）；`gang_buy` / `gang_sell` 接受 `wallet: "wc"` |
+| `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调 |
 | `gang_cli` | 其余所有命令，按参数数组传：`create`（也包括 `--fair` 和一条命令发射）、`mint`、`withdraw`、`claim`、`release`、`quote`、`list`、`upload-logo`、`bond …`、`buyback …`、`split …`、`lp …`、`v3 income`、`version`，以及其他工具没有的参数（`--calldata`、`--from` 等） |
 
 ```json
@@ -351,8 +325,6 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_CDN_BASE` | 上传文件的 CDN，地址为 `<base>/ipfs/<cid>`（默认 `https://cdn.gang.fun`） |
 | `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
 | `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
-| `GANG_WC_PROJECT_ID` | `--wallet wc` 用的 WalletConnect / Reown Cloud 项目 ID（0.50.0+）。会覆盖 gang.fun 提供的 ID（`<GANG_API>/walletconnect`）；从不打印，也不写到磁盘 |
-| `GANG_WC_DIR` | WalletConnect 会话和密钥的保存位置（默认 `~/.gang/wc`；目录 0700，文件 0600） |
 | `GANG_STREAM` | 设为 `0` 时 `gang watch` 全市场模式不用服务端推送、改为轮询（同 `--poll`） |
 | `GANG_TELEMETRY` | 设为 `0` 关闭匿名使用统计（0.24.0+；`DO_NOT_TRACK=1` 同样关闭），见[使用统计](#使用统计) |
 | `GANG_CLIENT` | 使用统计里记录的 Agent 客户端名称（0.31.0+）。`gang mcp` 没设置时取 MCP 客户端自己的名称 |
@@ -401,4 +373,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
-`0.34.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+0.50.1 出于许可原因移除了 0.50.0 的 WalletConnect 签名（`gang wallet`、`--wallet wc`）。要用自己的钱包交易，请在 gang.fun 的代币页面操作，
+或用 `--from <地址> --calldata` 生成交易。`~/.gang/wc` 可以删掉。
+
+`0.50.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

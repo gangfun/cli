@@ -1,6 +1,6 @@
 {
   "name": "@gangfun/cli",
-  "version": "0.50.0",
+  "version": "0.50.1",
   "mcpName": "io.github.gangfun/gang",
   "description": "Gang launchpad CLI for Binance Agentic Wallet agents: create on GangLaunchpad (untaxed or tax tokens), 打新 fair mint, PancakeSwap pool trades, LaunchpadV2 and legacy Soft/U/S trade.",
   "type": "module",
@@ -15,11 +15,10 @@
     "README.md",
     "README.zh-CN.md",
     "DEVELOPERS.md",
-    "DEVELOPERS.zh-CN.md",
-    "npm-shrinkwrap.json"
+    "DEVELOPERS.zh-CN.md"
   ],
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=18"
   },
   "license": "UNLICENSED",
   "repository": {
@@ -42,8 +41,6 @@
     "agent-id"
   ],
   "dependencies": {
-    "@walletconnect/sign-client": "2.26.0",
-    "qrcode-terminal": "0.12.0",
     "viem": "^2.0.0"
   }
 }

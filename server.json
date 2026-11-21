@@ -8,12 +8,12 @@
     "url": "https://github.com/gangfun/cli",
     "source": "github"
   },
-  "version": "0.50.0",
+  "version": "0.50.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@gangfun/cli",
-      "version": "0.50.0",
+      "version": "0.50.1",
       "transport": {
         "type": "stdio"
       },
@@ -37,11 +37,6 @@
         {
           "name": "GANG_TOOL",
           "description": "A tool builder's id, tagged on mainnet trades and creates (usage count only)",
-          "format": "string"
-        },
-        {
-          "name": "GANG_WC_PROJECT_ID",
-          "description": "Overrides the WalletConnect project ID gang.fun serves, for gang_buy / gang_sell with wallet: \"wc\" (the user's own wallet app)",
           "format": "string"
         }
       ]
