@@ -24,7 +24,7 @@ const ACCESS = {
 }
 
 // first CLI with each tool (the git history of mcp.js); gang_* tools start at 0.17.0
-const TOOL_SINCE = { gang_help: '0.17.2', gang_trending: '0.24.0', gang_portfolio: '0.17.6' }
+const TOOL_SINCE = { gang_help: '0.17.2', gang_trending: '0.24.0', gang_portfolio: '0.17.6', gang_handoff_status: '0.51.0' }
 const TOOL_KIND = {
   gang_buy: ['preview', 'medium'], gang_follow: ['preview', 'medium'],
   gang_sell: ['preview', 'medium', { breakBond: { risk: 'high', why: 'gives up the whole bond' }, breakCallBond: { risk: 'high', why: 'gives up the whole call bond' }, confirmOut: { risk: 'high', why: 'ends the holder reward (Mint Flywheel: until the next mint)' } }],
@@ -51,6 +51,7 @@ const ratioModule = (name, since, sweepSince) => baseModule(name, since, 'Dev on
 
 export const COMMANDS = [
   c('capabilities', 'read', 'none', '0.33.0', 'This document'),
+  c('handoff status', 'read', 'none', '0.51.0', "After gang buy|sell --handoff: the user's wallet's trades of the token on chain since the handoff"),
   c('version', 'read', 'none', '0.16.5', 'CLI version'),
   c('list', 'read', 'none', '0.1.0', 'Tokens read from the chain, or sales with --kind'),
   c('quote', 'read', 'none', '0.1.0', 'Quote a V2 / Soft curve buy'),

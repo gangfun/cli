@@ -127,6 +127,7 @@ Factories: BSC mainnet `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`, BSC testnet
 | `DEV_MODE_OFF`, `TRADE_ALL_TOKENS_OFF` | A wallet setting (from `gang preflight`) |
 | `NETWORK` | An RPC or the API can't be reached: retry a read later |
 | `NO_FUNDS` (0.41.0+) | The wallet can't pay for this trade: `fund` says how to top it up; nothing was sent |
+| `HANDOFF_NOT_SERVED` (0.51.0+) | `--handoff` on a token the gang.fun trade box doesn't serve: not a 3.0 curve token with an open agent window (agent-only: the Agentic Wallet; graduated: any DEX), or a wallet that may not trade it |
 | `REMOVED` (0.50.1+) | A feature that is gone: 0.50.0's WalletConnect signing (`gang wallet`, `--wallet wc`), removed for licensing reasons. Build the tx with `--from <address> --calldata` instead |
 | `REVERT` | The simulation or the chain refused it |
 | A contract error name (such as `NotAgent`) | That contract error |

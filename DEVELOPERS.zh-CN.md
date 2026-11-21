@@ -124,6 +124,7 @@ deadline, mustCount)`。通过 PancakeSwap 路由、聚合器或 GangRouter 的�
 | `DEV_MODE_OFF`、`TRADE_ALL_TOKENS_OFF` | 钱包设置问题（来自 `gang preflight`） |
 | `NETWORK` | RPC 或 API 连不上，读操作可以稍后重试 |
 | `NO_FUNDS`（0.41.0+） | 钱包余额不够这笔交易：`fund` 写了怎么充值；什么都没发出 |
+| `HANDOFF_NOT_SERVED`（0.51.0+） | `--handoff` 用在了 gang.fun 交易框不支持的币上：不是 agent window 已开放的 3.0 内盘币（只给 agent 的币：用 Agentic Wallet；已毕业：任意 DEX），或者这个钱包不能交易它 |
 | `REMOVED`（0.50.1+） | 已移除的功能：0.50.0 的 WalletConnect 签名（`gang wallet`、`--wallet wc`）因许可原因已移除。请改用 `--from <地址> --calldata` 生成交易 |
 | `REVERT` | 模拟执行或链上拒绝了这笔交易 |
 | 合约错误名（如 `NotAgent`） | 对应的合约错误 |

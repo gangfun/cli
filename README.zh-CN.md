@@ -373,7 +373,9 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 
 ## 版本
 
+**交给自己的钱包（0.51.0+）：** `gang buy|sell --token … --amount …|--all [--from <你的钱包>] --handoff` 先检查并报价，再打印预填好的 gang.fun 链接和二维码。在币安 App 里打开（Web3 钱包 → 发现 → 粘贴链接），或用任意钱包 App 的内置浏览器打开，再在钱包里确认；CLI 不签任何东西。`gang handoff status --token … --from …` 在交易上链后显示结果。只支持 agent window 已开放的内盘币。
+
 0.50.1 出于许可原因移除了 0.50.0 的 WalletConnect 签名（`gang wallet`、`--wallet wc`）。要用自己的钱包交易，请在 gang.fun 的代币页面操作，
 或用 `--from <地址> --calldata` 生成交易。`~/.gang/wc` 可以删掉。
 
-`0.50.1` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)
+`0.51.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

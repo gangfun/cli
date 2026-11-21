@@ -29,13 +29,13 @@ export const CREATE_ACCEPTS = new Set([
 export const BUY_ACCEPTS = new Set([
   'agent', 'all', 'amount', 'bnb', 'board', 'break-bond', 'break-call-bond', 'buy-tax', 'calldata', 'cap', 'cd-uncounted', 'conf', 'confirm-out',
   'description', 'dev-buy', 'dev-cut', 'dev-shares', 'dividend', 'events', 'exit-fee', 'fair', 'file', 'file-logo',
-  'fly', 'follow', 'from', 'grad', 'guard', 'hash', 'hold', 'hours', 'include-graduated', 'interval', 'json',
+  'fly', 'follow', 'from', 'grad', 'guard', 'handoff', 'hash', 'hold', 'hours', 'include-graduated', 'interval', 'json',
   'keep-logo-uri', 'kind', 'limit', 'logo', 'logo-file', 'logo-uri', 'max-age', 'max-events', 'min-hit', 'min-pct',
   'min-shares', 'mint-fee', 'name', 'no-post-mint', 'no-promoter', 'note', 'notes', 'pair', 'pair-or-quote', 'path', 'pay-bnb',
   'pending', 'poll', 'post-mint', 'preset', 'promoter', 'quote', 'raise', 'recipient', 'ref', 'ref-pool',
   'request-id', 'reveal-after', 'sell-tax', 'settle-first', 'shares', 'slippage', 'sort', 'status', 'symbol',
   'taxed', 'testnet', 'tier', 'timeout', 'to-bnb', 'token', 'track', 'twap-window', 'twitter', 'url', 'use-quote',
-  'use-wbnb', 'vault', 'webhook', 'website', 'who', 'window',
+  'use-wbnb', 'vault', 'wait', 'webhook', 'website', 'who', 'window',
 ])
 
 // what people type for the two link flags

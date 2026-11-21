@@ -44,6 +44,7 @@ import { MERGED_ERRORS_ABI, genOf, padNets } from './gangpad.js'
 import { creatorFeeCtx, creatorFeeList, runCreatorFee } from './creatorfee.js'
 import { V2_ABI } from './abi.js'
 import { runMcp } from './mcp.js'
+import { buildHandoff, handoffStatus, HandoffError, STEPS as HANDOFF_STEPS } from './handoff.js'
 import { portfolio } from './portfolio.js'
 import { codeOf, record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
@@ -692,6 +693,19 @@ AGENT WINDOW (GangLaunchpad 3.0, 0.49.0+; the pad says whether it is open):
                                          --calldata likewise. Before openAt (or on a token without a window) it is refused.
                                          0.50.0's WalletConnect signing (gang wallet, --wallet wc) was removed in 0.50.1
                                          (licensing): use this, or gang.fun's token page; ~/.gang/wc can be deleted
+  Hand it to the user's wallet (0.51.0+): gang buy --token <t> --amount <quote> [--from <their 0x>] --handoff
+                                         (or gang sell --token <t> --amount <n>|--all … --handoff): checks the token is
+                                         open (and, with --from, that wallet may trade it and holds enough), quotes it
+                                         (expected and min out at the page's 3% slippage), then prints a prefilled
+                                         gang.fun link and its QR code (JSON: link, qr). The user opens it in the Binance
+                                         app → Web3 Wallet → Discover (DApp browser), pasting the link, or in any wallet
+                                         app's browser, then connects and confirms there. Nothing is signed here. Only
+                                         open agent-window curve tokens on GangLaunchpad 3.0, BSC mainnet (agent-only:
+                                         Agentic Wallet; graduated: any DEX). --wait (needs --from) [--timeout 10m] then
+                                         watches the chain for that trade
+  gang handoff status --token <t> --from <their 0x> [--since <block>] [--timeout <d>]
+                                         read-only: that wallet's trades of the token since the handoff (traded: true
+                                         only once the chain shows one), its balance then and now
 
 GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
@@ -1431,10 +1445,68 @@ const tokenArg = () => {
   return token
 }
 
+// what a handoff can't carry: the page builds and sends the trade itself, with its own slippage and no note or tag
+const HANDOFF_REFUSED = {
+  calldata: 'a handoff builds no tx here: the page does, in the user\'s wallet',
+  promoter: 'promoter binding stays with the Binance Agentic Wallet (gang promote buy)',
+  follow: 'following a note stays with the Binance Agentic Wallet',
+  note: 'the page sends no note: leave --note out (an agent note goes with an Agentic Wallet trade)',
+  conf: 'the page sends no note', 'reveal-after': 'the page sends no note',
+  ref: 'the page carries no invite tag', slippage: 'the page sets the slippage itself (3% by default, changeable there)',
+  'use-wbnb': 'the page pays BNB for a WBNB-quoted token', 'use-quote': 'only curve tokens are handed off', 'pay-bnb': 'only curve tokens are handed off', 'to-bnb': 'only curve tokens are handed off',
+  testnet: 'gang.fun\'s trade box is on BSC mainnet only', 'break-bond': 'bonds stay with the Agentic Wallet', 'break-call-bond': 'call bonds stay with the Agentic Wallet',
+  'settle-first': 'bonds stay with the Agentic Wallet', 'confirm-out': 'only curve tokens are handed off', 'cd-uncounted': 'only curve tokens are handed off',
+}
+/**
+ * gang buy|sell --token … --handoff: the read-only checks and quote, then the prefilled gang.fun link (and its QR) for
+ * the user to open in their own wallet's browser. Nothing is signed. --wait: then watch the chain for their trade.
+ */
+async function handoff(verb, token) {
+  const bad = Object.keys(HANDOFF_REFUSED).find(flag)
+  if (bad) fail(`--${bad} can't go with --handoff: ${HANDOFF_REFUSED[bad]}`, { code: 'USAGE' })
+  const from = fromArg()
+  if (flag('wait') && !from) fail('--wait needs --from <the user\'s wallet>: the trade is looked up by its sender', { code: 'USAGE' })
+  const kind = await padKind(token, verb)
+  if (kind !== 'v3') {
+    fail(`--handoff is for GangLaunchpad 3.0 curve tokens whose agent window is open; ${KIND_NAMES[kind]} needs the Binance Agentic Wallet (or, once it trades in a pool, any DEX)`, { code: 'HANDOFF_NOT_SERVED', token, kind })
+  }
+  let r
+  try {
+    r = await buildHandoff({ side: verb, token, amount: verb === 'buy' ? spendArg() : opt('amount'), all: flag('all'), from, read: client })
+  } catch (e) {
+    if (e instanceof HandoffError) fail(e.message, { code: e.code, ...e.extra })
+    throw e
+  }
+  if (!flag('wait')) return out(r)
+  // the link first, on the terminal; then wait for the user's trade
+  process.stderr.write(`\nOpen this link in the wallet app's browser:\n${r.qr ? `${r.qr}\n` : ''}${r.link}\n\n${HANDOFF_STEPS.binance}\n${HANDOFF_STEPS.other}\n\nWaiting for the trade on chain…\n`)
+  const timeoutS = opt('timeout') ? parseDuration(opt('timeout'), 'timeout') : 600
+  if (timeoutS > 1800) fail('--timeout is at most 30m')
+  // the start and the balance come from this run, not the local record (which may not have been writable)
+  const watched = await handoffStatus({ token, from, since: BigInt(r.sinceBlock), balanceAtHandoff: r.walletTokenBalanceRaw ?? null, timeoutS, read: client })
+  return out({ ...r, status: watched })
+}
+
+/** gang handoff status --token … --from … [--since <block>] [--timeout <d>]: read-only. */
+async function handoffCmd(sub) {
+  if (sub !== 'status') fail('usage: gang handoff status --token <addr> --from <wallet> [--since <block>] [--timeout 10m]  (gang buy|sell … --handoff makes the link)', { code: 'USAGE' })
+  const since = opt('since')
+  if (since != null && !/^\d+$/.test(since)) fail('--since must be a block number', { code: 'USAGE', got: since })
+  const timeoutS = opt('timeout') ? parseDuration(opt('timeout'), 'timeout') : 0
+  if (timeoutS > 1800) fail('--timeout is at most 30m')
+  try {
+    return out(await handoffStatus({ token: opt('token'), from: opt('from'), since: since == null ? null : BigInt(since), timeoutS, read: client }))
+  } catch (e) {
+    if (e instanceof HandoffError) fail(e.message, { code: e.code, ...e.extra })
+    throw e
+  }
+}
+
 /** gang <verb> --token <addr>: the kind's code for it, or why it does not apply. */
 async function routed(verb) {
   const token = tokenArg()
   if (verb === 'buy') checkPromoterTypo()
+  if (flag('handoff')) return handoff(verb, token)
   // refused before any RPC: both --amount and --bnb, a malformed --note / --conf / --reveal-after, a bad --follow (the
   // note itself is built again by the kind's code)
   if (verb === 'buy') spendArg()
@@ -2048,6 +2120,8 @@ async function main() {
     }
     case 'buy':
       return routed('buy')
+    case 'handoff':
+      return handoffCmd(args[1])
     case 'follow': {
       // gang follow <note tx> --amount <n>: the token comes from the note
       const noteTx = args[1] && !args[1].startsWith('--') ? args[1].toLowerCase() : null
