@@ -92,7 +92,7 @@ export async function qrText(text) {
 export const STEPS = {
   binance: '打开币安 App → Web3 钱包 → 发现（DApp 浏览器）→ 粘贴链接 / Binance app → Web3 Wallet → Discover (DApp browser) → paste the link',
   other: 'Or open the link in any wallet app\'s own browser (MetaMask, OKX, Trust, …)',
-  scan: 'Scanning the QR code with the Binance app is not confirmed to open the Web3 browser yet: paste the link if it doesn\'t',
+  scan: 'The Binance app\'s scanner does not open web links: copy the link and paste it in Discover. The QR code is for a phone camera, or a wallet app whose scanner opens web links / 币安 App 的扫一扫打不开网页链接，请复制链接到「发现」里粘贴；二维码只适合手机相机或能识别网页链接的钱包',
   user: 'On the page: connect the wallet, check the prefilled trade, then approve and confirm each step in the wallet. Nothing is sent before that',
 }
 

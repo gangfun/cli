@@ -494,7 +494,7 @@ Notes:
 
 ## Version
 
-**Hand off to your own wallet (0.51.0+):** `gang buy|sell --token … --amount …|--all [--from <your wallet>] --handoff` checks and quotes the trade, then prints a prefilled gang.fun link and its QR code. Open it in the Binance app (Web3 Wallet → Discover → paste the link) or any wallet app's browser, then confirm there; nothing is signed by the CLI. `gang handoff status --token … --from …` shows the trade once it is on chain. Open agent-window curve tokens only.
+**Hand off to your own wallet (0.51.0+):** `gang buy|sell --token … --amount …|--all [--from <your wallet>] --handoff` checks and quotes the trade, then prints a prefilled gang.fun link and its QR code. Open it in the Binance app (Web3 Wallet → Discover → paste the link) or any wallet app's browser, then confirm there; nothing is signed by the CLI. The Binance app's scanner can't open web links, so copy the link there; the QR code is for a phone camera or a wallet whose scanner opens links. `gang handoff status --token … --from …` shows the trade once it is on chain. Open agent-window curve tokens only.
 
 0.50.1 removes 0.50.0's WalletConnect signing (`gang wallet`, `--wallet wc`) for licensing reasons. To trade from your own
 wallet, use the token's page on gang.fun, or build the txs with `--from <address> --calldata`. `~/.gang/wc` can be deleted.
