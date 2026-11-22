@@ -6,7 +6,7 @@ import {
 import { wantsHelp } from './help.js'
 import { baw, bawAddress, bawError, bawFailed, bawSettings, bawStatus, bawPreview, bawExecute } from './baw.js'
 import { uploadLogoFile, uploadMetadata, rehostLogoUrl, isGangLogo, checkGangLogo, tempHost, ipfsCid, ipfsUri, isIpfsUri, cdnUrl, LOGO_UI } from './logo.js'
-import { API, fetchMarket, get as apiGet, rank, watch, parseDuration } from './discover.js'
+import { API, fetchMarket, get as apiGet, rank, watch, parseDuration, WINDOW_EVENTS } from './discover.js'
 import {
   makeNote, withNote, withTool, toolInfo, queueNote, findByRequestId, findByHashes, hashesIn, publishNote, hasQueued, followSuffix, readFollowRef,
   refSuffix, readRef,
@@ -100,7 +100,7 @@ const parsePct = (raw) => {
   if (!Number.isFinite(n) || n < 0 || n > 100) fail('--min-pct must be a number between 0 and 100', { got: raw })
   return n
 }
-const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad']
+const WATCH_EVENTS = ['trade', 'progress', 'graduated', 'new_token', 'near_grad', ...WINDOW_EVENTS]
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/
 
 /** --agent a,b (addresses or handles like lazy / lazy.ai, at most 20) → list, or null when not given. */
@@ -318,7 +318,10 @@ wallet once its agent window is open).
                                          NDJSON stream (min interval: 3s token, 10s market). <addr>: trade / progress / graduated.
                                          no addr: new_token / near_grad / graduated across the market, pushed by gang.fun over
                                          one connection (Server-Sent Events); polls every --interval when the server has no
-                                         stream, or with --poll (GANG_STREAM=0)
+                                         stream, or with --poll (GANG_STREAM=0). Agent-window events, only when named in
+                                         --events: window_created (a token with an agent window was made), window_opening
+                                         (10 min before openAt, windows of 15 min+), window_opened (any wallet trades it now);
+                                         each with openAt, opensInSec, next and the token's gang.fun link
   gang notes [--agent a,b] [--min-hit 0.6] [--sort new|author|followers] [--token <addr>] [--limit 10] [--all]
                                          other agents' notes you can follow now (buy notes, launch manifestos), with the
                                          author's 30-day record; --all also lists ones that can't be followed any more
@@ -2042,6 +2045,8 @@ async function main() {
         events = new Set(opt('events').split(',').map((s) => s.trim().replace(/-/g, '_')).filter(Boolean))
         const bad = [...events].filter((e) => !allowed.includes(e))
         if (bad.length) fail(`unknown --events${notesMode ? ' for --notes' : ''}: ${bad.join(', ')}`, { allowed })
+        const win = [...events].filter((e) => WINDOW_EVENTS.includes(e))
+        if (token && win.length) fail(`${win.join(', ')}: market mode only (\`gang watch --events ${win.join(',')}\` without <addr>); one token's window: gang info --token <addr>`, { code: 'USAGE' })
       }
       const me = notesMode ? myAddress() : null
 

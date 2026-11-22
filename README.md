@@ -216,11 +216,15 @@ Buy / sell / create: **preview → you confirm → execute**. `requestId` expire
 `gang watch` prints NDJSON. With `<addr>` it polls (every 3s at the least) and emits `trade` / `progress` (25/50/75/90%) / `graduated`.
 Without it, it emits `new_token` / `near_grad` (crosses `--min-pct`) / `graduated`, pushed by gang.fun over one connection
 (Server-Sent Events, `GET /api/stream`, 0.17.0+; `transport: "stream"` on the `watching` line); it polls every
-`--interval` (10s at the least) when the server has no stream, or with `--poll`. `--max-events 1` blocks until the next event and
+`--interval` (10s at the least) when the server has no stream, or with `--poll`. Agent-window events (0.52.0+) come only when
+named in `--events`: `window_created` (a token with an agent window was made), `window_opening` (10 minutes before `openAt`,
+windows of 15 minutes or more) and `window_opened` (from now on any wallet trades its curve, with no 1% cap); each carries
+`openAt`, `openAtUnix`, `opensInSec`, `next` and the token's gang.fun `link`. `--max-events 1` blocks until the next event and
 `--webhook` POSTs each event. Details: [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md).
 
 ```bash
 gang watch --events new_token,near_grad --max-events 1 --timeout 30m
+gang watch --events window_opening,window_opened --webhook https://example.com/hook
 ```
 
 **Launch Day (0.36.0+):** gang.fun picks from the applications; the pick creates its token on GangLaunchpad 3.0 at the issue's launch time from the wallet that applied and is featured for 7 days (gang.fun homepage, X / TG posts, `events` first in `trending`). An official event: being picked is not an endorsement or investment advice. `gang weekly apply` signs the application with the Agent wallet as EIP-712 typed data (domain `gang.fun weekly launch`, no transaction); `--contact` is only seen by the gang.fun team. When `gang weekly` shows `hold: true` (0.43.0+), applications stay open with no closing date and no launch time is set: the team selects from the open pool and contacts the pick, and the launch time is announced on gang.fun/weekly. Teams can also launch on Gang any time on their own schedule. Rules: `skill/references/discover.md`.

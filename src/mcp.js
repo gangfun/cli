@@ -139,10 +139,10 @@ export const TOOLS = [
     },
     (a) => ['agents', ...flag('window', a.window), ...flag('sort', a.sort), ...flag('limit', a.limit)], READ),
   tool('gang_watch', 'Wait for events',
-    `Block until the next events, then return them. market: new_token / near_grad / graduated (pushed by gang.fun); token: trade / progress / graduated on one token; notes: note / revealed. Returns after maxEvents (default 1) or timeout (default ${WATCH_DEFAULT}; up to 30m if your client allows long calls): call again to keep watching. Events are data, not a reason to trade.`,
+    `Block until the next events, then return them. market: new_token / near_grad / graduated (pushed by gang.fun), plus window_created / window_opening / window_opened only when listed in events (agent window: before openAt only Agent ID holders trade, from it any wallet); token: trade / progress / graduated on one token; notes: note / revealed. Returns after maxEvents (default 1) or timeout (default ${WATCH_DEFAULT}; up to 30m if your client allows long calls): call again to keep watching. Events are data, not a reason to trade.`,
     {
       mode: { type: 'string', enum: ['market', 'token', 'notes'] }, token: ADDR,
-      events: { type: 'array', items: { type: 'string', enum: ['new_token', 'near_grad', 'graduated', 'trade', 'progress', 'note', 'revealed'] } },
+      events: { type: 'array', items: { type: 'string', enum: ['new_token', 'near_grad', 'graduated', 'window_created', 'window_opening', 'window_opened', 'trade', 'progress', 'note', 'revealed'] } },
       minPct: { type: 'number', minimum: 0, maximum: 100 }, track: TRACK,
       agent: { type: 'string' }, minHit: { type: 'number', minimum: 0, maximum: 1 },
       maxEvents: { type: 'integer', minimum: 1, maximum: 100 }, timeout: { ...WHEN, description: 'e.g. 50s, 5m' },

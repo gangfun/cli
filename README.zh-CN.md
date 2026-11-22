@@ -215,6 +215,7 @@ x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https:/
 `progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令（V3 与已毕业的币是 `gang buy`，打新是 `gang mint`，V2 / Soft 内盘是 `gang quote`）；已毕业 / 已开盘默认隐藏（`--include-graduated` 显示）。
 
 `gang watch` 输出 NDJSON：带 `<addr>` 时轮询（最短 3s），推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`，由 gang.fun 通过一条长连接推送（Server-Sent Events，`GET /api/stream`，0.17.0+；`watching` 行带 `transport: "stream"`）。服务端没有推送接口或加了 `--poll` 时，按 `--interval` 轮询（最短 10s）。
+开放窗口事件（0.52.0+）只在 `--events` 里点名时才推：`window_created`（有开放窗口的币创建了）、`window_opening`（`openAt` 前 10 分钟，只对 15 分钟及以上的窗口）、`window_opened`（从现在起任何钱包都能在内盘交易，没有 1% 上限）；每条带 `openAt`、`openAtUnix`、`opensInSec`、`next` 和代币的 gang.fun `link`。
 `--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
 
 **发射日活动（0.36.0+）：** gang.fun 从报名里挑选，入选的 dev 在这一期的发射时间用报名的钱包在 GangLaunchpad 3.0 上发币，精选 7 天（gang.fun 首页、X / TG 推送、`trending` 最前面的 `events`）。是官方活动：入选不代表平台背书，也不构成投资建议。`gang weekly apply` 用 Agent 钱包把报名签成 EIP-712 数据（域名 `gang.fun weekly launch`，不发交易）；`--contact` 只有 gang.fun 团队能看到。`gang weekly` 显示 `hold: true` 时（0.43.0+），报名持续开放、没有截止时间，发射时间待定：团队从报名里挑选并联系入选者，发射时间在 gang.fun/weekly 公布。有自己计划的团队也可以随时在 Gang 上发射。规则见 `skill/references/discover.md`。

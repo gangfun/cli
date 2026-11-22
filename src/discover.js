@@ -70,6 +70,11 @@ const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', fair: 
  * List rows carry raw wei and no USD; details (/…/<addr>) carry human amounts and USD like the V2 rows.
  * `quoteUsdOf(quoteAddress)` prices a list row's quote (from the V2 / Soft rows), null when unknown.
  */
+const windowOf = (openAt, open) => ({
+  // the server's open flag when it sends one (a fast local clock must not say open before the chain does)
+  openAt: new Date(openAt * 1000).toISOString(), openAtUnix: openAt, open: typeof open === 'boolean' ? open : openAt <= now(),
+})
+
 function gangRow(r, quoteUsdOf) {
   // a 铸币飞轮 row reads like a 打新 one (sharePrice = basePrice, raiseQuote, sold of 10,000)
   const fair = r.track === 'fair' || r.track === 'fly'
@@ -91,6 +96,8 @@ function gangRow(r, quoteUsdOf) {
     progressPct: num(r.progressPct), raised, graduationTarget: target, remaining,
     // a V3 curve's target in BNB raised (2.0: the creator's pick) when gang.fun sends it; graduationTarget is it in the quote
     ...(r.track === 'v3' && r.gradTargetBnb != null && { graduationTargetBnb: num(r.gradTargetBnb) }),
+    // agent window (pad3): agent only until openAt, then any wallet trades the curve; absent = agent only for good
+    ...(r.track === 'v3' && num(r.agentWindow?.openAt) > 0 && { agentWindow: windowOf(num(r.agentWindow.openAt), r.agentWindow.open) }),
     remainingUsd: quoteUsd ? usd(remaining * quoteUsd) : null,
     priceUsd: r.priceUsd ?? (quoteUsd ? num(r.priceQuote) * quoteUsd : null), fdvUsd: inUsd('fdvUsd', 'fdvQuote'),
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),
@@ -262,6 +269,10 @@ async function freshTrades(t, seen, stop) {
 
 // --- market mode over Server-Sent Events (GET /stream): the server compares its board snapshots, we only normalize ---
 const MARKET_EVENTS = ['new_token', 'near_grad', 'graduated']
+// agent-window events: the server sends them only to clients that ask (?events=), so they are opt-in here too
+export const WINDOW_EVENTS = ['window_created', 'window_opening', 'window_opened']
+const WINDOW_SOON_SEC = 600 // window_opening: 10 minutes before openAt ...
+const WINDOW_SOON_MIN_SEC = 900 // ... on windows of 15 minutes or more (a shorter one gets window_created close enough)
 const STREAM_STALL_MS = 45_000 // the server pings every 15 s: this long without a byte is a dead connection
 const STREAM_BACKOFF = [1, 2, 5, 10, 30] // seconds before reconnect n (the last repeats)
 
@@ -318,7 +329,7 @@ export async function streamMarket({ track = 'all', minPct = 50, events = null, 
   if (!TRACKS.includes(track)) throw new Error(`--track must be ${TRACKS.join(', ')} (got ${track})`)
   const want = (e) => !events || events.has(e)
   const q = new URLSearchParams({ track, minPct: String(minPct) })
-  const asked = events ? MARKET_EVENTS.filter((e) => events.has(e)) : []
+  const asked = events ? [...MARKET_EVENTS, ...WINDOW_EVENTS].filter((e) => events.has(e)) : []
   if (asked.length) q.set('events', asked.join(','))
   let lastId = null
   let started = false
@@ -346,7 +357,12 @@ export async function streamMarket({ track = 'all', minPct = 50, events = null, 
       if (!sse) {
         await r.body?.cancel().catch(() => {})
         // no stream route (an older server, 404) or not for us (400, 429 too many streams, 503 warming): poll instead
-        if (!started) return 'unavailable'
+        if (!started) {
+          if (r.status === 400 && asked.some((e) => WINDOW_EVENTS.includes(e))) {
+            emit({ event: 'error', error: 'this gang.fun server has no window events on its stream yet: polling (window events from the token lists)' }, { meta: true })
+          }
+          return 'unavailable'
+        }
         if (r.status === 404 || r.status === 400 || r.ok) return 'poll'
         throw new Error(`gang API ${r.status} on /stream`)
       }
@@ -372,14 +388,17 @@ export async function streamMarket({ track = 'all', minPct = 50, events = null, 
         } else if (m.event === 'gap') {
           replayed = new Set()
           emit({ event: 'error', error: 'stream reconnected too late: changes while it was down were missed' }, { meta: true })
-        } else if (MARKET_EVENTS.includes(m.event) && m.row) {
+        } else if ((MARKET_EVENTS.includes(m.event) || WINDOW_EVENTS.includes(m.event)) && m.row) {
           const key = `${m.event}:${String(m.row.address).toLowerCase()}`
           // still in partial: if this connection drops before its snapshot line too, the next replay has it again
           partial.add(key)
           if (replayed.has(key)) continue
           if (!want(m.event)) continue
           const t = normalize(m.row, quoteUsdFrom(m))
-          if (m.event === 'new_token') emit({ event: 'new_token', ...withHint(t) })
+          if (WINDOW_EVENTS.includes(m.event)) {
+            const openAt = num(m.openAt) || num(m.row.agentWindow?.openAt)
+            if (openAt > 0) emit(windowEvent(m.event, { ...t, agentWindow: windowOf(openAt, m.event === 'window_opened') }))
+          } else if (m.event === 'new_token') emit({ event: 'new_token', ...withHint(t) })
           else if (m.event === 'graduated') emit({ event: 'graduated', ...brief(t), pair: t.pair })
           else emit({ event: 'near_grad', ...brief(t), next: hint(t) })
         }
@@ -400,6 +419,29 @@ export async function streamMarket({ track = 'all', minPct = 50, events = null, 
     emit({ event: 'error', error: `stream: ${reason}; reconnecting in ${wait}s` }, { meta: true })
     await pause(wait, shouldStop)
   }
+}
+
+/** A window event line: the token, when it opens (opensInSec 0 once open), what to run and its page. */
+const windowEvent = (event, t) => ({
+  event, ...brief(t), openAt: t.agentWindow.openAt, openAtUnix: t.agentWindow.openAtUnix,
+  opensInSec: t.agentWindow.open ? 0 : Math.max(0, t.agentWindow.openAtUnix - now()), next: hint(t), link: `https://gang.fun/token/${t.address}`,
+})
+/** Poll mode's window events for one token: created (new with a window), opening (10 min before, 15+ min windows), opened. */
+const windowChanges = (prev, t, sent, intervalSec) => {
+  const w = t.agentWindow
+  if (!w || t.graduated) return []
+  const out = []
+  const key = (e) => `${e}:${t.address.toLowerCase()}`
+  const once = (e) => { if (!sent.has(key(e))) { sent.add(key(e)); out.push(windowEvent(e, t)) } }
+  // first seen with a window (a new token, or one whose row only now carries it): created if still closed; if already
+  // open, window_opened only when it opened about since the last poll, never a stale one
+  const had = prev?.agentWindow
+  if (!had && !w.open) once('window_created')
+  const left = w.openAtUnix - now()
+  const len = t.createdAt ? w.openAtUnix - num(t.createdAt) : Infinity
+  if (!w.open && left <= WINDOW_SOON_SEC && len >= WINDOW_SOON_MIN_SEC) once('window_opening')
+  if (w.open && !had?.open && (had || now() - w.openAtUnix < intervalSec + 60)) once('window_opened')
+  return out
 }
 
 const crossed = (prev, cur, levels) => levels.filter((m) => prev < m && cur >= m)
@@ -468,6 +510,18 @@ export async function watch({ token, intervalSec = 10, minPct = 50, track = 'all
   const first = await fetchMarket(track, stop)
   // only grows: a token missing from one poll must not come back as new_token
   const known = new Map(first.tokens.map((t) => [t.address, t]))
+  // window events only when asked for by name (as on the stream); the first poll marks what is already past
+  const windows = !!events && WINDOW_EVENTS.some((e) => events.has(e))
+  const windowSent = new Set()
+  if (windows) {
+    for (const t of first.tokens) {
+      const w = t.agentWindow
+      if (!w) continue
+      windowSent.add(`window_created:${t.address.toLowerCase()}`)
+      if (w.open) windowSent.add(`window_opened:${t.address.toLowerCase()}`)
+      if (w.open || w.openAtUnix - now() <= WINDOW_SOON_SEC) windowSent.add(`window_opening:${t.address.toLowerCase()}`)
+    }
+  }
   emit({ event: 'watching', mode: 'market', transport: 'poll', track, tokens: known.size, minPct, intervalSec }, { meta: true })
   let warned = false
   const warnTruncated = (truncated) => {
@@ -491,6 +545,7 @@ export async function watch({ token, intervalSec = 10, minPct = 50, track = 'all
         else if (!t.graduated && prev.progressPct < minPct && t.progressPct >= minPct) {
           out.push({ event: 'near_grad', ...brief(t), next: hint(t) })
         }
+        if (windows) out.push(...windowChanges(prev, t, windowSent, intervalSec))
         for (const ev of out) {
           if (want(ev.event)) emit(ev)
           if (shouldStop()) return
