@@ -1,15 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { callPrint } from './pending.js'
 import { rememberPreview } from './previews.js'
+import { commandFor } from './winbin.js'
 
 /** Run a `baw` command and parse its --json output. Throws with the CLI's error payload on failure. */
 export function baw(args) {
   let out
   try {
-    out = execFileSync('baw', [...args, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 << 20 })
+    const [file, argv] = commandFor('baw', [...args, '--json'])
+    out = execFileSync(file, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 << 20, windowsHide: true })
   } catch (e) {
     if (e.code === 'ENOENT') {
-      throw new Error('baw (the Binance Agentic Wallet CLI) is not installed or not on PATH: npm i -g @binance/agentic-wallet, then baw auth signin. Under an MCP host, start gang mcp with a PATH that has baw\'s directory (which baw)')
+      throw new Error('baw (the Binance Agentic Wallet CLI) is not installed or not on PATH: npm i -g @binance/agentic-wallet, then baw auth signin. Under an MCP host, start gang mcp with a PATH that has baw\'s directory (which baw)'
+        + (process.platform === 'win32' ? '. On Windows only an npm or pnpm install of baw (or a baw.exe) is run: if baw works in a terminal, reinstall it with npm' : ''))
     }
     const text = (e.stdout || '') + (e.stderr || '')
     try { return JSON.parse(e.stdout) } catch { throw new Error(`baw ${args[0]} failed: ${text.trim() || e.message}`) }
