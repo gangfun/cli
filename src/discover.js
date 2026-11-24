@@ -61,8 +61,8 @@ const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c'
 const STABLES = ['0x55d398326f99059ff775485246999027b3197955', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d']
 const TRACKS = ['all', 'v3', 'fair', 'fly', 'v2', 'soft']
 // detail route per track (V2 / Soft details both live under /tokens) and trades route
-const DETAIL = { v2: '/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
-const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
+const DETAIL = { v2: '/tokens', soft: '/tokens', v3: '/v3/tokens', gangswap: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
+const TRADES = { v2: '/stocks/tokens', soft: '/tokens', v3: '/v3/tokens', gangswap: '/v3/tokens', fair: '/fair/sales', fly: '/fly/tokens' }
 
 /**
  * GangLaunchpad rows: `v3` = V3 curves (/v3/tokens), `fair` = 打新 sales (/fair/sales; `graduated` = launched); GangFlywheelPad
@@ -75,7 +75,16 @@ const windowOf = (openAt, open) => ({
   openAt: new Date(openAt * 1000).toISOString(), openAtUnix: openAt, open: typeof open === 'boolean' ? open : openAt <= now(),
 })
 
+/**
+ * A row of a GangSwap curve token (kind 4), when the server says so (track, kind or venue); a row that does not say stays
+ * a V3 one here. Only a label: the kind on chain decides before any trade.
+ */
+export const isGangSwapRow = (r) => r?.track === 'gangswap' || ((r?.track == null || r.track === 'v3')
+  && (String(r?.kind ?? '') === '4' || r?.kind === 'gangswap' || String(r?.venue ?? '').toLowerCase() === 'gangswap'))
+
 function gangRow(r, quoteUsdOf) {
+  const gs = isGangSwapRow(r)
+  const v3 = gs || r.track === 'v3'
   // a 铸币飞轮 row reads like a 打新 one (sharePrice = basePrice, raiseQuote, sold of 10,000)
   const fair = r.track === 'fair' || r.track === 'fly'
   const dec = r.quoteDecimals ?? 18
@@ -88,16 +97,16 @@ function gangRow(r, quoteUsdOf) {
   const quoteUsd = num(r.quoteUsd) || quoteUsdOf(r.quoteAddress) || null
   const inUsd = (field, quoteField) => (r[field] != null ? usd(num(r[field])) : quoteUsd ? usd(num(r[quoteField]) * quoteUsd) : null)
   return {
-    address: r.address, symbol: r.symbol, name: r.name, track: r.track,
+    address: r.address, symbol: r.symbol, name: r.name, track: r.track ?? 'v3', ...(gs && { venue: 'gangswap' }),
     quote: r.quoteSymbol || '?', quoteAddress: r.quoteAddress || null,
     // 打新: the 1% pool tax after launch; V3: its own buy / sell tax, pool only
     taxed: fair || num(r.buyTaxBps) > 0 || num(r.sellTaxBps) > 0,
     graduated, pair: r.pair || null,
     progressPct: num(r.progressPct), raised, graduationTarget: target, remaining,
     // a V3 curve's target in BNB raised (2.0: the creator's pick) when gang.fun sends it; graduationTarget is it in the quote
-    ...(r.track === 'v3' && r.gradTargetBnb != null && { graduationTargetBnb: num(r.gradTargetBnb) }),
+    ...(v3 && r.gradTargetBnb != null && { graduationTargetBnb: num(r.gradTargetBnb) }),
     // agent window (pad3): agent only until openAt, then any wallet trades the curve; absent = agent only for good
-    ...(r.track === 'v3' && num(r.agentWindow?.openAt) > 0 && { agentWindow: windowOf(num(r.agentWindow.openAt), r.agentWindow.open) }),
+    ...(v3 && num(r.agentWindow?.openAt) > 0 && { agentWindow: windowOf(num(r.agentWindow.openAt), r.agentWindow.open) }),
     remainingUsd: quoteUsd ? usd(remaining * quoteUsd) : null,
     priceUsd: r.priceUsd ?? (quoteUsd ? num(r.priceQuote) * quoteUsd : null), fdvUsd: inUsd('fdvUsd', 'fdvQuote'),
     volume24hUsd: inUsd('volume24hUsd', 'volume24hQuote'), trades24h: num(r.trades24h), trades: num(r.trades),
@@ -119,7 +128,7 @@ function gangRow(r, quoteUsdOf) {
  * LaunchpadV2 family), `soft` = legacy BNB curve (/tokens, 20 BNB graduation). Amounts are human units of `quote`.
  */
 export function normalize(r, quoteUsdOf = () => null) {
-  if (r.track === 'v3' || r.track === 'fair' || r.track === 'fly') return gangRow(r, quoteUsdOf)
+  if (r.track === 'v3' || r.track === 'fair' || r.track === 'fly' || isGangSwapRow(r)) return gangRow(r, quoteUsdOf)
   const v2 = r.track === 'stocks'
   const quote = v2 ? (r.quoteSymbol || '?') : 'BNB'
   const raised = v2 ? num(r.raisedQuote) : num(r.raisedBnb)
@@ -198,9 +207,9 @@ const hint = (t) => {
   if (t.track === 'fly' && t.status === 'refund') return `gang withdraw --token ${t.address} --all`
   // launched with post-launch minting paused (gang.fun's mintPaused, from the same reads as the pad): the pool, not a mint
   if (t.track === 'fly' && (!t.graduated || (t.postMint && !t.mintPaused))) return `gang mint --token ${t.address} --shares <n>`
-  if (t.graduated) return `gang buy --token ${t.address} ${amount}` // the PancakeSwap pool, through GangRouter
+  if (t.graduated) return `gang buy --token ${t.address} ${amount}` // the PancakeSwap pool through GangRouter (GangSwap: its own router)
   if (t.track === 'fair') return `gang mint --token ${t.address} --shares <n>`
-  if (t.track === 'v3') return `gang buy --token ${t.address} ${amount}`
+  if (t.track === 'v3' || t.track === 'gangswap') return `gang buy --token ${t.address} ${amount}`
   return `gang quote --token ${t.address} ${amount}`
 }
 const withHint = (t) => ({ ...t, next: hint(t) })

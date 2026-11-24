@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, maxUint256, numberToHex, parseUnits, zeroAddress } from 'viem'
-import { atPad, atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atPad, atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { fundingStep, parseAmount, parseNum, poolSellQuote, revertOf as revertIn, step } from './steps.js'
 import { parseSplitSpec } from './split.js'
@@ -599,7 +599,9 @@ export async function runFloor(sub, { opt, flag, out, fail, summarize }) {
   } else {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
-    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+    const onPad = await atTokenPad(ctx, token)
+    if (onPad === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+    if (onPad === 'gangswap') return fail(gangSwapTakesNone(onPad, 'floor module'), { token, kind: onPad })
     try {
       curve = await ctx.read(ctx.pad, PAD_ABI, 'curves', [token])
       if (curve[0] === zeroAddress) throw new Error('not a curve')

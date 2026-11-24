@@ -1,6 +1,6 @@
 import { createPublicClient, concat, encodeAbiParameters, encodeFunctionData, getAddress, isAddress, isHash, keccak256, parseAbi, zeroAddress } from 'viem'
 import { API, get as apiGet } from './discover.js'
-import { atTokenPad, gangGens, KIND_UNREAD, NOT_ON_MAINNET, padNets, PAD3_GEN, rpcTransport } from './gangpad.js'
+import { atTokenPad, gangGens, KIND_UNREAD, NOT_ON_MAINNET, padNets, PAD3_GEN, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { revertOf as revertIn, step, units } from './steps.js'
 
@@ -484,7 +484,9 @@ export async function runPromote(sub, { opt, flag, out, fail, summarize }) {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
     token = getAddress(token)
-    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+    const onPad = await atTokenPad(ctx, token)
+    if (onPad === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+    if (onPad === 'gangswap') return fail(gangSwapTakesNone(onPad, 'promoter share'), { token, kind: onPad })
     try {
       const c = await ctx.read(ctx.pad, PAD_READS, 'curves', [token])
       if (c[0] === zeroAddress) throw new Error('not a curve')

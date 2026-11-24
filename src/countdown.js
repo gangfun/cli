@@ -1,6 +1,6 @@
 import { createPublicClient, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, parseAbi, parseUnits, zeroAddress } from 'viem'
 import { walletFor } from './fair.js'
-import { atTokenPad, gangGens, KIND_UNREAD, NOT_ON_MAINNET, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, gangGens, KIND_UNREAD, NOT_ON_MAINNET, padNets, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { decimalsOf, fundingStep, GAS_RESERVE, revertOf as revertIn, routerDeadline, step } from './steps.js'
 
 /**
@@ -667,6 +667,7 @@ export async function runCountdown(sub, { opt, flag, out, fail, summarize }) {
   if (!isAddress(token ?? '')) return fail('--token must be a V3 token address (0x…)', { got: token ?? null })
   const kind = await atTokenPad(ctx, token)
   if (kind === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+  if (kind === 'gangswap') return fail(gangSwapTakesNone(kind, 'countdown reward'), { token, chainId, kind })
   if (kind !== 'v3') return fail(`not a V3 curve token on a GangLaunchpad (${testnet ? 'BSC testnet' : 'BSC mainnet; add --testnet for a testnet token'})`, { token, chainId, ...(kind && kind !== 'none' && { kind }) })
   if (!ctx.countdownFactory) return fail(countdownNotLive(testnet), { token, padGen: ctx.gen ?? null })
   if (flag('to') && sub !== 'claim') return fail('--to applies to gang countdown claim only (where your reward is paid)')

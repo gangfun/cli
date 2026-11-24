@@ -28,6 +28,8 @@
 
 **Agent 专属窗口（0.49.0+，GangLaunchpad 3.0；哪条链能用由 pad 决定，CLI 构建交易前会先问 pad）：** `gang create … --agent-window <1-1440>` 建一个曲线币，建币区块之后这么多分钟（`openAt`）对所有钱包开放。开放前只有持 Agent ID 的钱包能在曲线上买卖，每个钱包受 1% 上限；`openAt` 起任何钱包都能买卖，包括合约和聚合器，而且没有 1% 上限，一个买家就能把剩下的曲线买到毕业。窗口在建币时写死，之后谁都改不了、延不了、撤不了；不带这个参数就永远 agent 专属。所有曲线发币方式都能带（`--grad`、`--promote`、`--vault`、`--base`、`--grad-reward`、一条命令发射），`--fair` / `--fly` 不能带。和 `--grad-reward` 一起用时：开放后奖励池可能被一个大户拿走，名单只计持 Agent ID 的钱包的买入。`gang info` / `gang status` 显示 `agentWindow`（`openAt`、`opensIn`、`open`、`walletCap`），买卖预览里也有。**开放后任何钱包都能用：** `gang buy --token 0x… --amount <报价币数量> --from <你的地址> --calldata` 先输出授权交易，再跑一次输出买入交易，用你自己的钱包签名发送即可，不需要 Agent ID，也不需要 Agentic Wallet；`gang sell … --from <你的地址> --calldata` 同理。`openAt` 之前、或者没有窗口的币，会被拒绝。
 
+**GangSwap（0.53.0+，GangLaunchpad 3.0；哪条链能用由 pad 决定，CLI 构建交易前会先问 pad；2026-11-25 起主网和 BSC 测试网（`--testnet`）都已开放；平台随时可以关闭新建）：** `gang create … --venue gangswap [--grad 6|9|12|15] [--agent-window <分钟>]` 建一个毕业到 GangSwap、而不是 PancakeSwap 的曲线币（kind 为 `gangswap`）。选了就不能改。曲线阶段就是普通的无税、WBNB 计价的 V3 币。毕业后在 GangSwap 交易，不在 PancakeSwap，DexScreener 这类网站可能不收录；PancakeSwap 上如果有它的池子，那是别人建的。毕业时，募到的钱里任何交易都拿不到的那部分换成等额的虚拟储备（价格曲线不变），拿出来的钱按时间表回购并销毁，大约 5 分钟分 40 步。池子收 1% 手续费：买入的手续费 70% 归 creator；卖出的手续费是代币，直接销毁。不能带税、分红、接收地址、其他计价币、`--promote`、`--base`、`--vault`、任何模块、奖励、保证金和一条命令发射，也不能带 `--fair` / `--fly`。建币后 `gang tx --hash` 会核对 `GangSwapCreated` 事件和 `kindOf` 是 4。毕业后的 `gang buy` / `gang sell` 只走 GangSwapRouter（默认付 BNB，`--use-quote` 付 WBNB；卖出得 WBNB，`--to-bnb` 得 BNB），最少得到按池子的有效储备算；池子最多只能付出真实的 BNB，所以相对它偏大的交易会有提醒。GangSwap 分版本：每个币永远用创建时的版本（GangSwapMigrator），有自己的 factory、手续费合约和 router，以后新币换了新版本、或者不再开放创建，老币都不变；创建预览、`gang tx` 和 `gang info` 会显示版本；预览之后 pad 换了版本，创建交易会回滚。每笔交易前都会核对 router 属于这个版本、代码是 CLI 认识的 GangSwapRouter，不是就不构建交易（版本比 CLI 新就升级 CLI）。`gang info` / `gang status` 显示 `gangSwap`（有效和真实流动性、回购进度）。`gang creator-fee --token 0x… --claim [--part curve|pool]` 分别领取曲线部分（在 pad 上）和池子部分（在 GangSwapFees 上），各是一笔交易。
+
 **冲毕业奖励（0.42.0+，BSC 主网和测试网 2026-11-17 起可用；和 `--countdown-reward` 一起用、转一部分给倒计时奖励要 0.44.0+，主网和测试网 2026-11-17 起已开）：** `gang create … --grad-reward <种子钱> [--gr-min-buy <金额>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]` 在 GangLaunchpad 3.0 上建一个曲线币，同时用这个币的报价币放进一笔奖励池。种子钱在建币时拉走，所以 CLI 会先让你批准；至少值 0.1 BNB。
 
 - **谁能分**：pad 记下最后 `--gr-entries` 笔（默认 10）曲线买入，每笔都要实际花掉 `--gr-min-buy`（默认值 0.01 BNB），而且 Agent 门槛开着；把币推过毕业线的那一笔一律计入。
@@ -101,7 +103,7 @@ gang list [--limit 20] [--kind v3|fair|fly [--status …]]  # 链上读 V2 / Sof
 gang info --token <addr>                     # 任意内盘的一个币（gang token 是旧名）
 gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
 gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金；creator 分成（2.0 / 3.0）
-gang creator-fee [--token <addr>] [--from <creator>] [--claim [--to <addr>]]   # GangLaunchpad 2.0 / 3.0：内盘 1% 手续费的 70% 归 creator
+gang creator-fee [--token <addr>] [--from <creator>] [--claim [--to <addr>] [--part curve|pool]]   # GangLaunchpad 2.0 / 3.0：内盘 1% 手续费的 70% 归 creator
 gang create … --promote 20 [--promote-days 30]   # 3.0 的 V3（0.34.0+）：绑定钱包在有效期内的内盘交易，creator 分成的 20% 归它的推广人。带税且没指定接收方时，这些钱包的池子税里，接收方那部分也按这个比例分给推广人（外盘分成模块，按 Merkle root 结算）。发币后不能改
 gang promote buy --token 0x… --amount <n> --promoter 0x…   # 把这个钱包绑定到推广人：只在它第一次交易这个币时绑定，只限内盘，必须由钱包直接发送。价格和手续费不变。和 --ref（gang.fun 的邀请记录）不是一回事。在 0.34.0+ 上等同于 gang buy --promoter，但旧版 CLI 对它只打印帮助，而 gang buy --promoter 在旧版上会变成一笔再也无法绑定的普通买入
 gang promote status|earnings|claim|claim-pool|activate|work|sweep|bind|reclaim|release-dev --token 0x…（或 --module 0x…）   # 条款、绑定、可领金额；claim-pool 会用链上的 root 核对 gang.fun 给的证明。reclaim（dev，结算方沉默 30 天后）会永久关闭模块
@@ -157,6 +159,7 @@ gang floor status|redeem|distribute|release|set-payee|bind --token 0x… [--amou
 gang create … --base 5|10 --base-vest 30|90|180 [--grad 6|9|12|15]  # 3.0 开盘底仓：建币时用 BNB 给底仓金库买 5% / 10%；毕业前锁住（不毕业就永远锁着），毕业后匀速释放给你
 gang base status|release --token 0x…  # 底仓金库：大小、释放期、开始时间、已释放、可释放、未释放；release 第一次开始计时，之后把到期的部分转给创建人
 gang create … --agent-window <1-1440>  # 3.0：前 N 分钟只限 agent，之后对所有钱包开放、取消 1% 上限，不可撤销
+gang create … --venue gangswap [--grad 6|9|12|15]  # 3.0：毕业到 GangSwap，不是 PancakeSwap，不可更改
 gang create … --grad-reward <种子钱> [--gr-min-buy <金额>] [--gr-entries 1-20] [--gr-last 0-50] [--gr-refund-days 30-180]  # 3.0 冲毕业奖励：你出钱奖励毕业前最后几笔买入，按花费分
 gang grad-reward status|claim|settle|sweep|retry-carry|refund-request|refund-cancel|refund --token 0x…  # 奖励池、名单和领取；创建人撤回要先公示 7 天
 gang create … --buy-tax 3 --sell-tax 3 --countdown-reward --cd-max-payout 1 [--cd-* …] [--cd-seed 0.2]  # V3 倒计时奖励：你那份税变成买家的奖励
@@ -346,6 +349,7 @@ Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要�
 | `GANG_COUNTDOWN_FACTORY` / `GANG_TESTNET_COUNTDOWN_FACTORY` | 发币目标那一代的 GangCountdownRewardFactory（`--countdown-reward`）。CLI 0.43.2+；已内置：主网 `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`，测试网 `0x0f83ABC7d39C0d043d3f5612E304D9395B5fe582` |
 | `GANG_CALL_BOND` / `GANG_TESTNET_CALL_BOND` | GangLaunchpad 3.0 的 GangCallBond（`gang call-bond`）。CLI 0.37.0+；已内置：主网 `0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D`，测试网 `0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70` |
 | `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | 发币目标那一代的 GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖；已有的币用它自己那一代的）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 3.0 `0xec97…61e7`（2.0 `0xa832…844a`，1.0 `0xE040…79C4`），测试网 3.0 `0x0954…87b9`（2.0 `0x5a4F…dDAA`，第一版 2.0 `0xb218…FC08`，1.0 `0x6bB6…C9F6`） |
+| `GANG_SWAP_ROUTER` / `GANG_TESTNET_SWAP_ROUTER` | 仅供开发：同一个 GangSwapRouter 编译结果的其他部署。CLI 0.53.0+；主网和测试网都已内置 router。可以写一个，也可以用逗号写多个，加到内置的后面。代码必须是已知的编译结果（内置的也一样核对），而且只用于自己那个版本的币，否则拒绝。普通用户升级 CLI 即可 |
 
 ## 使用统计
 

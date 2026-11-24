@@ -270,7 +270,7 @@ export async function runFair(sub, { opt, flag, out, fail, summarize, resolveLog
     return fail(error, { token, chainId: ctx.chainId, ...(kind && { kind }) })
   }
   // 3.0's sales() answers a 铸币飞轮 token with another struct: never read it as a 打新 sale
-  if (onPad === 'fly') return notFair(opt('token'))
+  if (onPad === 'fly' || onPad === 'gangswap') return notFair(opt('token'))
 
   if (sub === 'info' || sub === 'status') {
     const token = tokenArg(opt, fail)

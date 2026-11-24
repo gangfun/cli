@@ -40,7 +40,9 @@ import { runFly, flyCtx, isFlyToken, FLY_EVENT_ABIS, FLY_CREATE_FLAGS } from './
 import { FAIR_DEV_BUY, isLaunch, LAUNCH_FLAGS, REDEEM_FEE_ALONE, runLaunch, TAX_CAP_ALONE } from './launch.js'
 import { poolPayBnb, poolTrade, refShown } from './pool.js'
 import { parseAmount, ROUTER_ABI, ROUTER_HINTS, revertOf as revertIn, step as writeStep } from './steps.js'
-import { MERGED_ERRORS_ABI, genOf, padNets } from './gangpad.js'
+import { isCurveKind, MERGED_ERRORS_ABI, genOf, PAD3_GEN, padNets } from './gangpad.js'
+import { createInput, gangSwapCreateCheck, gangSwapRevert } from './gangswap.js'
+import { venueRefusal } from './venue.js'
 import { creatorFeeCtx, creatorFeeList, runCreatorFee } from './creatorfee.js'
 import { V2_ABI } from './abi.js'
 import { runMcp } from './mcp.js'
@@ -49,7 +51,7 @@ import { portfolio } from './portfolio.js'
 import { codeOf, record } from './telemetry.js'
 import { trending, trendingBlock, TRENDING_NOTE } from './trending.js'
 import { shareFor } from './share.js'
-import { BUY_ACCEPTS, CREATE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, suggestFlag, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
+import { BUY_ACCEPTS, CREATE_ACCEPTS, CREATOR_FEE_ACCEPTS, FAIR_CREATE_FLAGS, LINK_FLAGS, suggestFlag, V3_CREATE_FLAGS, unknownFlagError } from './flags.js'
 import { encodeEventTopics, parseAbi } from 'viem'
 
 const args = process.argv.slice(2)
@@ -288,8 +290,8 @@ function checkPromoterTypo() {
 const HELP = `gang — agent-only launchpad on BNB Chain (Binance Agentic Wallet) · new tokens on GangLaunchpad (V3 / 打新)
 
 One command per action, whatever pad the token is on: buy / sell / info / status / claim / mint / withdraw / release
-read the token's kind (GangLaunchpad kindOf: V3 curve, 打新 sale or 3.0's 铸币飞轮; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
-U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 tokens carry kind: "v3" | "fair" | "fly". --testnet
+read the token's kind (GangLaunchpad kindOf: V3 curve, 打新 sale, 3.0's 铸币飞轮 or GangSwap curve; GangFlywheelPad: 铸币飞轮; otherwise the V2 / Soft /
+U / S pads) and run that kind's trade. Results of V3 / 打新 / 铸币飞轮 / GangSwap tokens carry kind: "v3" | "fair" | "fly" | "gangswap". --testnet
 = BSC testnet (GangLaunchpad and GangFlywheelPad only); --calldata prints the raw tx instead of a baw preview; --from
 <addr> reads / builds for that wallet (V2 / Soft: graduated tokens only; a 3.0 curve token: an Agent ID wallet, or any
 wallet once its agent window is open).
@@ -626,8 +628,10 @@ creator, less any promoter share the creator set, before and after graduation, n
   gang creator-fee [--from <creator>]    every 2.0 / 3.0 V3 token this wallet created and what it can claim (read on chain), with
                                          totals per quote
   gang creator-fee --token <addr>        one token: padGen, sharePct, claimable
-  gang creator-fee --token <addr> --claim [--to <addr>]
+  gang creator-fee --token <addr> --claim [--to <addr>] [--part curve|pool]
                                          claim all of it (the creator only), to this wallet or --to (not 0x0 or the pad).
+                                         A GangSwap token has two parts, each its own tx: the curve part on the pad, then
+                                         (graduated) 70% of the GangSwap fee on buys; --part picks one
                                          The fee is the creator's own: never the tax recipient's or a buy-back / split / LP
                                          module's. gang info / status (the creator's) and gang portfolio show it too
 
@@ -709,6 +713,25 @@ AGENT WINDOW (GangLaunchpad 3.0, 0.49.0+; the pad says whether it is open):
   gang handoff status --token <t> --from <their 0x> [--since <block>] [--timeout <d>]
                                          read-only: that wallet's trades of the token since the handoff (traded: true
                                          only once the chain shows one), its balance then and now
+
+GANGSWAP (GangLaunchpad 3.0, 0.53.0+; the pad says whether it is open):
+  gang create … --venue gangswap [--grad 6|9|12|15] [--agent-window <1-1440>]
+                                         the curve graduates into GangSwap instead of PancakeSwap (--venue pancake, the
+                                         default). PERMANENT. On the curve it is an ordinary V3 token; afterwards it trades on
+                                         GangSwap, not PancakeSwap, and sites such as DexScreener may not list it. At graduation
+                                         the part of the raise no trade could ever reach is replaced by an equal virtual reserve
+                                         (same price curve) and used for a scheduled buy-back and burn, about 40 steps over
+                                         about 5 minutes. The GangSwap version (its migrator) is fixed at the create too: the
+                                         one the preview shows, or the tx reverts. 1% pool fee; on buys the creator gets 70% of it (gang creator-fee).
+                                         WBNB quote, untaxed, alone: no tax, dividend, recipient, --quote / --ref-pool,
+                                         --promote, --base, --vault, modules, rewards, bond, launch in one command, --fair / --fly.
+                                         gang tx --hash then checks the token really is a GangSwap one, and on which version
+  gang buy / gang sell                   after graduation: GangSwapRouter only (BNB by default, --use-quote pays WBNB; a sell
+                                         pays WBNB, --to-bnb BNB), never GangRouter or PancakeSwap: a PancakeSwap pool of such a
+                                         token is someone else's. Prices follow the pool's effective reserves; only its real
+                                         BNB can be paid out, and a trade large against it is warned about. The router's code
+                                         must be a GangSwapRouter build this CLI knows and the router of the token's own
+                                         version, or nothing is built. gang info / status: gangSwap
 
 GRADUATION REWARD (冲毕业奖励, GangLaunchpad 3.0, 0.42.0+; open on BSC mainnet and testnet; the pad says whether it is open):
   gang create … --grad-reward <seed> [--gr-min-buy <amount>] [--gr-entries <1-20>] [--gr-last <0-50>] [--gr-refund-days <30-180>]
@@ -997,6 +1020,9 @@ GANG_V3_TESTNET_RPC_URL / GANG_FAIR_TESTNET_RPC_URL), GANG_ROUTER / GANG_TESTNET
 for BNB buys / mints and every pool trade). Built in: GangLaunchpad 3.0 (where new tokens go), 2.0, 1.0 and 2.0 金库版 on
 mainnet and the testnet. A token is always served by its own generation's pad, router, GangBond and module factories; these
 variables (and GANG_BOND / GANG_*_FACTORY) set the create target's only,
+GANG_SWAP_ROUTER / GANG_TESTNET_SWAP_ROUTER (development only: another deployment of the GangSwapRouter build; its code is
+checked before every trade, as a built-in one's, and it serves its own version's tokens only. One or a comma-
+separated list, added to the built-in ones),
 GANG_FLY_PAD / GANG_TESTNET_FLY_PAD (GangFlywheelPad V1; default: the built-in mainnet / testnet set 2 addresses),
 GANG_FLY_PAD_V2 / GANG_TESTNET_FLY_PAD_V2 (V2; default: the built-in mainnet / testnet V2); new 铸币飞轮 tokens go to the built-in
 GangLaunchpad 3.0. --guard / --twap-window (3.0 and V2): the guard is off by default (post-launch minting does not pause
@@ -1350,11 +1376,12 @@ const LAUNCH_DEPS = { io: PAD_IO, runV3, runFair, runBond, padNotes: (kind, sub,
 // gang buy|sell|info|status|claim|mint|withdraw|release --token <addr> ask GangLaunchpad's kindOf what the token is and
 // run that kind's code: V3 curve (v3.js), 打新 sale (fair.js), else the mainnet V2 / Soft / U / S pads (here). A new pad
 // is a new kind in this table, not new commands; gang v3 <sub> / gang fair <sub> stay as aliases of the same code.
+const GANGSWAP_VERBS = new Set(['buy', 'sell', 'info', 'status'])
 const V3_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'release'])
 const FAIR_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'mint', 'withdraw'])
 const FLY_VERBS = new Set(['buy', 'sell', 'info', 'status', 'claim', 'mint', 'withdraw', 'release'])
 const KIND_NAMES = {
-  v3: 'a V3 (bonding-curve) token', fair: 'a 打新 (fair-mint) token', fly: 'a 铸币飞轮 (Mint Flywheel) token', legacy: 'a V2 / Soft / U / S token',
+  v3: 'a V3 (bonding-curve) token', fair: 'a 打新 (fair-mint) token', fly: 'a 铸币飞轮 (Mint Flywheel) token', gangswap: 'a GangSwap curve token (it graduates into GangSwap, not PancakeSwap)', legacy: 'a V2 / Soft / U / S token',
 }
 // what the V2 / Soft / U / S code runs: it looks the token up on those pads itself, so it can also take a token whose kindOf
 // could not be read (a GangLaunchpad token then gets a pointer from resolvePad instead of a wrong answer)
@@ -1364,6 +1391,12 @@ const NOT_FOR = {
   v3: {
     mint: 'a V3 token has no shares: gang buy --token … --amount <quote>',
     withdraw: 'a V3 token has no shares: gang sell --token … (--amount <tokens> | --all)',
+  },
+  gangswap: {
+    mint: 'a GangSwap token has no shares: gang buy --token … --amount <BNB>',
+    withdraw: 'a GangSwap token has no shares: gang sell --token … (--amount <tokens> | --all)',
+    claim: 'a GangSwap token is untaxed: it pays no dividend',
+    release: 'a GangSwap token is untaxed: it has no tax recipient to pay',
   },
   fair: { release: '打新 tokens have no tax recipient: the pool tax goes to minters and the platform (gang claim for the reward)' },
   legacy: {
@@ -1375,7 +1408,7 @@ const NOT_FOR = {
 }
 
 /**
- * 'v3' | 'fair' | 'fly' on GangLaunchpad, 'fly' on GangFlywheelPad (mainnet, or BSC testnet with --testnet); else 'legacy'
+ * 'v3' | 'fair' | 'fly' | 'gangswap' on GangLaunchpad, 'fly' on GangFlywheelPad (mainnet, or BSC testnet with --testnet); else 'legacy'
  * (mainnet V2 / Soft / U / S).
  * kindOf unreadable (RPC): 'legacy' only for a verb that code checks again (LEGACY_VERBS), a retry hint otherwise.
  */
@@ -1385,7 +1418,7 @@ async function padKind(token, verb) {
   try { ctx = v3Ctx(testnet) } catch (e) { fail(e.message) }
   // every GangLaunchpad generation of this network (3.0, 2.0, 1.0, 2.0 金库版) is asked
   const { kind } = await genOf(ctx, token)
-  if (kind === 'v3' || kind === 'fair' || kind === 'fly') return kind
+  if (kind !== null && kind !== 'none') return kind
   // not GangLaunchpad's: the older 铸币飞轮 pads (GangFlywheelPad V1 / V2) are asked next
   const fly = await isFlyToken(flyCtx(testnet), token)
   if (fly) return 'fly'
@@ -1417,7 +1450,7 @@ const capturedIo = (token, wallet) => ({
   opt: (n, d) => (n === 'token' ? token : n === 'from' ? wallet : d),
   flag: (n) => n === 'token' || n === 'from',
   out: (o) => o,
-  fail: (msg) => { throw new Error(msg) },
+  fail: (msg, extra) => { throw Object.assign(new Error(msg), { kind: extra?.kind }) },
 })
 const captured = (r) => {
   if (r?.success === false) throw new Error(r.error || 'failed')
@@ -1432,10 +1465,16 @@ async function portfolioStatus(kind, token, wallet, indexed) {
     })
   }
   if (kind === 'fly') return captured(await runFly('status', capturedIo(token, wallet)))
-  const io = { ...capturedIo(token, wallet), notes: padNotes(kind, 'status') }
-  return captured(await (kind === 'v3' ? runV3('status', io) : runFair('status', io)))
+  const io = { ...capturedIo(token, wallet), notes: padNotes(isCurveKind(kind) ? 'v3' : kind, 'status') }
+  return captured(await (isCurveKind(kind) ? runV3('status', io) : runFair('status', io)))
 }
-const portfolioBond = async (token) => captured(await runBond('status', capturedIo(token, null)))
+// a GangSwap token takes no bond: no row and no error for it
+const portfolioBond = async (token) => {
+  try { return captured(await runBond('status', capturedIo(token, null))) } catch (e) {
+    if (e.kind === 'gangswap') return null
+    throw e
+  }
+}
 
 // every result of a routed V3 / 打新 command says which kind ran (V2 / Soft results carry their own kind already)
 const tagKind = (kind) => (o) => out(o && typeof o === 'object' && !('kind' in o) ? { kind, ...o } : o)
@@ -1470,12 +1509,12 @@ async function handoff(verb, token) {
   const from = fromArg()
   if (flag('wait') && !from) fail('--wait needs --from <the user\'s wallet>: the trade is looked up by its sender', { code: 'USAGE' })
   const kind = await padKind(token, verb)
-  if (kind !== 'v3') {
+  if (!isCurveKind(kind)) {
     fail(`--handoff is for GangLaunchpad 3.0 curve tokens whose agent window is open; ${KIND_NAMES[kind]} needs the Binance Agentic Wallet (or, once it trades in a pool, any DEX)`, { code: 'HANDOFF_NOT_SERVED', token, kind })
   }
   let r
   try {
-    r = await buildHandoff({ side: verb, token, amount: verb === 'buy' ? spendArg() : opt('amount'), all: flag('all'), from, read: client })
+    r = await buildHandoff({ side: verb, token, amount: verb === 'buy' ? spendArg() : opt('amount'), all: flag('all'), from, kind, read: client })
   } catch (e) {
     if (e instanceof HandoffError) fail(e.message, { code: e.code, ...e.extra })
     throw e
@@ -1523,7 +1562,7 @@ async function routed(verb) {
   // 铸币飞轮 mints name the inviter in the contract call (fly.js); every other buy / mint carries the invite tag
   if (flag('ref') && kind !== 'fly') await resolveRef(fromArg() || (bawStatus() === 'CONNECTED' ? bawAddress() : null))
   const io = { ...PAD_IO, out: tagKind(kind) }
-  if (kind === 'v3' && V3_VERBS.has(verb)) return runV3(verb, { ...io, notes: padNotes('v3', verb) })
+  if ((kind === 'v3' && V3_VERBS.has(verb)) || (kind === 'gangswap' && GANGSWAP_VERBS.has(verb))) return runV3(verb, { ...io, notes: padNotes('v3', verb) })
   if (kind === 'fly' && FLY_VERBS.has(verb)) {
     if (flag('follow')) fail('--follow only counts on curve buys (V3 / V2 tokens): a 铸币飞轮 token has no curve', { token })
     return runFly(verb, amountIo(io))
@@ -1643,16 +1682,22 @@ async function refuseFly(what) {
   if (await isFlyToken(flyCtx(flag('testnet')), token)) fail(`铸币飞轮 (Mint Flywheel) tokens take no ${what} (phase 1)`, { token, kind: 'fly' })
 }
 
+/** Whether a mainnet tx went to a 3.0 pad, from its receipt (its own data unread); false when that can't be read either. */
+const wentToPad3 = (hash) => client.getTransactionReceipt({ hash })
+  .then((r) => padNets('v3').mainnet.gens.some((g) => g.gen === PAD3_GEN && g.pad.toLowerCase() === String(r.to).toLowerCase()), () => false)
+
 /** A mainnet tx decoded, its queued note published (or its state refreshed), its follow ref and token links. */
 async function txReport(hash) {
   const t = await decodeTx(hash, GANG_EVENT_ABIS, SHARED_SPLIT)
   // the input may carry a follow ref and a note commitment: a committed note is sent here if it's still in the
   // local queue (e.g. after PENDING_CONFIRMATION), or its state reported / refreshed if already sent
   const queued = hasQueued()
-  let note, input = null
+  let note, input = null, sender = null, inputUnread = false, tx = null
   try {
-    input = (await client.getTransaction({ hash })).input
+    tx = await client.getTransaction({ hash })
+    ;({ input, from: sender } = tx)
   } catch (e) {
+    inputUnread = true
     if (queued) note = { published: false, error: `could not read tx input: ${e.message.split('\n')[0]}` }
   }
   const committed = input && queued ? hashesIn(input) : []
@@ -1668,8 +1713,9 @@ async function txReport(hash) {
   // post text for X: the note once it's public, else a token this tx created
   const created = t.status === 'success' ? t.events.find((e) => e.event === 'Created' && ADDR_RE.test(e.token ?? ''))?.token : null
   const share = note?.published ? await shareFor({ note: hash }) : created ? await shareFor({ token: created, event: 'create' }) : null
+  const gsCheck = await gangSwapCreateCheck({ chainId: CONFIG.chainId, read: v2PoolCtx().read }, { status: t.status, events: t.events, input, sender, inputUnread: inputUnread && await wentToPad3(hash) })
   return {
-    success: true, ...t, ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
+    success: true, ...t, ...gsCheck, ...(await gangSwapRevert({ chainId: CONFIG.chainId, client }, { status: t.status, to: tx?.to, tx })), ...(note && { note }), ...(followed && { follow: { noteTx: followed, link: noteLink(followed) } }),
     ...(links && { links }), ...(invitedBy && { invitedBy }), ...(share && { share }),
   }
 }
@@ -1730,8 +1776,21 @@ async function main() {
   const tokenCreate = cmd === 'create' || ((cmd === 'v3' || cmd === 'fair' || cmd === 'fly') && args[1] === 'create')
   const flyCreate = (cmd === 'create' && flag('fly')) || (cmd === 'fly' && args[1] === 'create')
   // a flag no create reads is refused first, before any check that reads the others (flags.js)
+  if (args.filter((a) => a === '--venue').length > 1) fail('give --venue once: the venue is permanent')
   const unknown = tokenCreate && unknownFlagError(args, CREATE_ACCEPTS, cmd === 'create' ? 'gang create' : `gang ${cmd} create`)
   if (unknown) fail(unknown)
+  // a claim's flags are read exactly or not at all: a misspelled --to or --to=0x… must not fall back to a default
+  if (cmd === 'creator-fee') {
+    for (const f of ['--token', '--to', '--part', '--from']) if (args.filter((a) => a === f).length > 1) fail(`give ${f} once`)
+  }
+  const feeFlag = cmd === 'creator-fee' && unknownFlagError(args, CREATOR_FEE_ACCEPTS, 'gang creator-fee', 'Nothing was built')
+  if (feeFlag) fail(feeFlag)
+  // --venue (3.0): where a V3 curve graduates to; everything GangSwap does not take is refused here, before any read
+  if (flag('venue')) {
+    if (!tokenCreate) fail('--venue only applies when creating a token (gang create --venue gangswap …)')
+    const bad = venueRefusal({ opt, flag, testnet: flag('testnet'), fair: cmd === 'fair', fly: flyCreate })
+    if (bad) fail(bad.error, 'got' in bad ? { got: bad.got } : {})
+  }
   if (flyCreate) {
     const launch = LAUNCH_FLAGS.find((f) => flag(f))
     if (launch) fail(`--${launch}: ${FLY_NO_BOND}`)
@@ -2145,8 +2204,8 @@ async function main() {
       // a GangLaunchpad token: the V3 curve buy (--amount / --bnb = the quote to spend)
       const { kind: onPad } = await genOf({ ...v2PoolCtx(), gens: padNets('v3').mainnet.gens }, token)
       if (onPad === 'fair') fail('this note is on a 打新 (fair-mint) token: only curve buys can follow a note', { noteTx, token })
-      if (onPad !== 'v3' && (await isFlyToken(flyCtx(false), token))) fail('this note is on a 铸币飞轮 (Mint Flywheel) token: only curve buys can follow a note', { noteTx, token })
-      if (onPad === 'v3') {
+      if (!isCurveKind(onPad) && (await isFlyToken(flyCtx(false), token))) fail('this note is on a 铸币飞轮 (Mint Flywheel) token: only curve buys can follow a note', { noteTx, token })
+      if (isCurveKind(onPad)) {
         return runV3('buy', { ...PAD_IO, opt: (n, d) => (n === 'token' ? token : opt(n, d)), notes: padNotes('v3', 'buy', { note, checked: follow }) })
       }
       return buy(token, bnb, note, noteTx, follow)
@@ -2219,9 +2278,11 @@ async function main() {
         let ctx
         try { ctx = v3Ctx(true) } catch (e) { fail(e.message) }
         const r = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
+        const events = decodeLogs(r.logs, GANG_EVENT_ABIS, await firstByModuleType(ctx.client, r.logs, SHARED_SPLIT.topic, SHARED_SPLIT.byType))
         return out({
           success: true, chainId: Number(ctx.chainId), hash, status: r.status, block: Number(r.blockNumber),
-          events: decodeLogs(r.logs, GANG_EVENT_ABIS, await firstByModuleType(ctx.client, r.logs, SHARED_SPLIT.topic, SHARED_SPLIT.byType)), explorer: `${ctx.explorer}/tx/${hash}`,
+          events, ...(await gangSwapCreateCheck(ctx, { status: r.status, events, sender: r.from, ...(await createInput(ctx, r, events)) })),
+          ...(await gangSwapRevert(ctx, { status: r.status, to: r.to, tx: () => ctx.client.getTransaction({ hash }) })), explorer: `${ctx.explorer}/tx/${hash}`,
         })
       }
       return out(await txReport(hash))

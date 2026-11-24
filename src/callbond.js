@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { createPublicClient, parseAbi, parseAbiItem, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, getAddress, keccak256, concat } from 'viem'
 import { decimalsOf, fundingStep as fund, parseAmount, revertOf as revertIn, step, units, GAS_RESERVE } from './steps.js'
-import { gangGens, MERGED_ERRORS_ABI, MERGED_HINTS, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
+import { gangGens, MERGED_ERRORS_ABI, MERGED_HINTS, PAD3_GEN, padNets, rpcTransport, GANGSWAP_KIND, gangSwapTakesNone } from './gangpad.js'
 import { bawAddress } from './baw.js'
 import { get as apiGet } from './discover.js'
 import { readNoteCommit } from './notes.js'
@@ -316,6 +316,7 @@ export async function runCallBond(sub, { opt, flag, out, fail, summarize }) {
       ctx.read(ctx.pad, PAD_ABI, 'kindOf', [token]), ctx.read(ctx.pad, PAD_ABI, 'tokenVersionOf', [token]).catch(() => 0),
       ctx.read(ctx.pad, PAD_ABI, 'curves', [token]),
     ])
+    if (Number(kind) === GANGSWAP_KIND) fail(gangSwapTakesNone('gangswap', 'call bond'), { token, kind: 'gangswap' })
     if (Number(kind) !== 1) fail(HINTS.NotCurveToken, { token, pad: ctx.pad })
     if (Number(version) !== 1) fail(HINTS.BadTokenVersion, { token })
     const [, quote, , , , , graduated] = curve

@@ -8,6 +8,7 @@
  * or only bought on PancakeSwap, is not in that index and so not listed. Mainnet only: gang.fun indexes no testnet.
  */
 
+import { isGangSwapRow } from './discover.js'
 import { mapLimit } from './limit.js'
 
 const MAX_LAUNCHES = 100 // bonds are looked up on the newest launches up to this many
@@ -19,7 +20,7 @@ const usd = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 100
 const sameAmount = (a, b) => a != null && b != null && Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * 1e-9
 
 
-const KIND = { v3: 'v3', fair: 'fair', fly: 'fly', main: 'legacy', stocks: 'legacy' }
+const KIND = { v3: 'v3', gangswap: 'gangswap', fair: 'fair', fly: 'fly', main: 'legacy', stocks: 'legacy' }
 
 /**
  * One indexed position + its on-chain status → a holding, or null when nothing is left (no balance, no shares, nothing
@@ -27,17 +28,20 @@ const KIND = { v3: 'v3', fair: 'fair', fly: 'fly', main: 'legacy', stocks: 'lega
  */
 function holdingOf(p, kind, s) {
   const quoteUsd = num(p.quoteUsd) ?? (num(p.valueUsd) != null && num(p.valueQuote) > 0 ? num(p.valueUsd) / num(p.valueQuote) : null)
-  const base = { token: p.address, symbol: p.symbol, kind, track: p.track, quote: p.quoteSymbol }
+  // a curve token's kind is what the chain said (its status read), whatever gang.fun's row calls it
+  const curve = kind === 'v3' || kind === 'gangswap'
+  const gs = curve && s.kind === 'gangswap'
+  const base = { token: p.address, symbol: p.symbol, kind: curve ? (gs ? 'gangswap' : 'v3') : kind, track: p.track, quote: p.quoteSymbol }
   let balance = null, shares = null, value = null, valueBasis = null, claimable = null, graduated = false, extra = {}
   // what the index holds for this wallet: tokens bought on the curve minus sold (at graduation for a graduated one)
   const indexed = num(p.balance ?? p.balanceAtGrad)
 
-  if (kind === 'v3') {
+  if (curve) {
     graduated = !!s.graduated
     balance = num(s.balance)
     if (graduated) {
       value = num(s.poolSellAll?.expectOut) ?? (balance === 0 ? 0 : null)
-      valueBasis = s.poolSellAll ? 'selling it all into the pool now, tax included' : null
+      valueBasis = s.poolSellAll ? (gs ? 'selling it all on GangSwap now, the 1% pool fee included' : 'selling it all into the pool now, tax included') : null
     } else {
       value = balance != null && num(p.priceQuote) != null ? balance * num(p.priceQuote) : null
       valueBasis = 'last curve price (a sell pays the 1% curve fee on top)'
@@ -184,7 +188,7 @@ export async function portfolio({ wallet, get, statusOf, bondOf, creatorFeesOf, 
   const errors = []
   if (fees?.error) errors.push({ creatorFee: fees.error })
   const rows = await mapLimit(positions.items, concurrency, async (p) => {
-    const kind = KIND[p.track]
+    const kind = isGangSwapRow(p) ? 'gangswap' : KIND[p.track]
     if (!kind) return null
     try {
       return holdingOf(p, kind, await statusOf(kind, p.address, wallet, p))
@@ -245,11 +249,11 @@ export async function portfolio({ wallet, get, statusOf, bondOf, creatorFeesOf, 
  */
 function creatorFeeRows(fees) {
   if (!fees?.scanned?.length) return {}
-  const due = fees.tokens.filter((x) => x.claimableRaw !== '0')
+  const due = fees.tokens.filter((x) => x.claimableRaw !== '0' || num(x.gangSwapPool?.claimable) > 0)
   return {
     creatorFees: {
-      tokens: due.map((x) => ({ token: x.token, symbol: x.symbol, quote: x.quoteSymbol, claimable: num(x.claimable), padGen: x.padGen, next: `gang creator-fee --token ${x.token} --claim` })),
-      totals: fees.totals.filter((x) => num(x.claimable) > 0),
+      tokens: due.map((x) => ({ token: x.token, symbol: x.symbol, quote: x.quoteSymbol, claimable: num(x.claimable), ...(x.gangSwapPool && { gangSwapPool: num(x.gangSwapPool.claimable) }), padGen: x.padGen, next: `gang creator-fee --token ${x.token} --claim` })),
+      totals: fees.totals.filter((x) => num(x.claimable) > 0 || num(x.gangSwapPool) > 0),
       note: 'GangLaunchpad 2.0 / 3.0 keep 70% of the 1% curve fee of your V3 tokens for you, less any promoter share you set; gang creator-fee lists every one of them',
     },
   }

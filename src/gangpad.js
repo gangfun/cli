@@ -5,7 +5,7 @@ import { bsc, bscTestnet } from 'viem/chains'
  * GangLaunchpad (contract merge, 2026-10-27): V3 tax tokens (bonding curve) and 打新 (fair-mint) sales live on ONE pad —
  * one address, one state, one tax handler, one GangRouter. `gang v3` and `gang fair` both talk to it; `kindOf(token)`
  * on the pad says which kind a token is (0 = not this pad's, 1 = V3 curve, 2 = 打新, 3 = 铸币飞轮: on 3.0 only, see
- * fly.js). The two `create` overloads keep their old selectors, so each command keeps its own ABI fragment.
+ * fly.js; 4 = a curve that graduates into GangSwap: on 3.0 only, see gangswap.js). The two `create` overloads keep their old selectors, so each command keeps its own ABI fragment.
  *
  * Each network may have several generations of this pad (GANG_GENS: 3.0, 2.0, 1.0, 2.0 金库版); kindOf on each tells which one has a token.
  *
@@ -374,9 +374,15 @@ export const MERGED_HINTS = {
 }
 
 const KIND_ABI = parseAbi(['function kindOf(address token) view returns (uint8)'])
-const KINDS = ['none', 'v3', 'fair', 'fly']
+const KINDS = ['none', 'v3', 'fair', 'fly', 'gangswap']
+/** kindOf of a GangSwap curve token (gangswap.js): its own kind, never 'v3'. */
+export const GANGSWAP_KIND = KINDS.indexOf('gangswap')
+/** The kinds that trade on a V3 bonding curve. */
+export const isCurveKind = (kind) => kind === 'v3' || kind === 'gangswap'
+/** Why a module, bond or reward does not apply to a GangSwap token, as the fields of fail(); `what`: 'a GangBond', … */
+export const gangSwapTakesNone = (kind, what) => (kind === 'gangswap' ? `this is a GangSwap token (it graduates into GangSwap, not PancakeSwap): it takes no ${what}` : null)
 
-/** 'v3' | 'fair' | 'fly' | 'none' from the merged pad's kindOf (fly: 3.0 only); null on a pad without kindOf (before the merge) or on an RPC error. */
+/** 'v3' | 'fair' | 'fly' | 'gangswap' | 'none' from the merged pad's kindOf (fly and gangswap: 3.0 only); null on a pad without kindOf (before the merge) or on an RPC error. */
 export async function kindOf(ctx, token) {
   try {
     return KINDS[Number(await ctx.read(ctx.pad, KIND_ABI, 'kindOf', [token]))] ?? null
@@ -387,13 +393,13 @@ export async function kindOf(ctx, token) {
 
 /**
  * Which generation's pad has `token`, asked of every pad of ctx.gens at once: { g, kind } with kind 'v3' | 'fair' |
- * 'fly' (3.0's own 铸币飞轮 tokens; V1 / V2 ones are on GangFlywheelPad, not in ctx.gens: fly.js finds those);
+ * 'gangswap' (3.0's GangSwap curves) | 'fly' (3.0's own 铸币飞轮 tokens; V1 / V2 ones are on GangFlywheelPad, not in ctx.gens: fly.js finds those);
  * { g: null, kind: 'none' } when no pad has it; kind null when a pad could not be read and no other one has it.
  */
 export async function genOf(ctx, token) {
   const gens = ctx.gens ?? [ctx]
   const kinds = await Promise.all(gens.map((g) => kindOf({ ...ctx, pad: g.pad }, token)))
-  const i = kinds.findIndex((k) => k === 'v3' || k === 'fair' || k === 'fly')
+  const i = kinds.findIndex((k) => k !== null && k !== 'none')
   if (i >= 0) return { g: gens[i], kind: kinds[i] }
   return { g: null, kind: kinds.includes(null) ? null : 'none' }
 }
@@ -532,6 +538,9 @@ export async function notThisKind(ctx, token, want, net = '') {
   const ask = want === 'v3' ? 'a LaunchpadV3 (tax) token' : 'a 打新 (fair-mint) sale'
   if (kind === 'fly') {
     return { error: `this is a 铸币飞轮 (Mint Flywheel) token: gang info / buy / sell / mint / withdraw --token ${token}${net} pick the right pad code`, kind }
+  }
+  if (kind === 'gangswap') {
+    return { error: `this is a GangSwap curve token${want === 'fair' ? ', not a 打新 sale' : ''}: gang info / status / buy / sell --token ${token}${net} pick the right code`, kind }
   }
   if (kind === 'fair' && want === 'v3') {
     return { error: `this is a 打新 (fair-mint) token, not a V3 token: gang info / buy / sell / mint / withdraw --token ${token}${net} pick the right pad code`, kind }

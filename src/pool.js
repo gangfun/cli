@@ -2,6 +2,7 @@ import { parseAbi, encodeFunctionData, formatUnits, parseUnits, zeroAddress } fr
 import { decimalsOf, isMissingFunction, poolSellQuote, roomyGas, ROUTER_ABI, routerDeadline, step, units, GAS_RESERVE } from './steps.js'
 import { bondGuard } from './bond.js'
 import { callBondGuard } from './callbond.js'
+import { gangGens, GANGSWAP_KIND, PAD3_GEN } from './gangpad.js'
 
 /**
  * PancakeSwap (V2 pool) buys and sells of a graduated / launched token through GangRouter — V3 and 打新 tokens
@@ -32,6 +33,8 @@ const WBNB_ABI = parseAbi(['function deposit() payable'])
 
 /** Why a pool trade's result says ref.attached: false (its calldata is the router's own call: no invite tag in it). */
 export const POOL_NO_REF = 'a PancakeSwap trade carries no invite tag (its calldata is the router call alone): gang.fun credits an invite on a first curve trade or mint'
+/** The same on GangSwap (gangswap.js). */
+export const GANGSWAP_NO_REF = POOL_NO_REF.replace('a PancakeSwap trade', 'a GangSwap trade')
 
 /**
  * The `ref` a result shows (index.js adds it to every result of a run with --ref): `ref` as resolved, except on a pool
@@ -42,14 +45,14 @@ export function refShown(o, ref) {
   if (!ref) return null
   const pool = !!o && typeof o === 'object' && (o.venue === 'pancakeswap' || /^pool-/.test(String(o.step ?? '')) || /^pool-/.test(String(o.next ?? '')))
   if (!pool || !ref.attached) return ref
-  return { attached: false, ...(ref.referrer && { referrer: ref.referrer }), reason: POOL_NO_REF }
+  return { attached: false, ...(ref.referrer && { referrer: ref.referrer }), reason: o.venue === 'gangswap' ? GANGSWAP_NO_REF : POOL_NO_REF }
 }
 
 /** Gas note on a taxed gang token's pool sell (it sells a chunk of the held tax right before it). */
 export const POOL_SELL_GAS_NOTE = 'this sell needs about 700k gas (it also sells one chunk of the held tax first): let the wallet estimate gas, or give at least 750k; too little gas reverts with SwapBackOutOfGas'
 
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
-const minOf = (x, slippagePct) => (x * BigInt(Math.round((100 - slippagePct) * 100))) / 10_000n
+export const minOf = (x, slippagePct) => (x * BigInt(Math.round((100 - slippagePct) * 100))) / 10_000n
 const lessBps = (x, bps) => x - (x * BigInt(bps)) / 10_000n
 const symbolOf = async (ctx, t) => { try { return await ctx.read(t, ERC20_ABI, 'symbol') } catch { return null } }
 const short = (e) => e?.shortMessage || String(e?.message || e).split('\n')[0]
@@ -58,7 +61,7 @@ const short = (e) => e?.shortMessage || String(e?.message || e).split('\n')[0]
 const isRevert = (e) => !!e?.walk?.((x) => ['ContractFunctionRevertedError', 'ContractFunctionZeroDataError', 'ExecutionRevertedError'].includes(x?.name) || x?.code === 3)
 
 /** A failure the command prints as is (a thrown PoolError ends poolTrade with { success: false, …fields }). */
-class PoolError extends Error {
+export class PoolError extends Error {
   constructor(message, fields = {}) { super(message); this.fields = fields }
 }
 const rpcError = (what, e) => new PoolError(`RPC error while ${what}: ${short(e)}`, { hint: 're-run; set GANG_RPC_URL / GANG_TESTNET_RPC_URL if the RPC keeps failing' })
@@ -115,6 +118,17 @@ async function gangRouter(ctx, handler, wantPad) {
   return pancake
 }
 
+const KIND_OF_ABI = parseAbi(['function kindOf(address token) view returns (uint8)'])
+/** Throws when `quote` is a GangSwap token of the 3.0 pad, or when that can't be read. */
+async function notGangSwapQuote(ctx, quote) {
+  const pad = gangGens(Number(ctx.chainId) !== 56).find((g) => g.gen === PAD3_GEN)?.pad
+  let kind
+  try { kind = Number(await ctx.read(pad, KIND_OF_ABI, 'kindOf', [quote])) } catch (e) { throw rpcError('checking the quote token of the BNB leg (kindOf)', e) }
+  if (kind === GANGSWAP_KIND) {
+    throw new PoolError('the quote is a GangSwap token: it has no PancakeSwap pool of its own to route BNB through', { quote, hint: 'drop --pay-bnb / --to-bnb and trade in the quote' })
+  }
+}
+
 /**
  * The pool function itself answers: called with a zero amount, the pool version reverts ZeroAmount() before touching
  * anything. No answer (empty revert) = no such function on this router: refused before any approve.
@@ -140,7 +154,7 @@ async function probePool(ctx, me, functionName, args, revertOf) {
  * What the wallet still has to do before `need` of `token` can be pulled by the router: a WBNB wrap when it is WBNB and
  * the wallet is short, then an approve for exactly `need`. [] when ready; { error } when it cannot pay.
  */
-async function fundingOf(ctx, { me, token, need, spender, sym, approveStep }) {
+export async function fundingOf(ctx, { me, token, need, spender, sym, approveStep }) {
   const bal = await ctx.read(token, ERC20_ABI, 'balanceOf', [me])
   const steps = []
   if (bal < need) {
@@ -173,7 +187,7 @@ async function fundingOf(ctx, { me, token, need, spender, sym, approveStep }) {
 export const poolPayBnb = (ctx, quote, flag) =>
   (!quote || quote === zeroAddress || same(quote, ctx.wbnb) ? !flag('use-quote') && !flag('use-wbnb') : flag('pay-bnb'))
 
-const rawTx = (ctx, { from, to, data, value = 0n, gas = null }) => ({ chainId: Number(ctx.chainId), from, to, data, value: value.toString(), ...(gas && { gas: gas.toString() }) })
+export const rawTx = (ctx, { from, to, data, value = 0n, gas = null }) => ({ chainId: Number(ctx.chainId), from, to, data, value: value.toString(), ...(gas && { gas: gas.toString() }) })
 
 /**
  * Build a PancakeSwap trade through GangRouter. Returns the object the command prints.
@@ -194,12 +208,16 @@ export async function poolTrade(ctx, p, io) {
 
 async function build(ctx, p, { rawOnly, summarize, revertOf }) {
   const { side, token, me, slippage, base = {} } = p
+  // never a GangSwap token (gangswap.js trades it): a Pancake pool of it is someone else's
+  if (base.kind === 'gangswap') throw new PoolError('a GangSwap token never trades through GangRouter / PancakeSwap', { token })
   const quote = !p.quote || p.quote === zeroAddress ? ctx.wbnb : p.quote
   const quoteWbnb = same(quote, ctx.wbnb)
   const failOut = (o) => ({ success: false, ...base, ...o })
   if (!ctx.router) {
     return failOut({ step: `pool-${side}`, error: 'no GangRouter address for this network in this CLI version', hint: `set ${Number(ctx.chainId) === 56 ? 'GANG_ROUTER' : 'GANG_TESTNET_ROUTER'} to the GangRouter proxy, or trade on PancakeSwap directly` })
   }
+  // a BNB leg through another quote (WBNB ↔ quote on PancakeSwap): never when that quote is a GangSwap token
+  if (!quoteWbnb && (side === 'buy' ? p.payBnb : p.toBnb)) await notGangSwapQuote(ctx, quote)
   const dex = await gangRouter(ctx, p.handler, ctx.pad || null)
   const quoteSymbol = (await symbolOf(ctx, quote)) || quote
   const deadline = routerDeadline()

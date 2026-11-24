@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, getAddress, hexToString, isAddress, maxUint128, maxUint256, parseUnits, zeroAddress } from 'viem'
-import { atPad, atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atPad, atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, padNets, NOT_ON_MAINNET, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseAmount, parseNum, revertOf as revertIn, step } from './steps.js'
 import { parseSplitSpec } from './split.js'
@@ -543,7 +543,9 @@ export async function runCapped(sub, { opt, flag, out, fail, summarize }) {
   } else {
     token = opt('token')
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…), or name the module with --module <addr>', { got: token ?? null })
-    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
+    const onPad = await atTokenPad(ctx, token)
+    if (onPad === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
+    if (onPad === 'gangswap') return fail(gangSwapTakesNone(onPad, 'capped recipient'), { token, kind: onPad })
     try {
       const [creator, quote] = await ctx.read(ctx.pad, PAD_ABI, 'curves', [token])
       if (creator === zeroAddress) throw new Error('not a curve')

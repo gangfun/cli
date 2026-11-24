@@ -18,6 +18,7 @@ import { mineToken } from './vanity.js'
 import { gradLaunchCheck, parseGradReward } from './gradreward.js'
 import { AGENT_WINDOW_ABI, agentWindowSupport, parseAgentWindow } from './agentwindow.js'
 import { missingRead } from './base.js'
+import { parseVenue, venueRefusal } from './venue.js'
 import { CD_ALONE, CD_FLAGS, COUNTDOWN_ABI, COUNTDOWN_FACTORY_ABI, countdownConfig, countdownCreateView, countdownFactoryAddress, countdownNotLive, countdownRaw, countdownShown, formatCountdown, parseCountdownSpec, sameConfig, simulateCountdown } from './countdown.js'
 import { CAPPED_ABI, CAPPED_FACTORY_ABI, cappedFactoryAddress, cappedLine, cappedNotDeployed, cappedOf, cappedParts, capUnits, capVolume, COVERAGE_NOTE, OTHER_ASSETS_NOTE, parseCappedSpec, PERMANENT_NOTE as CAPPED_PERMANENT_NOTE, quoteUnits, simulateCapped, splitPcts } from './capped.js'
 
@@ -204,6 +205,10 @@ export async function runLaunch(kind, { io, runV3, runFair, runBond, padNotes })
   if (!net.pad) return fail(NOT_ON_MAINNET)
   const name = opt('name'), symbol = opt('symbol')
   if (!name || !symbol) fail('--name and --symbol are required')
+  // a GangSwap token takes no chained launch (said before any read or clone)
+  const venue = venueRefusal({ opt, flag, testnet, fair: kind === 'fair' })
+  if (venue) return fail(venue.error, 'got' in venue ? { got: venue.got } : {})
+  if (parseVenue(opt, flag).venue === 'gangswap') return fail(`--venue gangswap is a plain create: ${kind === 'fair' ? 'drop --fair' : 'no launch in one command'}`)
   if (flag('follow')) fail('--follow does not apply to a launch')
   if (kind === 'fair' && flag('dev-buy')) fail(FAIR_DEV_BUY)
   if (kind === 'fair' && flag('buyback')) fail('--buyback is for V3 tokens: it makes the tax recipient a buy-back splitter, and a 打新 token has no recipient')

@@ -1,5 +1,5 @@
 import { createPublicClient, parseAbi, encodeFunctionData, formatUnits, hexToString, isAddress, zeroAddress } from 'viem'
-import { atPad, atTokenPad, GANG_GENS, KIND_UNREAD, gangGens, listedBy, padNets, NOT_ON_MAINNET, rpcTransport } from './gangpad.js'
+import { atPad, atTokenPad, GANG_GENS, KIND_UNREAD, gangGens, listedBy, padNets, NOT_ON_MAINNET, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { walletFor } from './fair.js'
 import { parseNum, revertOf as revertIn, step } from './steps.js'
 
@@ -219,7 +219,9 @@ export async function runBuyback(sub, { opt, flag, out, fail, summarize }) {
     if (!pad || !atPad(ctx, pad, testnet)) return fail(notListed('buy-back splitter', testnet), { module: recipient })
   } else {
     if (!isAddress(token ?? '')) fail('--token must be a V3 token address (0x…)', { got: token ?? null })
-    if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
+    const onPad = await atTokenPad(ctx, token)
+    if (onPad === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry }) // else on the pad of the token's generation
+    if (onPad === 'gangswap') return fail(gangSwapTakesNone(onPad, 'buy-back splitter'), { token, kind: onPad })
     try { recipient = (await ctx.read(ctx.pad, PAD_ABI, 'taxConfigOf', [token]))[3] } catch {
       return fail('not a V3 token on this pad', { token, chainId: Number(ctx.chainId) })
     }

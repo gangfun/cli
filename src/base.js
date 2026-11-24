@@ -1,6 +1,6 @@
 import { createPublicClient, encodeFunctionData, formatUnits, hexToString, isAddress, parseAbi, zeroAddress } from 'viem'
 import { walletFor } from './fair.js'
-import { atTokenPad, KIND_UNREAD, NOT_ON_MAINNET, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, KIND_UNREAD, NOT_ON_MAINNET, PAD3_GEN, padNets, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { revertOf as revertIn, step } from './steps.js'
 
 /**
@@ -236,6 +236,7 @@ export async function runBase(sub, { opt, flag, out, fail, summarize }) {
   if (!isAddress(token ?? '')) return fail('--token must be a 3.0 curve token address (0x…)', { got: token ?? null })
   const kind = await atTokenPad(ctx, token)
   if (kind === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+  if (kind === 'gangswap') return fail(gangSwapTakesNone(kind, 'opening base'), { token, chainId, kind })
   if (kind !== 'v3') return fail(`not a V3 curve token on a GangLaunchpad (${testnet ? 'BSC testnet' : 'BSC mainnet; add --testnet for a testnet token'})`, { token, chainId, ...(kind && kind !== 'none' && { kind }) })
   let s
   try { s = await baseOf(ctx, token) } catch (e) {

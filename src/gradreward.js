@@ -1,6 +1,6 @@
 import { createPublicClient, encodeFunctionData, isAddress, parseAbi, parseUnits } from 'viem'
 import { walletFor } from './fair.js'
-import { atTokenPad, KIND_UNREAD, NOT_ON_MAINNET, PAD3_GEN, padNets, rpcTransport } from './gangpad.js'
+import { atTokenPad, KIND_UNREAD, NOT_ON_MAINNET, PAD3_GEN, padNets, rpcTransport, gangSwapTakesNone } from './gangpad.js'
 import { missingRead } from './base.js'
 import { revertOf as revertIn, step, units } from './steps.js'
 
@@ -278,6 +278,7 @@ export async function runGradReward(sub, { opt, flag, out, fail, summarize }) {
   if (!isAddress(token ?? '')) return fail('--token must be a 3.0 curve token address (0x…)', { got: token ?? null })
   const kind = await atTokenPad(ctx, token)
   if (kind === null) return fail(KIND_UNREAD.error, { token, retry: KIND_UNREAD.retry })
+  if (kind === 'gangswap') return fail(gangSwapTakesNone(kind, 'graduation reward'), { token, chainId, kind })
   if (kind !== 'v3') return fail(`not a V3 curve token on a GangLaunchpad (${testnet ? 'BSC testnet' : 'BSC mainnet; add --testnet for a testnet token'})`, { token, chainId, ...(kind && kind !== 'none' && { kind }) })
   let creator, quote
   try { [creator, quote] = await ctx.read(ctx.pad, CURVE_ABI, 'curves', [token]) } catch (e) {

@@ -100,7 +100,7 @@ export const STEPS = {
  * The read-only checks and quote of a handoff. → the result to print. Throws HandoffError for a refusal.
  * read: a viem public client on BSC mainnet.
  */
-export async function buildHandoff({ side, token, amount, all = false, from = null, read, now = () => Math.floor(Date.now() / 1000) }) {
+export async function buildHandoff({ side, token, amount, all = false, from = null, kind = null, read, now = () => Math.floor(Date.now() / 1000) }) {
   if (!isAddress(token ?? '')) throw new HandoffError('--token must be a 0x address', 'USAGE')
   if (from != null && !isAddress(from)) throw new HandoffError('--from must be a 0x address', 'USAGE', { got: from })
   const pad = handoffPad()
@@ -112,6 +112,7 @@ export async function buildHandoff({ side, token, amount, all = false, from = nu
   if (same(creator, zeroAddress) || !(Number(version) > 0)) {
     throw new HandoffError('--handoff is for GangLaunchpad 3.0 curve tokens whose agent window is open: this token is not on that pad (an older pad or another track: use the Binance Agentic Wallet, or a DEX once it trades in a pool)', 'HANDOFF_NOT_SERVED', { token })
   }
+  if (graduated && kind === 'gangswap') throw new HandoffError('this token has graduated: it trades on GangSwap now, not PancakeSwap (gang buy|sell --from <address> --calldata builds it through GangSwapRouter)', 'HANDOFF_NOT_SERVED', { token, why: 'graduated' })
   if (graduated) throw new HandoffError('this token has graduated: it trades in its PancakeSwap pool now, with any DEX or wallet (gang buy|sell --from <address> --calldata builds it through GangRouter)', 'HANDOFF_NOT_SERVED', { token, why: 'graduated' })
   if (!(Number(openAt) > 0)) throw new HandoffError('this token is agent only (no agent window): only a Binance Agentic Wallet with an Agent ID trades its curve, so leave --handoff out', 'HANDOFF_NOT_SERVED', { token, why: 'no_window' })
   if (Number(openAt) > now()) {

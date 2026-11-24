@@ -98,7 +98,7 @@ export function windowCreateView(minutes, { gradReward = false, vault = false, p
  * only for good); else openAt, open, time left and whether the 1% cap applies now. Reads the chain's views, the time
  * left from the latest block. `graduated`: the curve is done, the window no longer matters.
  */
-export async function agentWindowOf(ctx, token, { graduated = false } = {}) {
+export async function agentWindowOf(ctx, token, { graduated = false, venue = 'PancakeSwap' } = {}) {
   if (ctx.gen !== PAD3_GEN) return null
   let openAt
   try { openAt = Number(await ctx.read(ctx.pad, AGENT_WINDOW_ABI, 'agentOpenAt', [token])) } catch (e) {
@@ -124,7 +124,7 @@ export async function agentWindowOf(ctx, token, { graduated = false } = {}) {
     set: true, openAt: new Date(openAt * 1000).toISOString(), openAtUnix: openAt, open,
     ...(!open && { opensIn: formatLeft(left), secondsLeft: left }),
     walletCap: capOn,
-    status: graduated ? 'graduated: the curve is done; the PancakeSwap pool is open to everyone anyway'
+    status: graduated ? `graduated: the curve is done; the ${venue} pool is open to everyone anyway`
       : open ? 'open to every wallet (contracts included); no 1% wallet cap'
         : `agent only for ${formatLeft(left)} more: only Agent ID holders trade it now, under the 1% cap; then anyone, with no cap`,
     rule: WINDOW_RULE,

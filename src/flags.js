@@ -14,7 +14,7 @@ export const FAIR_CREATE_FLAGS = ['raise', 'cap', 'hold', 'mint-fee', 'exit-fee'
 
 export const CREATE_ACCEPTS = new Set([
   'name', 'symbol', 'logo', 'logo-file', 'file-logo', 'logo-uri', 'keep-logo-uri', ...LINK_FLAGS, 'description',
-  'quote', 'ref-pool', 'grad', 'vault', 'base', 'base-vest', ...GRAD_FLAGS, 'agent-window', 'testnet', 'calldata', 'from', 'note', 'conf', 'reveal-after',
+  'quote', 'ref-pool', 'grad', 'vault', 'base', 'base-vest', ...GRAD_FLAGS, 'agent-window', 'venue', 'testnet', 'calldata', 'from', 'note', 'conf', 'reveal-after',
   'fair', 'fly', ...V3_CREATE_FLAGS, ...FAIR_CREATE_FLAGS, ...FLY_CREATE_FLAGS,
   // a launch in one command: its dev buy reads --slippage like gang buy, its bond --use-wbnb like gang bond post
   ...LAUNCH_FLAGS, 'slippage', 'use-wbnb',
@@ -37,6 +37,9 @@ export const BUY_ACCEPTS = new Set([
   'taxed', 'testnet', 'tier', 'timeout', 'to-bnb', 'token', 'track', 'twap-window', 'twitter', 'url', 'use-quote',
   'use-wbnb', 'vault', 'wait', 'webhook', 'website', 'who', 'window',
 ])
+
+/** gang creator-fee's flags: where a claim goes is one of them. */
+export const CREATOR_FEE_ACCEPTS = new Set(['token', 'from', 'claim', 'part', 'to', 'testnet', 'calldata', 'json'])
 
 // what people type for the two link flags
 const LINK_TYPOS = {
@@ -71,16 +74,17 @@ export function suggestFlag(name, accepts) {
  * The error for the first flag in argv (process.argv.slice(2)) that `accepts` lacks, or null when every flag is known.
  * A flag is a word starting with "--" and a letter; values ("--- launch day ---") are left to the flag that reads them.
  */
-export function unknownFlagError(argv, accepts, label) {
+export function unknownFlagError(argv, accepts, label, tail = 'Nothing was uploaded or sent: unknown flags are refused, since a token\'s links and metadata can never change after the create') {
   for (const a of argv) {
     if (!/^--[A-Za-z]/.test(a)) continue
     const raw = a.slice(2)
     const [name, eq] = [raw.split('=')[0], raw.includes('=')]
     if (accepts.has(raw)) continue
     if (eq && accepts.has(name)) return `--${raw}: give the value after a space (--${name} ${raw.slice(name.length + 1) || '<value>'})`
-    const to = suggestFlag(name, accepts)
+    const near = suggestFlag(name, accepts)
+    const to = near && accepts.has(near) ? near : null
     const hint = !to ? 'see gang help for its flags.' : LINK_HINT[to] ? `did you mean ${LINK_HINT[to]}?` : `did you mean --${to}?`
-    return `--${raw} is not a flag of ${label}: ${hint} Nothing was uploaded or sent: unknown flags are refused, since a token's links and metadata can never change after the create`
+    return `--${raw} is not a flag of ${label}: ${hint} ${tail}`
   }
   return null
 }

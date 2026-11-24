@@ -1,6 +1,6 @@
 import { createPublicClient, parseAbi, encodeFunctionData, decodeEventLog, formatUnits, parseUnits, isAddress, zeroAddress } from 'viem'
 import { decimalsOf, fundingStep as fund, parseAmount, parseIntIn, parseNum, revertOf as revertIn, step, units, GAS_RESERVE } from './steps.js'
-import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport, tokenVaultOf, VAULT_NO_BOND } from './gangpad.js'
+import { atTokenPad, GANG_GENS, gangGens, KIND_UNREAD, MERGED_ERRORS_ABI, MERGED_HINTS, NOT_ON_MAINNET, padNets, rpcTransport, tokenVaultOf, VAULT_NO_BOND, gangSwapTakesNone } from './gangpad.js'
 import { bawAddress } from './baw.js'
 import { get as apiGet } from './discover.js'
 
@@ -360,7 +360,9 @@ export async function runBond(sub, { opt, flag, out, fail, summarize }) {
 
   const token = tokenArg(opt, fail)
   // the token's generation: its pad and its GangBond
-  if ((await atTokenPad(ctx, token)) === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry })
+  const onPad = await atTokenPad(ctx, token)
+  if (onPad === null) return fail(KIND_UNREAD.error, { token: token, retry: KIND_UNREAD.retry })
+  if (onPad === 'gangswap') return fail(gangSwapTakesNone(onPad, 'GangBond'), { token, chainId, kind: onPad })
   if (!ctx.bond) return fail('this token\'s GangLaunchpad generation has no GangBond in this CLI version', { token, chainId, padGen: ctx.gen })
   const m = await marketOf(ctx, token)
   if (!m) return fail('not a GangLaunchpad token (V3 or 打新) on this network: bonds cover only those', { token, chainId })

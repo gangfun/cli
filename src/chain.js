@@ -37,6 +37,7 @@ const PADS = [
 const GANG_POINTER = {
   v3: (t) => `a GangLaunchpad V3 (bonding-curve) token: gang info|buy|sell|status --token ${t} trade it (re-run if this was an RPC hiccup)`,
   fair: (t) => `a GangLaunchpad 打新 (fair-mint) token: gang info|status --token ${t}; before launch gang mint / withdraw, after it gang buy / sell (re-run if this was an RPC hiccup)`,
+  gangswap: (t) => `a GangLaunchpad 3.0 GangSwap curve token: gang info|buy|sell|status --token ${t} trade it (re-run if this was an RPC hiccup)`,
   fly: (t) => `a GangLaunchpad 3.0 铸币飞轮 (Mint Flywheel) token: gang info|status --token ${t}; gang mint / withdraw, after launch also gang buy / sell (re-run if this was an RPC hiccup)`,
 }
 

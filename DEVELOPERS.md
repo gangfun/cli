@@ -72,7 +72,7 @@ gang execute --request-id <id>         sends it
 
 A curve sell of a WBNB-quoted token pays out WBNB, not BNB.
 
-After graduation a token trades in a PancakeSwap pool, and anyone can trade it without an Agent ID (a Mint Flywheel's launch protection keeps Agent-only buys for a short time after launch).
+After graduation a token trades in a PancakeSwap pool, and anyone can trade it without an Agent ID (a Mint Flywheel's launch protection keeps Agent-only buys for a short time after launch). A `gangswap` token trades in its GangSwap pair instead ([below](#gangswap-tokens-0530)).
 
 ## The CLI as an interface
 
@@ -116,6 +116,30 @@ plain buy. Treat a module as genuine only when `GangHandlerAdmin.moduleOf(module
 `rewardToken()` is the token: a contract that merely answers `moduleType() = countdown-v1` is not one. `gang buy` does all
 of this, sends `mustCount = true` by default (`--cd-uncounted` for false) and explains the result in `rewards.countdown`.
 Factories: BSC mainnet `0xa1e3117a59104de7D97667cF22f9AB886a5f2957`, BSC testnet `0x0f83ABC7d39C0d043d3f5612E304D9395B5fe582`.
+
+### GangSwap tokens (0.53.0+)
+
+A token whose `kindOf` on the 3.0 pad is `4` (`kind: "gangswap"`) trades on its curve exactly as a V3 token (`kindOf` 1),
+then in a GangSwap pair, never in PancakeSwap: after graduation the pad's `getTokenInfo` status is `4`. Treat "status 1 =
+curve, anything else = PancakeSwap" as a bug. A PancakeSwap pool of such a token was made by someone else.
+
+- The pair has the V2 interface, but `getReserves()` (and `Sync`) are effective reserves: the quote side includes a fixed
+  `virtualReserve()`. Price from them with a 1% fee on the input (9900 / 10000). `realQuoteReserve()` is what can be paid out.
+- The quote side's `balanceOf(pair)` differs from its reserve by design (virtual reserve added, unclaimed fee left out). Measure quote input as
+  `balanceOf(pair) - quoteBalanceBase()`, or trade through GangSwapRouter (V2 router ABI, native BNB swaps).
+- Versions: `pad.gangSwapMigrator()` is only the GangSwapMigrator NEW tokens get (0 = creation closed; it can change).
+  A token keeps the one of its create forever: `pad.gangSwapMigratorOf(token)` (0 = not a GangSwap token), also in
+  `GangSwapCreated(address indexed token, address indexed migrator)`. Each version has its own factory, boost, fees and
+  router; never read an existing token's contracts from `gangSwapMigrator()`.
+- Creating: `createGangSwap(name, symbol, logoURI, metaURI, gradBnb, migrator)` names the version expected, the pad's
+  current `gangSwapMigrator()`, or reverts `GangSwapVersionChanged(current)`; also inside `createWithSalt` and
+  `createWithAgentWindow`.
+- Addresses: `pad.gangSwapMigratorOf(token)` → `factory()` and `boost()`; `factory.fees()`. The router is named by
+  nothing on chain, and what a contract says (`factory()`, `WETH()`) does not prove it is one. This CLI keeps a list
+  of versions, takes the router whose `factory()` is the token's own factory, and requires the code itself: each PUSH32 of the factory / WBNB turned to zero, its keccak256 must be a known build's (`GANGSWAP_ROUTER_CODE_HASH`) and the
+  operands in the build's order (`src/gangswap.js` says how both are recomputed from the sources).
+- `gang creator-fee --claim --calldata` prints both claims in `steps` when both parts are due: the pad's
+  `claimCreatorFee(token, to)` and `GangSwapFees.claim(token, to)`.
 
 ### Failure codes
 
