@@ -65,12 +65,18 @@ function uploadedCid(json, what, status) {
   return cid
 }
 
-/** Image bytes → data URL → POST /api/logos → { logoUrl: ipfs://<cid>, url: the endpoint's CDN URL, cid, id, bytes }. */
-async function postLogo(buf, what) {
+/** The mime type of image bytes fit for a logo; throws why not. */
+function checkImage(buf, what) {
   if (buf.length <= 0) throw new Error(`empty image: ${what}`)
   if (buf.length > MAX_BYTES) throw new Error(`logo too large: ${buf.length} bytes (max ${MAX_BYTES}): ${what}`)
   const mime = sniffMime(buf)
   if (!mime) throw new Error(`not a png/jpeg/webp/gif image: ${what}`)
+  return mime
+}
+
+/** Image bytes → data URL → POST /api/logos → { logoUrl: ipfs://<cid>, url: the endpoint's CDN URL, cid, id, bytes }. */
+async function postLogo(buf, what) {
+  const mime = checkImage(buf, what)
   const image = `data:${mime};base64,${buf.toString('base64')}`
   let res, text
   try {
@@ -122,8 +128,8 @@ export async function uploadMetadata(meta) {
   return { uri: ipfsUri(cid), url: json.url || cdnUrl(cid), cid, id: json.id, bytes: json.bytes ?? buf.length, metadata: clean }
 }
 
-/** Read a local image → POST /api/logos → { logoUrl, url, cid, id, bytes }. */
-export async function uploadLogoFile(filePath) {
+/** A local image's bytes and path, checked (there, a file, not empty, ≤512 KB, an image type gang.fun takes); no network. */
+export function readLogoFile(filePath) {
   const abs = resolve(filePath)
   let st
   try {
@@ -135,7 +141,15 @@ export async function uploadLogoFile(filePath) {
   }
   if (!st.isFile()) throw new Error(`not a file: ${abs}`)
   if (st.size > MAX_BYTES) throw new Error(`logo too large: ${st.size} bytes (max ${MAX_BYTES})`)
-  return postLogo(readFileSync(abs), abs)
+  const buf = readFileSync(abs)
+  checkImage(buf, abs)
+  return { buf, abs }
+}
+
+/** Read a local image → POST /api/logos → { logoUrl, url, cid, id, bytes }. */
+export async function uploadLogoFile(filePath) {
+  const { buf, abs } = readLogoFile(filePath)
+  return postLogo(buf, abs)
 }
 
 /** True when the URL is an old gang.fun logo, from before the IPFS bucket (nothing to copy). */

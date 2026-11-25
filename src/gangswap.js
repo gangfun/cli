@@ -1,12 +1,12 @@
-import { encodeFunctionData, decodeFunctionData, decodeFunctionResult, formatUnits, keccak256, isAddress, parseAbi, parseUnits, zeroAddress } from 'viem'
+import { encodeFunctionData, decodeFunctionData, decodeFunctionResult, formatUnits, keccak256, isAddress, parseAbi, parseUnits, toFunctionSelector, zeroAddress } from 'viem'
 import { GAS_RESERVE, isMissingFunction, revertOf as revertIn, roomyGas, routerDeadline, step } from './steps.js'
 import { fundingOf, minOf, PoolError, rawTx } from './pool.js'
-import { gangGens, GANGSWAP_KIND, PAD3_GEN } from './gangpad.js'
+import { gangGens, GANGSWAP_KIND, PAD3_GEN, padNets } from './gangpad.js'
 import { missingRead } from './base.js'
 import { bondGuard } from './bond.js'
 import { callBondGuard } from './callbond.js'
-import { VANITY_ABI } from './vanity.js'
-import { AGENT_WINDOW_ABI } from './agentwindow.js'
+import { VANITY_ABI, vanityDeployer } from './vanity.js'
+import { AGENT_WINDOW_ABI, wrapCreate } from './agentwindow.js'
 
 /**
  * GangSwap (docs/SPEC-GANGSWAP-2026-11-22.md): the optional graduation venue of a GangLaunchpad 3.0 curve token, picked
@@ -83,10 +83,13 @@ export const GANGSWAP_PAD_ABI = parseAbi([
   'function gangSwapMigrator() view returns (address)',
   'function gangSwapMigratorOf(address token) view returns (address)',
   'function createGangSwap(string name, string symbol, string logoURI, string metaURI, uint256 gradBnb, address migrator) returns (address token)',
+  // the same with a graduation reward the creator seeds in WBNB (docs/SPEC-GANGSWAP-GRAD-REWARD-2026-11-25.md); cfg as gradreward.js's
+  'function createGangSwapWithGradReward(string name, string symbol, string logoURI, string metaURI, uint256 gradBnb, address migrator, (uint128 seed, uint96 minBuy, uint8 entries, uint16 lastBps, uint16 carryBps, uint32 refundAfter, uint16 promoteBps, uint32 promoteWindow) cfg) returns (address token)',
   'error GangSwapNotOpen()', 'error GangSwapVersionChanged(address current)', 'error WrongGangSwapMigrator()',
   'event GangSwapCreated(address indexed token, address indexed migrator)',
   'event GangSwapMigratorSet(address indexed migrator)',
 ])
+const GRAD_REFUSALS = parseAbi(['error GradNotOpen()', 'function claimGradReward(address token) returns (uint256 amount)'])
 const KIND_ABI = parseAbi(['function kindOf(address token) view returns (uint8)'])
 const CREATOR_ABI = parseAbi(['function curves(address token) view returns (address creator, address quote, uint128 realQuote, uint128 sold, uint128 gradAmt, uint128 virtualQuote, bool graduated, uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address pair, address refPair)'])
 const MIGRATOR_ABI = parseAbi([
@@ -121,7 +124,7 @@ export const GANGSWAP_ROUTER_ABI = parseAbi([
   'function swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[] amounts)',
   'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[] amounts)',
 ])
-const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)'])
+const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)', 'function allowance(address, address) view returns (uint256)'])
 /** What `gang tx` decodes a GangSwap tx's logs with. */
 export const GANGSWAP_EVENT_ABIS = [GANGSWAP_PAD_ABI, MIGRATOR_ABI, BOOST_ABI, GANGSWAP_FEES_ABI, PAIR_ABI]
 export const HINTS = {
@@ -149,6 +152,34 @@ const isZero = (a) => !a || same(a, zeroAddress)
 /** The contract answered with a revert (or had no such function), as opposed to the RPC failing (-32603 included). */
 const isRevert = (e) => !e?.walk?.((x) => x?.code === -32603)
   && !!e?.walk?.((x) => ['ContractFunctionRevertedError', 'ContractFunctionZeroDataError', 'AbiDecodingZeroDataError', 'ExecutionRevertedError'].includes(x?.name) || x?.code === 3)
+/** The distinct non-empty revert data an error carries, lowercased, in the shapes nodes nest it ({ data }, { data: { data } }, Parity's "Reverted 0x…", …). Never its messages. Pure. */
+export function revertData(e) {
+  const found = new Set()
+  const dig = (d, depth) => {
+    if (typeof d === 'string') {
+      const m = /^(?:Reverted )?(0x(?:[0-9a-f]{2})+)$/i.exec(d.trim())
+      if (m) found.add(m[1].toLowerCase())
+    } else if (d && typeof d === 'object' && depth < 5) {
+      for (const k of Object.keys(d)) if (['data', 'result', 'return', 'error', 'originalError', 'cause'].includes(k) || /^0x[0-9a-f]{64}$/i.test(k)) dig(d[k], depth + 1)
+    }
+  }
+  for (let x = e, n = 0; x && typeof x === 'object' && n < 10; x = x.cause, n++) dig(x.data, 0)
+  return [...found]
+}
+/** Whether a revert's data is there but in no shape revertData knows. Pure. */
+function oddRevertData(e) {
+  if (revertData(e).length) return false
+  const odd = (d, depth = 0) => {
+    if (typeof d === 'string') return /0x[0-9a-f]/i.test(d) || (depth === 0 && !/^(Reverted)?\s*$|^(Reverted )?0x$/i.test(d))
+    if (Array.isArray(d)) return d.length > 0
+    return !!d && typeof d === 'object' && (depth > 5 || Object.values(d).some((x) => odd(x, depth + 1)))
+  }
+  for (let x = e, n = 0; x && typeof x === 'object' && n < 10; x = x.cause, n++) if (odd(x.data)) return true
+  return false
+}
+/** A revert that carries no data at all. geth also reports one as -32000 "execution reverted"; -32603 is the node's own failure. */
+const bareRevert = (e) => !revertData(e).length && !oddRevertData(e)
+  && (isRevert(e) || !!e?.walk?.((x) => x?.code === -32000 && /^execution reverted/i.test(x?.details ?? '')))
 const rpcError = (what, e) => Object.assign(new PoolError(`RPC error while ${what}: ${short(e)}`, { hint: 're-run; set GANG_RPC_URL / GANG_TESTNET_RPC_URL if the RPC keeps failing' }), { rpc: true })
 
 // ---------------------------------------------------------------- create
@@ -172,8 +203,45 @@ export async function gangSwapSupport(ctx) {
   return isZero(migrator) ? { open: false, why } : { open: true, migrator }
 }
 
-/** What the create preview says about --venue gangswap. */
-export const gangSwapCreateView = (migrator, routerWarning = null) => ({
+/**
+ * Whether ctx's pad serves createGangSwapWithGradReward in the very shape the create will take (inside createWithSalt
+ * with abcd on, inside createWithAgentWindow with `windowMinutes`): { open: true } | { open: false, why } | { unread }.
+ * Nothing on the pad names the entry, so it is asked with an empty config, which it refuses as such (BadGradConfig)
+ * before anything else. A pad without it answers a bare revert, a wrapper that does not list it its own error; only
+ * those exact answers count, anything else is { unread } (the create is not built either way).
+ */
+export async function gangSwapGradSupport(ctx, windowMinutes = null) {
+  const where = netOf(ctx) === 'mainnet' ? 'BSC mainnet' : 'the BSC testnet'
+  const no = { open: false, why: `GangLaunchpad 3.0 on ${where} has no graduation reward for GangSwap tokens yet (the pad is not upgraded for it)` }
+  if (ctx.gen !== PAD3_GEN) return no
+  const none = { seed: 0n, minBuy: 0n, entries: 0, lastBps: 0, carryBps: 0, refundAfter: 0, promoteBps: 0, promoteWindow: 0 }
+  let data = encodeFunctionData({ abi: GANGSWAP_PAD_ABI, functionName: 'createGangSwapWithGradReward', args: ['', '', '', '', 0n, zeroAddress, none] })
+  try {
+    if (await vanityDeployer(ctx)) data = encodeFunctionData({ abi: VANITY_ABI, functionName: 'createWithSalt', args: [`0x${'00'.repeat(32)}`, data] })
+    if (windowMinutes !== null) data = wrapCreate(windowMinutes, data)
+  } catch (e) { return { unread: short(e) } }
+  // the raw request: viem's call() loses the error of a node that nests its revert data deeper than { data: { data } }
+  const ask = (d) => ctx.client.request({ method: 'eth_call', params: [{ to: ctx.pad, data: d }, 'latest'] })
+  try { await ask(data) } catch (e) {
+    const got = revertData(e)
+    if (got.length > 1) return { unread: 'the node returned conflicting revert data' }
+    const is = (name) => got[0] === toFunctionSelector(`${name}()`)
+    if (is('BadGradConfig')) return { open: true }
+    if (is('GradNotOpen')) return { open: false, why: 'the graduation reward is closed on this pad' }
+    if (is('BadVanityCall') || is('BadAgentWindowCall')) return no
+    if (got.length) return { unread: `the pad answered an unexpected error (${got[0].slice(0, 10)})` }
+    if (oddRevertData(e)) return { unread: 'the node returned revert data in a shape this CLI does not know' }
+    if (!bareRevert(e)) return { unread: short(e) }
+    // no revert data: a pad without the entry, or a node that drops it. A call every pad with a graduation reward refuses
+    // with data (NotGradState) tells which
+    const known = await ask(encodeFunctionData({ abi: GRAD_REFUSALS, functionName: 'claimGradReward', args: [zeroAddress] })).then(() => [], revertData)
+    return known.length === 1 && known[0] === toFunctionSelector('NotGradState()') ? no : { unread: 'the RPC node does not return revert data' }
+  }
+  return { unread: 'the pad answered a create with an empty config without an error' }
+}
+
+/** What the create preview says about --venue gangswap. `gradReward`: with a graduation reward. */
+export const gangSwapCreateView = (migrator, routerWarning = null, gradReward = false) => ({
   name: 'gangswap',
   ...(routerWarning && { routerWarning }),
   version: migrator,
@@ -182,45 +250,81 @@ export const gangSwapCreateView = (migrator, routerWarning = null) => ({
   trading: `${VENUE_LINE}: only GangSwapRouter (gang buy / gang sell) and tools that support GangSwap trade it, and sites such as DexScreener may not list it. A PancakeSwap pool of this token would be someone else's`,
   buyBack: 'at graduation the part of the raise no trade could ever reach is replaced by an equal virtual reserve (the price curve stays the same), and that quote is used for a scheduled buy-back and burn: about 40 steps over about 5 minutes',
   fee: 'the pool takes a 1% fee on the input: on buys (paid in BNB) the creator gets 70% of it, claimed with gang creator-fee; on sells the fee is tokens, burned, and the creator gets nothing',
-  terms: 'WBNB quote, untaxed, no modules (no bond, promoter share, base, vault, reward or recipient). The curve is an ordinary V3 one',
+  terms: `WBNB quote, untaxed, no modules (no bond, promoter share, base, vault, countdown reward or recipient). ${gradReward ? 'With the graduation reward you fund (see gradReward): it is paid from your seed only, never from the curve, the fees, the GangSwap pool or its buy-back' : 'No graduation reward'}. The curve is an ordinary V3 one`,
 })
 
-/** The creates a tx input asks for, unwrapped: true when it is (or wraps) createGangSwap. */
-export function asksGangSwap(input) {
+/** The GangSwap create a tx input is, unwrapped from createWithSalt / createWithAgentWindow (decoded), or null. */
+function gangSwapCall(input) {
   let data = input
   for (let i = 0; i < 3 && typeof data === 'string'; i++) {
     let d
-    try { d = decodeFunctionData({ abi: [...GANGSWAP_PAD_ABI, ...VANITY_ABI, ...AGENT_WINDOW_ABI], data }) } catch { return false }
-    if (d.functionName === 'createGangSwap') return true
-    if (d.functionName !== 'createWithSalt' && d.functionName !== 'createWithAgentWindow') return false
+    try { d = decodeFunctionData({ abi: [...GANGSWAP_PAD_ABI, ...VANITY_ABI, ...AGENT_WINDOW_ABI], data }) } catch { return null }
+    if (d.functionName === 'createGangSwap' || d.functionName === 'createGangSwapWithGradReward') return d
+    if (d.functionName !== 'createWithSalt' && d.functionName !== 'createWithAgentWindow') return null
     data = d.args[1]
   }
-  return false
+  return null
 }
+/** true when a tx input is (or wraps) createGangSwap / createGangSwapWithGradReward. */
+export const asksGangSwap = (input) => !!gangSwapCall(input)
 
 /**
- * Why a reverted GangSwap create reverted, when it was the version (GangSwapVersionChanged) or closed (GangSwapNotOpen):
- * { gangSwap } to add to the result, else {}. Replays the call on the state before its block, then (a change in the same
- * block) on that block's own. Best effort: anything else, or a node without that state, adds nothing. `tx`: the
- * transaction, or a function that reads it (called only for a reverted tx to a 3.0 pad).
+ * Why a reverted GangSwap create reverted, when it was the version (GangSwapVersionChanged), closed (GangSwapNotOpen; the reward:
+ * GradNotOpen) or the reward's seed (a bare revert, and the creator's WBNB or its allowance to the pad was short of it):
+ * { gangSwap } to add to the result, else {}. Replays the call on the state before its block and on that block's own: the
+ * state the tx ran on is somewhere between. `reverted` is said only when both give the cause (certain); one of them
+ * alone is `mayBe`, with what the other allows left open. Best effort: anything else, or a node without that state, adds
+ * nothing. `tx`: the transaction, or a function that reads it (called only for a reverted tx to a 3.0 pad).
  */
 export async function gangSwapRevert(ctx, { status, to, tx }) {
   const pads = gangGens(netOf(ctx) === 'testnet').filter((g) => g.gen === PAD3_GEN).map((g) => g.pad)
   if (status !== 'reverted' || (to && !pads.some((p) => same(p, to)))) return {}
   try {
     const t = typeof tx === 'function' ? await tx() : tx
-    if (!t?.blockNumber || !pads.some((p) => same(p, t.to)) || !asksGangSwap(t.input)) return {}
-    for (const blockNumber of [t.blockNumber - 1n, t.blockNumber]) {
-      try {
-        await ctx.client.call({ account: t.from, to: t.to, data: t.input, value: t.value, gas: t.gas, blockNumber })
-      } catch (e) {
-        const r = revertIn(e, [GANGSWAP_PAD_ABI], HINTS)
-        if (r?.error !== 'GangSwapVersionChanged' && r?.error !== 'GangSwapNotOpen') return {}
-        return { gangSwap: { created: false, reverted: r.error, ...(r.reason && { current: r.reason }), hint: r.hint, source: 'a replay of the call' } }
-      }
-    }
+    const d = t?.blockNumber && pads.some((p) => same(p, t.to)) ? gangSwapCall(t.input) : null
+    if (!d) return {}
+    const before = await replayCause(ctx, t, d, t.blockNumber - 1n)
+    if (before === null) return {}
+    const at = await replayCause(ctx, t, d, t.blockNumber).catch(() => null)
+    const c = before ?? at
+    if (!c) return {}
+    const certain = !!before && at?.error === before.error && (c.error !== SEED || at.kinds.some((k) => before.kinds.includes(k)))
+    const kinds = certain && c.error === SEED ? before.kinds.filter((k) => at.kinds.includes(k)) : c.kinds
+    const hint = c.error === SEED
+      ? `the create pulls a ${c.seed} WBNB reward seed from the creator, ${certain ? 'but' : 'and on the state checked'} ${kinds.map((k) => (k === 'wbnb' ? `it held ${c.wbnb} WBNB` : `it had approved the pad for ${c.approved} WBNB`)).join(' and ')}`
+      : c.hint
+    return { gangSwap: {
+      created: false, ...(certain ? { reverted: c.error } : { mayBe: c.error }), certain, ...(c.reason && { current: c.reason }), ...(c.error === SEED && { seed: c.seed, wbnb: c.wbnb, approved: c.approved }),
+      hint: `${certain ? '' : 'it may be this, but the state changed around its block (or could not be read), so another cause, e.g. too little gas, is possible: '}${hint}${d.functionName === 'createGangSwapWithGradReward' ? `. ${earlierCreate(t.from, netOf(ctx) === 'testnet')}` : ''}`,
+      source: `a replay of the call${c.error === SEED ? ' and the wallet\'s WBNB' : ''}, ${certain ? 'before its block and at it' : before ? 'before its block only' : 'at the end of its block only'}`,
+    } }
   } catch { /* nothing to add */ }
   return {}
+}
+const SEED = 'seed not covered'
+const earlierCreate = (from, testnet) => {
+  const tn = testnet ? ' --testnet' : ''
+  return `This transaction created nothing, but an earlier create from this wallet may already have succeeded and pulled the seed: check its tx hash (gang tx --hash <hash>${tn}) and the tokens this wallet created (gang creator-fee --from ${from}${tn}, unless it says scanNote or unreadNote: then the list is not complete) first, and re-run the create only once sure none succeeded, or it makes a second token and pays a second seed`
+}
+
+/** One replay of a reverted create at `blockNumber`: undefined when it passes, null when its failure is not one we name, else { error, … }. */
+async function replayCause(ctx, t, d, blockNumber) {
+  try {
+    await ctx.client.call({ account: t.from, to: t.to, data: t.input, value: t.value, gas: t.gas, blockNumber })
+    return undefined
+  } catch (e) {
+    const r = revertIn(e, [GANGSWAP_PAD_ABI, GRAD_REFUSALS], { ...HINTS, GradNotOpen: 'the graduation reward is closed on this pad: drop --grad-reward' })
+    if (['GangSwapVersionChanged', 'GangSwapNotOpen', 'GradNotOpen'].includes(r?.error)) return r
+    // a bare revert of a reward create: the pull of its seed, when the creator's WBNB or allowance was short of it there
+    if (d.functionName !== 'createGangSwapWithGradReward' || !bareRevert(e)) return null
+    const seed = d.args[6]?.seed
+    const wbnb = padNets('v3')[netOf(ctx)].wbnb
+    const ask = (functionName, args) => ctx.client.readContract({ address: wbnb, abi: ERC20_ABI, functionName, args, blockNumber })
+    const [have, approved] = await Promise.all([ask('balanceOf', [t.from]), ask('allowance', [t.from, t.to])])
+    const kinds = [have < seed && 'wbnb', approved < seed && 'approved'].filter(Boolean)
+    const w = (x) => formatUnits(x, 18)
+    return kinds.length ? { error: SEED, kinds, seed: w(seed), wbnb: w(have), approved: w(approved) } : null
+  }
 }
 
 /** { input } of a landed tx that went to a 3.0 pad and made no GangSwap token, for gangSwapCreateCheck (inputUnread when it could not be read); { input: null } for any other. */

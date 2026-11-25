@@ -4,7 +4,6 @@
  * read, wallet step or upload.
  */
 import { isAddress } from 'viem'
-import { GRAD_FLAGS } from './gradreward.js'
 import { CD_FLAGS } from './countdown.js'
 import { FLY_CREATE_FLAGS } from './fly.js'
 import { LAUNCH_FLAGS } from './launch.js'
@@ -23,11 +22,12 @@ export function parseVenue(opt, flag) {
 }
 
 const only = (f, why) => `--${f} can't go with --venue gangswap: ${why}`
-const MODULES = 'a GangSwap token is untaxed and takes no module, reward, bond or chained launch (a dev buy is its own gang buy after the create lands)'
+const MODULES = 'a GangSwap token is untaxed and takes no module, bond or chained launch (a dev buy is its own gang buy after the create lands)'
 
 /**
  * What stops this create from being a GangSwap one: { error, … } for fail(), or null. `fair` / `fly`: the command itself
- * is gang fair / fly create. Only --grad, --agent-window, the logo, links, metadata and notes go with --venue gangswap.
+ * is gang fair / fly create. Only --grad, --agent-window, --grad-reward (without a carry), the logo, links, metadata and notes
+ * go with --venue gangswap.
  */
 export function venueRefusal({ opt, flag, testnet = false, fair = false, fly = false }) {
   const p = parseVenue(opt, flag)
@@ -42,11 +42,11 @@ export function venueRefusal({ opt, flag, testnet = false, fair = false, fly = f
     if (!isAddress(opt('quote') ?? '') || opt('quote').toLowerCase() !== wbnb.toLowerCase()) return { error: only('quote', 'a GangSwap token is quoted in WBNB (leave --quote out)'), got: opt('quote') ?? null }
   }
   if (flag('ref-pool')) return { error: only('ref-pool', 'a GangSwap token is quoted in WBNB and needs no reference pool') }
-  for (const f of ['promote', 'promote-days']) if (flag(f)) return { error: only(f, 'a GangSwap token takes no promoter share') }
+  for (const f of ['promote', 'promote-days']) if (flag(f)) return { error: only(f, 'a GangSwap token takes no promoter share, with --grad-reward or without') }
   for (const f of ['base', 'base-vest']) if (flag(f)) return { error: only(f, 'a GangSwap token takes no opening base') }
   if (flag('vault')) return { error: only('vault', 'a GangSwap token is not bound to a vault') }
-  const gr = GRAD_FLAGS.find((f) => flag(f))
-  if (gr) return { error: only(gr, 'a GangSwap token takes no graduation reward') }
+  // --grad-reward itself goes with it (createGangSwapWithGradReward, where the pad serves it): its carry does not
+  if (flag('gr-carry')) return { error: only('gr-carry', 'a carry goes into the token\'s countdown reward, and a GangSwap token is untaxed, so it has none: what nobody claims goes back to you. Leave --gr-carry out') }
   const cd = ['countdown-reward', ...CD_FLAGS].find((f) => flag(f))
   if (cd) return { error: only(cd, 'a GangSwap token is untaxed, so it takes no countdown reward') }
   const launch = LAUNCH_FLAGS.find((f) => flag(f))
